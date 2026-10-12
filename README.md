@@ -1,18 +1,19 @@
-# FPC Sensor Controller (`10a5:e340`) Linux Driver & Port
+# FPC Disum Fingerprint Sensors (`10a5:e340` & `10a5:a900`) Linux Driver & Port
 
-Linux driver, reverse-engineering findings, and test utility for the **Fingerprint Cards AB (FPC)** sensor controller commonly found on Acer laptops (e.g. Acer Swift Go series, Swift 21).
+Unified Linux driver, reverse-engineering findings, and standalone test utility for **Fingerprint Cards AB (FPC)** sensor controllers found on Acer and Honor laptops.
 
-- **USB VID:PID:** `10a5:e340`
-- **Linux Device Identification:** `Bus 001 Device 002: ID 10a5:e340 FPC Sensor Controller`
-- **Controller ASIC / Family:** **FPC2040** ("Disum" pipeline)
-- **Windows Driver Package:** `FingerPrint_Carewe_20.26.23.27_W11x64` (`fpc_disum.dll`)
-- **Biometric Architecture:** Match-on-Host (MoH)
+### Supported Devices:
+| Vendor / Laptop Series | USB VID:PID | ASIC / Pipeline | Windows Driver Project (PDB) | Architecture |
+| :--- | :---: | :---: | :--- | :---: |
+| **Honor MagicBook X 14 & X 16 (2024)** | `10a5:a900` (Rev 0229) | FPC Disum (Galileo) | `Honor-Galileo-DPL_driver` | Match-on-Host (MoH) |
+| **Acer Swift Series** (Swift Go, SF314-512) | `10a5:e340` | FPC2040 (Swift21) | `ACER-Swift21-DPL_driver_FPC2040_pipeline` | Match-on-Host (MoH) |
 
 ---
 
 ## 📑 Table of Contents
 - [1. Reverse-Engineering Findings](#1-reverse-engineering-findings)
   - [Hardware & Architecture](#hardware--architecture)
+  - [Driver Comparison: Acer vs. Honor](#driver-comparison-acer-vs-honor)
   - [USB Communication Protocol](#usb-communication-protocol)
   - [Packet Framing & Endpoints](#packet-framing--endpoints)
   - [Image Capture Workflow](#image-capture-workflow)
@@ -29,13 +30,24 @@ Linux driver, reverse-engineering findings, and test utility for the **Fingerpri
 
 ## 1. Reverse-Engineering Findings
 
-Using the **REA** binary analysis suite and **Ghidra 12.1.4**, the Windows 11 UMDF driver [`fpc_disum.dll`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/FingerPrint_Carewe_20.26.23.27_W11x64/12b431fd-7d7e-4dd7-b87c-9ab3f9a3d01b/x64/fpc_disum.dll) was decompiled and analyzed.
+Using the **REA** binary analysis suite and **Ghidra 12.1.4**, the Windows 11 UMDF drivers for both laptops (`fpc_disum.dll`) were analyzed and cross-referenced.
 
 ### Hardware & Architecture
-- **Internal Model:** The build path in the debug symbols explicitly identifies the project:  
-  `C:\Jenkins\workspace\PC\DISUM\_Customer\ACER\Swift21_disum2\ACER-Swift21-DPL_driver_FPC2040_pipeline\disum_driver\out\UM_USB_no_sgx\x64\fpc_disum.pdb`
-- **Sensor Type:** **FPC2040** capacitive touch sensor.
-- **Match-on-Host (MoH):** Unlike Match-on-Chip (MoC) hardware where template matching occurs in on-chip flash, the FPC2040 operates in Match-on-Host mode. The sensor transmits raw capacitive image frames to the host. This is a massive advantage on Linux, because **libfprint** natively incorporates the NIST Biometric Image Software (NBIS) minutiae extraction and matching engine (`fpi_image_device`), removing the need for proprietary Windows matching blobs.
+- **Sensor Family:** FPC DISUM pipeline (FPC2040 / Galileo sensor matrix).
+- **Match-on-Host (MoH):** Unlike Match-on-Chip (MoC) hardware where biometric matching occurs within microcontroller flash, FPC DISUM operates in Match-on-Host mode:
+  - The controller streams raw capacitive image frames to the host OS.
+  - In standard operation (`SensorMode=1`), frames are transmitted unencrypted without requiring mandatory Intel SGX / TLS enclaves.
+  - On Linux, **libfprint** natively incorporates the NIST Biometric Image Software (NBIS) minutiae extraction and matching engine (`fpi_image_device`), removing the need for any proprietary closed-source matching blobs.
+
+### Driver Comparison: Acer vs. Honor
+| Property | Acer Swift 3 / Go | Honor MagicBook X 2024 |
+| :--- | :--- | :--- |
+| **USB VID:PID** | `10a5:e340` | `10a5:a900` |
+| **Driver Package** | `Carewe 20.26.23.27` | `FPCFingerprint 22.26.2.29` |
+| **PDB Debug Path** | `ACER-Swift21-DPL_driver_FPC2040_pipeline` | `Honor-Galileo-DPL_driver` |
+| **USB Protocol** | Identical 26 commands, 11 events | Identical 26 commands, 11 events |
+| **Control Endpoint** | Endpoint 0 (`0x40` OUT, `0xC0` IN) | Endpoint 0 (`0x40` OUT, `0xC0` IN) |
+| **Interrupt IN** | Endpoint `0x81` | Endpoint `0x81` |
 
 ### USB Communication Protocol
 
@@ -82,7 +94,7 @@ struct fpc_packet_header {
 
 ### Image Capture Workflow
 ```
-Host                     Sensor (10a5:e340)
+Host                     Sensor (10a5:e340 or 10a5:a900)
  |                               |
  |-- CMD_INIT (0x01) ----------->|
  |<-- EVT_INIT_RESULT (0x02) ----|
@@ -102,14 +114,13 @@ The image frame within `EVT_IMG` begins with a **34-byte metadata header (`0x22`
 
 ## 2. Repository Contents
 
-- [`linux-driver/`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/linux-driver)
-  - [`include/fpc_protocol.h`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/linux-driver/include/fpc_protocol.h): Complete C protocol definitions, opcodes, and headers.
-  - [`src/fpc_disum_tool.c`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/linux-driver/src/fpc_disum_tool.c): Standalone CLI tester application using `libusb-1.0`.
-  - [`src/fpc2040.c`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/linux-driver/src/fpc2040.c): Native `libfprint` driver (`FpiDeviceImage`).
-  - [`udev/70-libfprint-2-fpc2040.rules`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/linux-driver/udev/70-libfprint-2-fpc2040.rules): Udev permission rules for systemd and plugdev.
-  - [`Makefile`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/linux-driver/Makefile): Makefile for the standalone utility.
-- [`FingerPrint_Carewe_20.26.23.27_W11x64/`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/FingerPrint_Carewe_20.26.23.27_W11x64): Original Windows 11 driver binaries and setup INF.
-- [`Readme.txt`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/Readme.txt): Hardware and Windows driver notes.
+- [`linux-driver/`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/linux-driver)
+  - [`include/fpc_protocol.h`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/linux-driver/include/fpc_protocol.h): Complete C protocol definitions, opcodes, and device IDs (`0xe340` & `0xa900`).
+  - [`src/fpc_disum_tool.c`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/linux-driver/src/fpc_disum_tool.c): Standalone CLI tester application with dual-device auto-detection.
+  - [`src/fpc2040.c`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/linux-driver/src/fpc2040.c): Native `libfprint` driver (`FpiDeviceImage`) supporting both PIDs.
+  - [`udev/70-libfprint-2-fpc2040.rules`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/linux-driver/udev/70-libfprint-2-fpc2040.rules): Udev permission rules for systemd, plugdev, and uaccess.
+  - [`Makefile`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/linux-driver/Makefile): Makefile for the standalone utility.
+- [`FingerPrint_Carewe_20.26.23.27_W11x64/`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/FingerPrint_Carewe_20.26.23.27_W11x64): Original Windows 11 driver binaries and setup INF.
 
 ---
 
@@ -136,7 +147,7 @@ make
 ```
 
 ### Installing Udev Rules
-To allow your standard user to communicate with the USB device without `sudo`:
+To allow your standard user to communicate with either USB device without `sudo`:
 ```bash
 sudo make install-udev
 ```
@@ -147,10 +158,11 @@ Run the compiled tool:
 ./fpc_disum_tool
 ```
 
-Output:
+Example output:
 ```
-=== FPC Sensor Controller (10a5:e340) Linux Driver ===
-[*] Searching for USB device 10a5:e340...
+=== FPC Disum Sensor Linux Driver Utility ===
+[*] Supported targets: Honor MagicBook (10a5:a900), Acer Swift (10a5:e340)
+[+] Found Honor MagicBook sensor: 10a5:a900
 [+] Device opened successfully!
 [+] Claimed interface 0
 [*] Step 1: Initializing sensor (CMD_INIT)...
@@ -166,18 +178,18 @@ Output:
 [*] Requesting image (CMD_GET_IMG)...
 [+] Sent CMD_GET_IMG (0x09), val=0x0000, idx=0x0000, len=0
 [*] Received image packet! Total size: 25634 bytes
-[*] Saved image to fingerprint_001.pgm (25600 bytes, 160x160)
+[*] Saved image to honor_fingerprint_001.pgm (25600 bytes, 160x160)
 
 --- Finger removed from sensor ---
 [+] Sent CMD_ARM (0x02), val=0x0001, idx=0x0000, len=4
 ```
-The captured image is automatically saved as a standard grayscale file `fingerprint_001.pgm`.
+The captured image is automatically saved as a standard grayscale file (`honor_fingerprint_001.pgm` or `acer_fingerprint_001.pgm`).
 
 ---
 
 ## 4. Integrating into libfprint & System Authentication
 
-The driver [`src/fpc2040.c`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/linux-driver/src/fpc2040.c) is designed to be dropped directly into `libfprint`:
+The driver [`src/fpc2040.c`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/linux-driver/src/fpc2040.c) contains entries for both Honor (`10a5:a900`) and Acer (`10a5:e340`):
 
 1. **Clone `libfprint`:**
    ```bash

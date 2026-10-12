@@ -1,6 +1,8 @@
 /*
- * FPC2040 / Disum Fingerprint Driver for libfprint
- * Target Device: USB 10a5:e340 (FPC Sensor Controller)
+ * FPC Disum (FPC2040 / Galileo) Fingerprint Driver for libfprint
+ * Target Devices:
+ *   - USB 10a5:a900 (Honor MagicBook X 14 / X 16 2024)
+ *   - USB 10a5:e340 (Acer Swift Go series)
  *
  * Reverse-engineered from Windows driver (fpc_disum.dll) using REA & Ghidra.
  * Copyright (C) 2026
@@ -28,8 +30,9 @@ G_DECLARE_FINAL_TYPE(FpiDeviceFpc2040, fpi_device_fpc2040, FPI, DEVICE_FPC2040, 
 G_DEFINE_TYPE(FpiDeviceFpc2040, fpi_device_fpc2040, FPI_TYPE_IMAGE_DEVICE)
 
 static const FpIdEntry id_table[] = {
-    { .vid = FPC_USB_VID, .pid = FPC_USB_PID },
-    { .vid = 0, .pid = 0, }
+    { .vid = FPC_USB_VID, .pid = FPC_USB_PID_HONOR }, /* Honor MagicBook X (10a5:a900) */
+    { .vid = FPC_USB_VID, .pid = FPC_USB_PID_ACER },  /* Acer Swift (10a5:e340) */
+    { .vid = 0, .pid = 0 }
 };
 
 static void fpc2040_read_events(FpiDeviceFpc2040 *self);
@@ -234,7 +237,7 @@ static void fpi_device_fpc2040_class_init(FpiDeviceFpc2040Class *klass) {
     FpImageDeviceClass *img_class = FP_IMAGE_DEVICE_CLASS(klass);
 
     dev_class->id = "fpc2040";
-    dev_class->full_name = "Fingerprint Cards FPC2040 (Disum)";
+    dev_class->full_name = "Fingerprint Cards Disum (Honor / Acer)";
     dev_class->type = FP_DEVICE_TYPE_USB;
     dev_class->id_table = id_table;
     dev_class->nr_enroll_stages = 5;

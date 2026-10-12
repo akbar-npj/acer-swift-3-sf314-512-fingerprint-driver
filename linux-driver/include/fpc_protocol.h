@@ -4,14 +4,15 @@
 #include <stdint.h>
 
 /* USB Hardware IDs */
-#define FPC_USB_VID 0x10a5
-#define FPC_USB_PID 0xe340
+#define FPC_USB_VID              0x10a5
+#define FPC_USB_PID_ACER         0xe340  /* Acer Swift series (Swift Go, Swift 21) */
+#define FPC_USB_PID_HONOR        0xa900  /* Honor MagicBook series (MagicBook X 14 & X 16 2024) */
 
 /* USB Control Transfer bmRequestType */
-#define FPC_REQTYPE_VENDOR_OUT 0x40  /* Host-to-Device | Vendor | Device */
-#define FPC_REQTYPE_VENDOR_IN  0xc0  /* Device-to-Host | Vendor | Device */
-#define FPC_REQTYPE_CLASS_OUT  0x21  /* Host-to-Device | Class | Interface (DFU) */
-#define FPC_REQTYPE_CLASS_IN   0xa1  /* Device-to-Host | Class | Interface (DFU) */
+#define FPC_REQTYPE_VENDOR_OUT   0x40  /* Host-to-Device | Vendor | Device */
+#define FPC_REQTYPE_VENDOR_IN    0xc0  /* Device-to-Host | Vendor | Device */
+#define FPC_REQTYPE_CLASS_OUT    0x21  /* Host-to-Device | Class | Interface (DFU) */
+#define FPC_REQTYPE_CLASS_IN     0xa1  /* Device-to-Host | Class | Interface (DFU) */
 
 /* Command Codes (bRequest) reverse-engineered from fpc_disum.dll */
 enum fpc_cmd {

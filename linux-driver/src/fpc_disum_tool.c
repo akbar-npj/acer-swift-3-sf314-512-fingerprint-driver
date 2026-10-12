@@ -1,6 +1,6 @@
 /*
- * FPC Sensor Controller (10a5:e340 / Disum FPC2040) Linux Driver Utility
- * Reverse-engineered from fpc_disum.dll using REA & Ghidra.
+ * FPC Sensor Controller (10a5:a900 / 10a5:e340) Linux Driver Utility
+ * Reverse-engineered from Honor MagicBook & Acer Windows drivers (fpc_disum.dll) using REA & Ghidra.
  */
 
 #include <stdio.h>
@@ -15,6 +15,7 @@
 
 static volatile int running = 1;
 static libusb_device_handle *devh = NULL;
+static uint16_t matched_pid = 0;
 static int capture_count = 0;
 
 static void sigint_handler(int signum) {
@@ -69,12 +70,10 @@ static int fpc_recv_vendor_cmd(libusb_device_handle *handle, uint8_t cmd, uint16
 /* Save raw image buffer as PGM (Portable Graymap) */
 static void save_pgm(const uint8_t *img_data, size_t size, int frame_num) {
     char filename[64];
-    snprintf(filename, sizeof(filename), "fingerprint_%03d.pgm", frame_num);
+    const char *prefix = (matched_pid == FPC_USB_PID_HONOR) ? "honor" :
+                         (matched_pid == FPC_USB_PID_ACER) ? "acer" : "fpc";
+    snprintf(filename, sizeof(filename), "%s_fingerprint_%03d.pgm", prefix, frame_num);
 
-    /*
-     * If exact width and height aren't known, default to estimated square
-     * or standard FPC sensor dimensions (e.g. 160x160 = 25600, 192x192 = 36864, 112x88 = 9856)
-     */
     int width = 160;
     int height = 160;
     if (size == 160 * 160) {
@@ -84,7 +83,6 @@ static void save_pgm(const uint8_t *img_data, size_t size, int frame_num) {
         width = 192;
         height = 192;
     } else if (size > 0) {
-        /* Approximate width and height for visualization */
         width = 160;
         height = (int)(size / width);
     }
@@ -176,7 +174,8 @@ int main(int argc, char **argv) {
     (void)argv;
     int r;
 
-    printf("=== FPC Sensor Controller (10a5:e340) Linux Driver ===\n");
+    printf("=== FPC Disum Sensor Linux Driver Utility ===\n");
+    printf("[*] Supported targets: Honor MagicBook (10a5:a900), Acer Swift (10a5:e340)\n");
 
     signal(SIGINT, sigint_handler);
     signal(SIGTERM, sigint_handler);
@@ -187,12 +186,22 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    printf("[*] Searching for USB device %04x:%04x...\n", FPC_USB_VID, FPC_USB_PID);
-    devh = libusb_open_device_with_vid_pid(NULL, FPC_USB_VID, FPC_USB_PID);
+    /* Probe for Honor MagicBook PID 0xa900 first, then fallback to Acer PID 0xe340 */
+    devh = libusb_open_device_with_vid_pid(NULL, FPC_USB_VID, FPC_USB_PID_HONOR);
+    if (devh) {
+        matched_pid = FPC_USB_PID_HONOR;
+        printf("[+] Found Honor MagicBook sensor: %04x:%04x\n", FPC_USB_VID, matched_pid);
+    } else {
+        devh = libusb_open_device_with_vid_pid(NULL, FPC_USB_VID, FPC_USB_PID_ACER);
+        if (devh) {
+            matched_pid = FPC_USB_PID_ACER;
+            printf("[+] Found Acer sensor: %04x:%04x\n", FPC_USB_VID, matched_pid);
+        }
+    }
+
     if (!devh) {
-        fprintf(stderr, "[-] Device %04x:%04x not found or insufficient permissions!\n",
-                FPC_USB_VID, FPC_USB_PID);
-        fprintf(stderr, "    Hint: Run with sudo or install the udev rule.\n");
+        fprintf(stderr, "[-] Neither device (10a5:a900 nor 10a5:e340) was found!\n");
+        fprintf(stderr, "    Hint: Check 'lsusb', run with sudo, or install udev rules.\n");
         libusb_exit(NULL);
         return 1;
     }
@@ -265,7 +274,6 @@ int main(int argc, char **argv) {
         if (r == 0 && transferred > 0) {
             handle_event_packet(recv_buf, transferred);
         } else if (r == LIBUSB_ERROR_TIMEOUT) {
-            /* Timeout is normal when idle */
             continue;
         } else if (r < 0) {
             fprintf(stderr, "[-] Interrupt read error: %s\n", libusb_error_name(r));
