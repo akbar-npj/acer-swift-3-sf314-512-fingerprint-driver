@@ -315,3 +315,53 @@ void cr_masked_box_sum(int *out_count, float *out_sum,
         }
     }
 }
+
+/* 0x18000d040 — box sum + count of the pixels NOT in a u16 index list.
+ *
+ * `idx` is a linear index into a packed W x H byte image (row-major, stride
+ * W): cy = idx / W, cx = idx % W.  The window is [cy-hw, cy+hw] x [cx-hw,
+ * cx+hw] with hw = win >> 1, clamped to the image; if the row range is empty
+ * nothing happens.  For every pixel whose linear index (r*W + c) is NOT one of
+ * the `*count` u16 entries in `(*indices)[0..count)`, the byte sample is added
+ * to *out_sum (as a float) and *out_count is incremented.  When `*count` is 0
+ * every pixel in the window is summed.  Both outputs are zeroed up front.
+ * (Despite the vendor symbol name this has nothing to do with templates.)
+ */
+void cr_box_sum_excl(int width, int height, const uint8_t *data,
+                     const uint16_t *count, const uint16_t *const *indices,
+                     int win, int idx, int *out_count, float *out_sum)
+{
+    int hw = win >> 1;
+    *out_sum = 0.0f;
+    *out_count = 0;
+
+    int row = idx / width;
+    int col = idx % width;
+
+    int r0 = row - hw; if (r0 < 0) r0 = 0;
+    int c0 = col - hw; if (c0 < 0) c0 = 0;
+    int r1 = row + hw; if (r1 > height - 1) r1 = height - 1;
+    int c1 = col + hw; if (c1 > width - 1) c1 = width - 1;
+
+    if (r0 > r1)
+        return;
+
+    for (int r = r0; r <= r1; r++) {
+        uint16_t cnt = *count;
+        long long rowbase = (long long)r * width;
+        for (int c = c0; c <= c1; c++) {
+            if (cnt != 0) {
+                int found = 0;
+                for (int k = 0; k < cnt; k++)
+                    if ((uint32_t)(*indices)[k] == (uint32_t)(rowbase + c)) {
+                        found = 1;
+                        break;
+                    }
+                if (found)
+                    continue;
+            }
+            (*out_count)++;
+            *out_sum = (float)data[rowbase + c] + *out_sum;
+        }
+    }
+}

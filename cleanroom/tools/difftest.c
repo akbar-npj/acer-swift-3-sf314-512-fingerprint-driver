@@ -2292,6 +2292,37 @@ static void test_mirror_extend_s16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_mirror_extend_s16\n");
 }
 
+/* 0x18000d040 — box sum/count of pixels NOT in a u16 index list. */
+typedef void (WINAPI *v_v_iippppiii)(int, int, const uint8_t *,
+                                     const uint16_t *, const uint16_t *const *,
+                                     int, int, int *, float *);
+
+static void test_box_sum_excl(void)
+{
+    v_v_iippppiii v = (v_v_iippppiii)fn_at(RVA(0x18000d040));
+    begin("cr_box_sum_excl");
+    int bad = g_fail;
+    enum { W = 37, H = 29 };
+    uint8_t img[W * H];
+    uint16_t list[64];
+    for (int t = 0; t < 20000; t++) {
+        for (int i = 0; i < W * H; i++) img[i] = (uint8_t)rnd();
+        uint16_t cnt = (uint16_t)(rnd() % 40u);
+        for (int i = 0; i < cnt; i++) list[i] = (uint16_t)(rnd() % (W * H + 8));
+        int win = (int)(rnd() % 15u);
+        int idx = (int)(rnd() % (W * H));
+        const uint16_t *lp = list;
+        const uint16_t *const *lpp = &lp;
+        int vc = 0x7f000001, cc = 0x7f000001;
+        float vs = -1.0f, cs = -1.0f;
+        v(W, H, img, &cnt, lpp, win, idx, &vc, &vs);
+        cr_box_sum_excl(W, H, img, &cnt, lpp, win, idx, &cc, &cs);
+        if (vc != cc) mismatch("count", (u32)t, (u32)vc, (u32)cc);
+        if (cr_f2u(vs) != cr_f2u(cs)) mismatch("sum", (u32)t, cr_f2u(vs), cr_f2u(cs));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_box_sum_excl\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2426,6 +2457,8 @@ int main(int argc, char **argv)
     test_u8_to_u16_shifted();
     printf("\n== symmetric int16 border extend ==\n");
     test_mirror_extend_s16();
+    printf("\n== box sum excluding an index list ==\n");
+    test_box_sum_excl();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

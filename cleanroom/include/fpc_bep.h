@@ -280,5 +280,8 @@ void     cr_u8_to_u16_shifted(cr_image *dst, const cr_image *src,
                               int shift);                                /* 0x1800337e0 */
 void     cr_mirror_extend_s16(cr_image *img, int top, int bottom,
                               int left, int right);                      /* 0x180028930 */
+void     cr_box_sum_excl(int width, int height, const uint8_t *data,
+                         const uint16_t *count, const uint16_t *const *indices,
+                         int win, int idx, int *out_count, float *out_sum); /* 0x18000d040 */
 
 #endif /* FPC_BEP_H */

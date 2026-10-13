@@ -243,6 +243,12 @@ The image descriptor layout (established from these functions):
 | `0x1800337e0` | `fpc_bio_bep_sw23_9bbd6b7a97` | `cr_u8_to_u16_shifted` | `void fn(cr_image *dst, const cr_image *src, int16_t shift)`. Widens each byte of `src` to int16 in `dst` (both packed, row stride = `src->w`). `shift>0`: `(uint16)in << (shift&31)`; `shift==0`: `in`; `shift<0`: `sh=(-shift)&31`, `rnd=(int16)(1u<<sh)>>1`, `out=(int16)(((uint32)in+(uint32)rnd)>>sh)`. |
 | `0x180028930` | `fpc_bio_bep_sw23_6f845fb02c` | `cr_mirror_extend_s16` | `void fn(cr_image *img, int top, int bottom, int left, int right)`. Symmetric (BORDER_REFLECT, edge repeated) extension of an int16 image. Reflection index `idx = v % (2n); if (idx>=n) idx = 2n-idx-1;` with `v` counting down from `n<<16` (top/left) or up from `(n<<16)+n` (bottom/right). Top/bottom bars fill only the middle `w` columns; left/right bars then fill the full frame height, so corners come from the already-extended frame. |
 
+### Batch 30 — box sum excluding an index list
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18000d040` | `fpc_bep_template_serialize` | `cr_box_sum_excl` | `void fn(int width, int height, const uint8_t *data, const uint16_t *count, const uint16_t *const *indices, int win, int idx, int *out_count, float *out_sum)`. Window `[cy-hw,cy+hw] x [cx-hw,cx+hw]` (`hw=win>>1`, `cy=idx/width`, `cx=idx%width`, clamped to the image). For every pixel whose linear index `r*width+c` is **not** among the `*count` u16 entries of `*indices`, add the byte to `*out_sum` (as float) and bump `*out_count`. `*count==0` sums everything. Both outputs zeroed up front. (The vendor symbol name is noise.) |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
