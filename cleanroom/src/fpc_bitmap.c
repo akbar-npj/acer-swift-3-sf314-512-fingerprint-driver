@@ -169,3 +169,175 @@ int cr_bitmap_popcount(const cr_image *img)
     }
     return total;
 }
+
+/* 0x180024cb0 — binary dilation of a packed bitmap.  `dst` supplies the word
+ * stride (ceil(dst->a/32) words per row) and the row count (dst->h); `src`
+ * supplies the input words.  Each of the `count` passes ORs every bit with its
+ * left/right neighbours (a 3-wide OR), then with its up/down neighbours; from
+ * the second pass on the source is `dst` itself, so the buffer self-feeds.
+ *
+ * The per-word horizontal update for interior words k (0..words-2) is
+ *   dst[k] = (prev >> 31) | cur | cur*2 | cur >> 1 | (next << 31)
+ * (the `>>31` / `<<31` carry the wrap-around bits between adjacent words), and
+ * the final word is handled with the same window minus the incoming carry. */
+void cr_bitmap_dilate(cr_image *dst, const cr_image *src, int count)
+{
+    int words = dst->a;                          /* row stride, in bits */
+    words = (words >= 0 ? words : words + 0x1f) >> 5;
+    int h = dst->h;
+    uint32_t *base = (uint32_t *)dst->data;
+
+    if (count <= 0)
+        return;
+
+    int rows_minus1 = h - 1;
+    int it = 0;
+    uint32_t *s = (uint32_t *)src->data;
+
+    do {
+        /* horizontal pass: one 3-wide OR window per row */
+        if (h > 0) {
+            int ri = 0;
+            uint32_t *d = base;
+            do {
+                uint32_t cur = *s;
+                uint32_t prev;
+                if (words < 2) {
+                    prev = 0;
+                } else {
+                    long long off = 0;
+                    uint32_t p = 0;
+                    do {
+                        prev = cur;
+                        cur = *(const uint32_t *)((const char *)s + off + 4);
+                        *(uint32_t *)((char *)d + off) =
+                            (p >> 31) | prev | (prev * 2u) | (prev >> 1) | (cur << 31);
+                        off += 4;
+                        p = prev;
+                    } while ((unsigned long long)off !=
+                             (unsigned long long)(words - 2) * 4 + 4);
+                    prev = prev >> 31;
+                }
+                ri++;
+                s = s + words;
+                d[(long long)words - 1] = (cur >> 1) | prev | cur | (cur * 2u);
+                d = d + words;
+            } while (ri != h);
+        }
+
+        /* vertical pass: 3-wide OR window down each column */
+        s = base;
+        if (words > 0) {
+            do {
+                while (rows_minus1 > 0) {
+                    int ri = 0;
+                    uint32_t *d = s;
+                    uint32_t cur = *d;
+                    uint32_t prev = 0;
+                    uint32_t acc = 0;
+                    do {
+                        uint32_t p = cur;
+                        cur = d[words];
+                        ri++;
+                        acc = cur | p;
+                        *d = prev | acc;
+                        d = d + words;
+                        prev = p;
+                    } while (ri != rows_minus1);
+                    s[words * rows_minus1] = acc;
+                    s = s + 1;
+                    if (base + (unsigned long long)(words - 1) + 1 == s)
+                        goto next_iteration;
+                }
+                s[words * rows_minus1] = *s;
+                s = s + 1;
+            } while (base + (unsigned long long)(words - 1) + 1 != s);
+        }
+    next_iteration:
+        it++;
+        s = base;
+    } while (count != it);
+}
+
+/* 0x1800220e0 — binary erosion: the AND-twin of cr_bitmap_dilate.  `dst`
+ * supplies the word count (dst->w >> 5) and height (dst->h); `src` supplies the
+ * input words.  The horizontal interior update is
+ *   dst[k] = (prev >> 31 | cur*2) & cur & (cur >> 1 | next << 31)
+ * with a leading 0xffffffff carry and a trailing 0x80000000 mask; the vertical
+ * pass ANDs each column with its up/down neighbours.  Repeated `count` times. */
+void cr_bitmap_erode(cr_image *dst, const cr_image *src, int count)
+{
+    int words = dst->w >> 5;                     /* row stride, in words */
+    int h = dst->h;
+    uint32_t *base = (uint32_t *)dst->data;
+
+    if (count <= 0)
+        return;
+
+    int rows_minus1 = h - 1;
+    int it = 0;
+    uint32_t *s = (uint32_t *)src->data;
+
+    do {
+        if (h > 0) {
+            int ri = 0;
+            uint32_t *d = base;
+            do {
+                uint32_t cur = *s;
+                uint32_t prev;
+                if (words < 2) {
+                    prev = 1;
+                } else {
+                    long long off = 0;
+                    uint32_t p = 0xffffffffu;
+                    do {
+                        prev = cur;
+                        cur = *(const uint32_t *)((const char *)s + off + 4);
+                        *(uint32_t *)((char *)d + off) =
+                            (p >> 31 | prev * 2u) & prev & (prev >> 1 | cur << 31);
+                        off += 4;
+                        p = prev;
+                    } while ((unsigned long long)off !=
+                             (unsigned long long)(words - 2) * 4 + 4);
+                    prev = prev >> 31;
+                }
+                ri++;
+                s = s + words;
+                d[(long long)words - 1] =
+                    cur & (prev | cur * 2u) & (cur >> 1 | 0x80000000u);
+                d = d + words;
+            } while (ri != h);
+        }
+
+        s = base;
+        if (words > 0) {
+            do {
+                while (rows_minus1 > 0) {
+                    int ri = 0;
+                    uint32_t *d = s;
+                    uint32_t cur = *d;
+                    uint32_t prev = 0xffffffffu;
+                    uint32_t acc = 0;
+                    do {
+                        uint32_t p = cur;
+                        cur = d[words];
+                        ri++;
+                        acc = cur & p;
+                        *d = prev & acc;
+                        d = d + words;
+                        prev = p;
+                    } while (ri != rows_minus1);
+                    s[words * rows_minus1] = acc;
+                    s = s + 1;
+                    if (base + (unsigned long long)(words - 1) + 1 == s)
+                        goto next_iteration;
+                }
+                s[words * rows_minus1] = *s;
+                s = s + 1;
+            } while (base + (unsigned long long)(words - 1) + 1 != s);
+        }
+    next_iteration:
+        it++;
+        s = base;
+    } while (count != it);
+}

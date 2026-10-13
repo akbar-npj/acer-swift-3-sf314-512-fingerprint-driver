@@ -216,4 +216,8 @@ int      cr_malloc(void **out, size_t size);                         /* 0x180002
 void     cr_free(void **p);                                          /* 0x180002fb0 */
 void     cr_sized_free(void **p);                                    /* 0x18003bf40 */
 
+/* ---- batch 17: bitmap morphology (dilate / erode pair) ------------------ */
+void     cr_bitmap_dilate(cr_image *dst, const cr_image *src, int count); /* 0x180024cb0 */
+void     cr_bitmap_erode(cr_image *dst, const cr_image *src, int count);  /* 0x1800220e0 */
+
 #endif /* FPC_BEP_H */

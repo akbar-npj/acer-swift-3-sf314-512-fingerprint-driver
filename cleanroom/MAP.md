@@ -160,6 +160,15 @@ The image descriptor layout (established from these functions):
 
 > The allocator wrappers call the platform allocator; the differential test compares only the observable contract (status codes, null-ing), since raw pointer values differ between allocators.
 
+### Batch 17 — bitmap morphology (dilate / erode pair)
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180024cb0` | `fpc_bio_bep_sw23_5f21879897` | `cr_bitmap_dilate` | `void fn(cr_image *dst, const cr_image *src, int count)`. Word stride = `ceil(dst->a/32)`; rows = `dst->h`. Each of `count` passes does a horizontal 3-wide OR window then a vertical one. Interior word `k`: `dst[k] = (prev>>31) | cur | cur*2 | cur>>1 | (next<<31)`; last word `dst[words-1] = (cur>>1) | prev | cur | cur*2` with `prev = prev>>31`. Vertical: `acc = cur | prevrow; *d = prevacc | acc`. From pass 2 the source is `dst` itself (self-feed). |
+| `0x1800220e0` | `fpc_bio_bep_sw23_5029eb7cfe` | `cr_bitmap_erode` | the AND-twin of `cr_bitmap_dilate`. Word count = `dst->w >> 5`; rows = `dst->h`. Interior word: `dst[k] = (prev>>31 | cur*2) & cur & (cur>>1 | next<<31)` with leading carry `0xffffffff`; last word `dst[words-1] = cur & (prev | cur*2) & (cur>>1 | 0x80000000)`; vertical `acc = cur & prevrow; *d = prevacc & acc`. Repeated `count` times, self-feeding after pass 1. |
+
+> Both functions take the destination image (which supplies the stride/height and is written in place) and a separate source image; the difftest exercises 1..4 words/row, 1..6 rows and 1..3 passes so the multi-word carry path and the self-feed path are both covered.
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

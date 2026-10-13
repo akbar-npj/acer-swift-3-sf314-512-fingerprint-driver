@@ -314,6 +314,9 @@ typedef void     (WINAPI *v_v_pi)(int *, const void *);
 /* batch 16 */
 typedef int      (WINAPI *v_i_ppz)(void *, size_t);
 
+/* batch 17 */
+typedef void     (WINAPI *v_v_ppim)(void *, const void *, int);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -1336,6 +1339,51 @@ static void test_bitmap_popcount(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_popcount\n");
 }
 
+/* ---- batch 17: bitmap morphology --------------------------------------- */
+
+/* 0x180024cb0 / 0x1800220e0 — bitmap dilation / erosion.  Both take a dst
+ * image (word stride + height) and a src image (input words) plus a pass count;
+ * from the 2nd pass the dst feeds itself.  We exercise 1..4 words/row, 1..6
+ * rows and 1..3 passes so both the multi-word carry paths and the self-feed
+ * path are covered. */
+static void test_bitmap_morph(void)
+{
+    struct {
+        const char *name; u32 rva;
+        void (*clean)(cr_image *, const cr_image *, int);
+    } fns[] = {
+        { "cr_bitmap_dilate", RVA(0x180024cb0), cr_bitmap_dilate },
+        { "cr_bitmap_erode",  RVA(0x1800220e0), cr_bitmap_erode  },
+    };
+
+    for (size_t k = 0; k < sizeof fns / sizeof fns[0]; k++) {
+        begin(fns[k].name);
+        int bad = g_fail;
+        v_v_ppim v = (v_v_ppim)fn_at(fns[k].rva);
+        for (int t = 0; t < 20000; t++) {
+            unsigned char dv[0x20], dc[0x20], sv[0x20], sc[0x20];
+            uint32_t pv[512], pc[512], sq[512];
+            int words = 1 + (int)(rnd() % 4u);       /* 1..4 words per row */
+            int bits  = words * 32;
+            int h     = 1 + (int)(rnd() % 6u);       /* 1..6 rows */
+            int count = 1 + (int)(rnd() % 3u);       /* 1..3 passes */
+            for (int i = 0; i < 512; i++) {
+                uint32_t u = (uint32_t)rnd();
+                pv[i] = u; pc[i] = u; sq[i] = (uint32_t)rnd();
+            }
+            mk_image(dv, pv, bits, bits, h, 0, 0);
+            mk_image(dc, pc, bits, bits, h, 0, 0);
+            mk_image(sv, sq, bits, bits, h, 0, 0);
+            mk_image(sc, sq, bits, bits, h, 0, 0);
+            v(dv, sv, count);
+            fns[k].clean((cr_image *)dc, (const cr_image *)sc, count);
+            cmp_buf("morph", (unsigned char *)pv, (unsigned char *)pc,
+                    sizeof pv, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL %s\n", fns[k].name);
+    }
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -1827,6 +1875,8 @@ int main(int argc, char **argv)
     test_saturation_score();
     printf("\n== allocator wrappers ==\n");
     test_alloc_wrappers();
+    printf("\n== bitmap morphology ==\n");
+    test_bitmap_morph();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
