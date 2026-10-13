@@ -2524,6 +2524,160 @@ static void test_bitmap_centroid(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_centroid\n");
 }
 
+/* ---- batch 36: descriptor / table-pointer getters ---------------------- *
+ * These write vendor data-section pointers; the cleanroom zeroes them.
+ * Compare return value + scalar fields only; pointer slots are not compared. */
+
+static void test_desc_getters(void)
+{
+    /* These write vendor data-section pointers; the cleanroom zeroes them.
+     * Compare return value + scalar fields only; skip pointer slots. */
+
+    begin("cr_desc_get_ptr1");
+    {
+        typedef uint64_t (WINAPI *v_u_pc)(void *, char);
+        v_u_pc v = (v_u_pc)fn_at(RVA(0x18002aeb0));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            uint64_t vv, cv;
+            uint64_t rv = v(&vv, (char)s);
+            uint64_t rc = cr_desc_get_ptr1(&cv, (char)s);
+            if (rv != rc) mismatch("ret", (u32)s, rv, rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_ptr1\n");
+    }
+
+    begin("cr_desc_get_ptr_size");
+    {
+        typedef uint64_t (WINAPI *v_u_ppc)(void *, uint32_t *, char);
+        v_u_ppc v = (v_u_ppc)fn_at(RVA(0x180012f30));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            uint64_t vv; uint32_t vs;
+            uint64_t cv; uint32_t cs;
+            uint64_t rv = v(&vv, &vs, (char)s);
+            uint64_t rc = cr_desc_get_ptr_size(&cv, &cs, (char)s);
+            if (rv != rc) mismatch("ret", (u32)s, rv, rc);
+            if (vs != cs) mismatch("size", (u32)s, (u64)vs, (u64)cs);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_ptr_size\n");
+    }
+
+    begin("cr_desc_get_ptr2");
+    {
+        typedef uint64_t (WINAPI *v_u_pc)(void *, char);
+        v_u_pc v = (v_u_pc)fn_at(RVA(0x180020860));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            uint64_t vv, cv;
+            uint64_t rv = v(&vv, (char)s);
+            uint64_t rc = cr_desc_get_ptr2(&cv, (char)s);
+            if (rv != rc) mismatch("ret", (u32)s, rv, rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_ptr2\n");
+    }
+
+    begin("cr_desc_get_tag_ptr");
+    {
+        typedef uint64_t (WINAPI *v_u_pc)(void *, char);
+        v_u_pc v = (v_u_pc)fn_at(RVA(0x18002dab0));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            uint64_t vb[2], cb[2];
+            uint64_t rv = v(vb, (char)s);
+            uint64_t rc = cr_desc_get_tag_ptr(cb, (char)s);
+            if (rv != rc) mismatch("ret", (u32)s, rv, rc);
+            /* q[0] is a scalar tag; q[1] is a pointer (skip) */
+            if (vb[0] != cb[0]) mismatch("tag", (u32)s, vb[0], cb[0]);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_tag_ptr\n");
+    }
+
+    begin("cr_desc_get_ptr2_69");
+    {
+        typedef uint64_t (WINAPI *v_u_pc)(void *, char);
+        v_u_pc v = (v_u_pc)fn_at(RVA(0x1800448f0));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            uint64_t vv, cv;
+            uint64_t rv = v(&vv, (char)s);
+            uint64_t rc = cr_desc_get_ptr2_69(&cv, (char)s);
+            if (rv != rc) mismatch("ret", (u32)s, rv, rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_ptr2_69\n");
+    }
+
+    begin("cr_desc_get_ptr_ints");
+    {
+        typedef uint64_t (WINAPI *v_u_pppc)(void *, uint32_t *, uint32_t *, char);
+        v_u_pppc v = (v_u_pppc)fn_at(RVA(0x180018e50));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            uint64_t vv; uint32_t v2, v3;
+            uint64_t cv; uint32_t c2, c3;
+            uint64_t rv = v(&vv, &v2, &v3, (char)s);
+            uint64_t rc = cr_desc_get_ptr_ints(&cv, &c2, &c3, (char)s);
+            if (rv != rc) mismatch("ret", (u32)s, rv, rc);
+            if (v2 != c2) mismatch("i2", (u32)s, (u64)v2, (u64)c2);
+            if (v3 != c3) mismatch("i3", (u32)s, (u64)v3, (u64)c3);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_ptr_ints\n");
+    }
+
+    begin("cr_desc_get_ptr_size_69");
+    {
+        typedef uint8_t (WINAPI *v_b_pc)(void *, uint32_t *, char);
+        v_b_pc v = (v_b_pc)fn_at(RVA(0x180017960));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            uint64_t vv; uint32_t vs;
+            uint64_t cv; uint32_t cs;
+            uint8_t rv = v(&vv, &vs, (char)s);
+            uint8_t rc = cr_desc_get_ptr_size_69(&cv, &cs, (char)s);
+            if (rv != rc) mismatch("ret", (u32)s, (u64)rv, (u64)rc);
+            if (vs != cs) mismatch("size", (u32)s, (u64)vs, (u64)cs);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_ptr_size_69\n");
+    }
+
+    begin("cr_desc_get_tag_byte_ptr");
+    {
+        typedef uint64_t (WINAPI *v_u_pc)(void *, char);
+        v_u_pc v = (v_u_pc)fn_at(RVA(0x180028de0));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            /* layout: +0 u64 (tag), +8 u8 (marker), +0x10 u64 (ptr, skip), +0x18 u64 */
+            unsigned char vb[0x20], cb[0x20];
+            uint64_t rv = v(vb, (char)s);
+            uint64_t rc = cr_desc_get_tag_byte_ptr(cb, (char)s);
+            if (rv != rc) mismatch("ret", (u32)s, rv, rc);
+            if (memcmp(vb, cb, 8) != 0)
+                mismatch("tag", (u32)s, *(uint64_t*)vb, *(uint64_t*)cb);
+            if (vb[8] != cb[8])
+                mismatch("marker", (u32)s, vb[8], cb[8]);
+            if (memcmp(vb+0x18, cb+0x18, 8) != 0)
+                mismatch("q3", (u32)s, *(uint64_t*)(vb+0x18), *(uint64_t*)(cb+0x18));
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_tag_byte_ptr\n");
+    }
+
+    begin("cr_desc_get_triple");
+    {
+        typedef uint64_t (WINAPI *v_u_pb)(void *, uint8_t);
+        v_u_pb v = (v_u_pb)fn_at(RVA(0x18002d4e0));
+        int bad = g_fail;
+        for (int s = 0; s < 256; s++) {
+            uint64_t vb[3], cb[3];
+            uint64_t rv = v(vb, (uint8_t)s);
+            uint64_t rc = cr_desc_get_triple(cb, (uint8_t)s);
+            if (rv != rc) mismatch("ret", (u32)s, rv, rc);
+            /* q[0] is a scalar tag; q[1],q[2] are pointers (skip) */
+            if (vb[0] != cb[0]) mismatch("tag", (u32)s, vb[0], cb[0]);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_triple\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2670,6 +2824,8 @@ int main(int argc, char **argv)
     test_grid_insert();
     printf("\n== bitmap set-bit centroid ==\n");
     test_bitmap_centroid();
+    printf("\n== descriptor / table-pointer getters ==\n");
+    test_desc_getters();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

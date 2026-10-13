@@ -278,25 +278,22 @@ The image descriptor layout (established from these functions):
 | vendor RVA | vendor symbol | clean-room name | actual semantics |
 |---|---|---|---|
 | `0x18002ddd0` | `fpc_bio_bep_sw23_82f9a9e315.part.9` | `cr_bitmap_centroid` | `int fn(const cr_bitmap_desc *bm, int win_h, int win_w, int *out_y, int *out_x, int margin)`. Scans the masked bitmap accumulating count, Σ row and Σ column of the set bits, then returns the centroid shifted by half the window and clamped: `out_y = min(h-win_h-margin, max(rowsum/count - win_h/2, margin))`, likewise `out_x`. Guards `win_h <= h-2*margin && win_w <= w-2*margin`, else `0x82` **without writing the outputs**. Only the last word of each row is masked (first loop pass); 32-bit accumulators; the all-zero/all-one word/byte fast paths are closed forms of the same sums. |
+| `0x18002aeb0` | `fpc_bio_bep_sw23_769acc1eef` | `cr_desc_get_ptr1` | `uint64_t fn(void *p, char sel)`. Single pointer getter: `sel==4` → write table ptr, return 0; else write NULL, return 1. Cleanroom zeroes the pointer slot (no vendor tables); difftest compares return code only. |
+| `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | `cr_desc_get_ptr_size` | `uint64_t fn(void *p1, uint32_t *p2, char sel)`. `sel==0` → return 0 (zeroes); `sel==6` → write size 0x100, return 0; else return 1. Pointer slot zeroed in cleanroom. |
+| `0x180020860` | `fpc_bio_bep_sw23_46f04b866a` | `cr_desc_get_ptr2` | `uint64_t fn(void *p, char sel)`. `sel==12` or `sel==13` → return 0; else return 1. Pointer slot zeroed. |
+| `0x18002dab0` | `fpc_bio_bep_sw23_81499c2105` | `cr_desc_get_tag_ptr` | `uint64_t fn(void *p, char sel)`. NULL-guarded; `sel==0` → write u64 tag `0x1f5_00000009`, return 0; else return 1. Pointer at +8 zeroed. |
+| `0x1800448f0` | `fpc_bio_bep_sw23_eb7a7b573f` | `cr_desc_get_ptr2_69` | `uint64_t fn(void *p, char sel)`. `sel==0` or `sel==1` → return 0; else return 0x69. Pointer slot zeroed. |
+| `0x180018e50` | `fpc_bio_bep_sw23_2db989eca6` | `cr_desc_get_ptr_ints` | `uint64_t fn(void *p1, uint32_t *p2, uint32_t *p3, char sel)`. `sel==0` or `sel==1` → write 9,9, return 0; else return 1. Pointer slot zeroed. |
+| `0x180017960` | `fpc_bio_bep_sw23_25c6d755fa` | `cr_desc_get_ptr_size_69` | `uint8_t fn(void *p1, uint32_t *p2, char sel)`. `sel==15` → size 0x620; `sel==16` → size 0x100; `sel==0` → return 0 (zeroes); else return 0x69. |
+| `0x180028de0` | `fpc_bio_bep_sw23_702329d57c` | `cr_desc_get_tag_byte_ptr` | `uint64_t fn(void *p, char sel)`. NULL-guarded; `sel==2` → byte 0x10 + tag `0x1_00000019`; `sel==4` → byte 4 + same tag; else return 1. Pointer at +0x10 zeroed. |
+| `0x18002d4e0` | `fpc_bio_bep_sw23_7c99980763` | `cr_desc_get_triple` | `uint64_t fn(void *p, uint8_t sel)`. `sel>=6` → 0x69; NULL-guarded; `sel==0` → zeroes, return 0; `sel==5` → tag `0x2_00000010`, return 0; else 1. Pointers at +8,+0x10 zeroed. |
 
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
 |---|---|---|
 | `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | returns static table pointers — needs the table contents. |
-| `0x18002aeb0` | `fpc_bio_bep_sw23_769acc1eef` | returns a pointer to the static table `DAT_180159ea0` (type 4) — needs the table contents. |
-| `0x180020860` | `fpc_bio_bep_sw23_46f04b866a` | static tables `DAT_180122980` (type 0xc), `DAT_1801598e0` (0xd). |
-| `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | static table `DAT_1801174e0` (type 6, size 0x100). |
-| `0x18002dab0` | `fpc_bio_bep_sw23_81499c2105` | writes u64 tag `0x1f5_00000009` + static table `DAT_180145240` (type 0). |
-| `0x1800448f0` | `fpc_bio_bep_sw23_eb7a7b573f` | static tables `DAT_180120480` (type 0), `DAT_18011dd40` (type 1); else `0x69`. |
-| `0x180018e50` | `fpc_bio_bep_sw23_2db989eca6` | static tables `DAT_180117340` (type 0) / `DAT_180120220` (type 1) + dims 9,9. |
-| `0x180017960` | `fpc_bio_bep_sw23_25c6d755fa` | static tables `DAT_1801229e0` (type 0xf, size 0x620), `DAT_1800a0c80` (0x10, size 0x100). |
-| `0x180028de0` | `fpc_bio_bep_sw23_702329d57c` | non-constprop sibling of `cr_type_desc_getter`; also stores `DAT_1801253a0`/`DAT_18011df40`. |
-| `0x18002d4e0` | `fpc_bio_bep_sw23_7c99980763` | writes u64 tag `0x2_00000010` + tables `DAT_180159a00`, `DAT_180117780` (type 5); tag≥6 → `0x69`. |
-| `0x180048d40` | `fpc_bio_init` | returns `FUN_18006b4e0() + 8` (out-of-tree global getter) — no in-tree leaf to compose. |
-| `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | static table `DAT_1801174e0` (type 6) + writes `0x100`. |
-| `0x1800448f0` | `fpc_bio_bep_sw23_eb7a7b573f` | static tables `DAT_180120480` (0), `DAT_18011dd40` (1). |
-| `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued). |
+| `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued, out-of-tree). |
 
 These are pointer/table-valued, so bit-exact comparison needs a structural (not
 address) check; they will be handled once the referenced tables are established.

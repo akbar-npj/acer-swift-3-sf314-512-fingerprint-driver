@@ -340,4 +340,19 @@ typedef struct {
 int      cr_bitmap_centroid(const cr_bitmap_desc *bm, int win_h, int win_w,
                             int *out_y, int *out_x, int margin);         /* 0x18002ddd0 */
 
+/* ---- batch 36: small descriptor / table-pointer getters ------------------- */
+/* These dispatch on a byte selector; pointer stores from the vendor's
+ * read-only data section are zeroed (cleanroom has no vendor tables).
+ * The difftest compares status + scalar fields + pointer NULL-ness. */
+uint64_t cr_desc_get_ptr1(void *p, char sel);                            /* 0x18002aeb0 */
+uint64_t cr_desc_get_ptr_size(void *p1, uint32_t *p2, char sel);          /* 0x180012f30 */
+uint64_t cr_desc_get_ptr2(void *p, char sel);                             /* 0x180020860 */
+uint64_t cr_desc_get_tag_ptr(void *p, char sel);                         /* 0x18002dab0 */
+uint64_t cr_desc_get_ptr2_69(void *p, char sel);                         /* 0x1800448f0 */
+uint64_t cr_desc_get_ptr_ints(void *p1, uint32_t *p2,
+                               uint32_t *p3, char sel);                  /* 0x180018e50 */
+uint8_t  cr_desc_get_ptr_size_69(void *p1, uint32_t *p2, char sel);      /* 0x180017960 */
+uint64_t cr_desc_get_tag_byte_ptr(void *p, char sel);                    /* 0x180028de0 */
+uint64_t cr_desc_get_triple(void *p, uint8_t sel);                       /* 0x18002d4e0 */
+
 #endif /* FPC_BEP_H */
