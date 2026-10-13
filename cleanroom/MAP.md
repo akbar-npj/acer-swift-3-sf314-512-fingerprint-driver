@@ -206,6 +206,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x180024200` | `fpc_bio_bep_sw23_598b2d29a0` | `cr_permute_rows` | `int fn(uint8_t *data, int32_t *perm, int n, int stride)`. In-place row permutation of an `n`×`stride` byte matrix: destination row `j` takes source row `perm[j]`, where `perm` is an array of 8-byte entries (only the first int of each is used). Implemented by walking each permutation cycle, shifting rows backwards, and marking visited entries with a temporary `+0x4000000` flag that is stripped from every entry at the end. `stride` must be `< 0x41` else returns `0x69`; `stride <= 0` moves no data but still walks the cycles. |
 
+### Batch 24 — bit-shifted bitmap blit
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18000fd90` | `fpc_bio_bep_sw23_0a86d32299` | `cr_bitmap_copy_shift` | `int fn(cr_image *dst, const cr_image *src, uint32_t bitoff, int rowoff)`. Blit a source bitmap into a destination bitmap at bit column `bitoff` and row `rowoff`, shifting source bits **left** by `bitoff & 31`. Both descriptors need `offx==offy==0` and `src->a <= dst->a`, else `0x69`. Source row length is `src->a` bits (`src->a>>5` words/row), `src->h` rows copied, destination stride `dst->a` bits. Word-aligned offset (`bitoff&31==0`): verbatim word copy. Otherwise: first dst word = `((d<<s)>>s) | (src[0]<<s)` (keeps low bits of dst), then `dst[k] = (src[k]<<s)|(src[k-1]>>(32-s))`, and — only when `dst->a > src->a` — one carry word `(src[last]>>(32-s)) | ((d>>s)<<s)` one past the region. Verified against the assembly (the `(d<<s)>>s` is a logical `shr`, clearing the top bits). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

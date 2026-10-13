@@ -288,6 +288,67 @@ void cr_laplacian_3x3(int16_t *out, const int16_t *A, const int16_t *C,
     } while (1);
 }
 
+/* 0x18000fd90 — blit a source bitmap into a destination bitmap at bit column
+ * `bitoff` and row `rowoff`, shifting the source bits LEFT by (bitoff & 31).
+ * `src`/`dst` descriptors must have offx==offy==0 and `src->a <= dst->a`, else
+ * 0x69.  The source row length is `src->a` bits (word-aligned, so `src->a>>5`
+ * words per row) and `src->h` rows are copied; the destination row stride is
+ * `dst->a` bits.  When the bit offset is word-aligned the rows are copied
+ * verbatim; otherwise the first destination word keeps its low bits and takes
+ * `src[0]<<s`, each following word is `(src[k]<<s)|(src[k-1]>>(32-s))`, and —
+ * only when `dst->a > src->a` — one carry word is written past the end. */
+int cr_bitmap_copy_shift(cr_image *dst, const cr_image *src,
+                         uint32_t bitoff, int rowoff)
+{
+    if (src->offx != 0 || src->offy != 0)
+        return 0x69;
+    if (dst->offx != 0 || dst->offy != 0)
+        return 0x69;
+    if (dst->a < src->a)
+        return 0x69;
+
+    int src_words = src->a >> 5;
+    int dst_words = dst->a >> 5;
+    int wordoff   = (int)(bitoff >> 5);
+    int s         = (int)(bitoff & 0x1f);
+    int h         = src->h;
+
+    uint32_t *d = (uint32_t *)dst->data;
+    const uint32_t *sd = (const uint32_t *)src->data;
+
+    if (s == 0) {
+        if (h <= 0)
+            return 0;
+        int dw = wordoff + rowoff * dst_words;
+        for (int row = 0; row < h; row++) {
+            for (int k = 0; k < src_words; k++)
+                d[dw + k] = sd[row * src_words + k];
+            dw += dst_words;
+        }
+        return 0;
+    }
+
+    if (h <= 0)
+        return 0;
+    int last  = src_words - 1;
+    int i9    = (last > 0) ? last : 0;
+    int carry = 32 - s;
+    int dbase = wordoff + rowoff * dst_words;
+
+    for (int row = 0; row < h; row++) {
+        uint32_t *pd = d + dbase + row * dst_words;
+        const uint32_t *ps = sd + row * src_words;
+        pd[0] = ((pd[0] << s) >> s) | (ps[0] << s);
+        for (int k = 1; k < src_words; k++)
+            pd[k] = (ps[k] << s) | (ps[k - 1] >> carry);
+        if (dst->a > src->a) {
+            uint32_t *pc = pd + i9 + 1;
+            *pc = (ps[i9] >> carry) | ((*pc >> s) << s);
+        }
+    }
+    return 0;
+}
+
 /* 0x180024200 — in-place row permutation of a byte matrix.  `data` is `n`
  * rows of `stride` bytes and `perm` is an array of 8-byte entries (only the
  * first int of each is read/written) giving, for each destination row j, the

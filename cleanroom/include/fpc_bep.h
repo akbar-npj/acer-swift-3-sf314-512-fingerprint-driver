@@ -256,4 +256,8 @@ int      cr_fir7_s16(cr_image *dst, const cr_image *src,
 /* ---- batch 23: in-place row permutation ---------------------------------- */
 int      cr_permute_rows(uint8_t *data, int32_t *perm, int n, int stride); /* 0x180024200 */
 
+/* ---- batch 24: bit-shifted bitmap blit ----------------------------------- */
+int      cr_bitmap_copy_shift(cr_image *dst, const cr_image *src,
+                              uint32_t bitoff, int rowoff);             /* 0x18000fd90 */
+
 #endif /* FPC_BEP_H */
