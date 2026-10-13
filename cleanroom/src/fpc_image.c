@@ -305,3 +305,120 @@ void cr_image_fill_border(cr_image *img, int top, int bottom, int left,
         } while (rdx_end != r9p);
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001fb80 — byte-per-pixel border EXTENSION (edge replication).
+ *   Same four-region frame as cr_image_fill_border, but instead of writing a
+ *   constant it replicates the window's edge pixels outward:
+ *     region 1: `top` rows above  <- copy of the window's TOP row (w bytes)
+ *     region 2: `bottom` rows below <- copy of the window's BOTTOM row
+ *     region 3: `left` columns left  <- copy of the window's LEFT column
+ *     region 4: `right` columns right<- copy of the window's RIGHT column
+ *   Args (ms_abi): rcx=img, rdx=top, r8=bottom, r9=left, [rsp+0x20]=right.
+ *   `a` is the row stride in BYTES (u8 image), so the row step is `a`.
+ * ------------------------------------------------------------------------ */
+void cr_image_border_extend(cr_image *img, int top, int bottom, int left,
+                            int right)
+{
+    uint8_t *data = (uint8_t *)img->data;
+    int32_t  a    = img->a;
+    int32_t  w    = img->w;
+    int32_t  h    = img->h;
+    int32_t  offx = img->offx;
+    int32_t  offy = img->offy;
+
+    uint8_t *r11 = data + (int64_t)offy * a + offx;   /* window top-left */
+
+    /* region 1 : top — replicate the window's top row into `top` rows above */
+    if (top > 0) {
+        uint8_t *rdi = r11;
+        int32_t  r12 = 0;
+        do {
+            rdi = rdi - a;
+            if (w > 0)
+                for (int32_t i = 0; i < w; i++) rdi[i] = r11[i];
+            r12 += 1;
+        } while (r12 != top);
+    }
+
+    /* region 2 : bottom — replicate the window's bottom row into `bottom` rows */
+    if (bottom > 0) {
+        uint8_t *rdi = r11 + (int64_t)(h - 1) * a;    /* window bottom row */
+        uint8_t *rcx = rdi;
+        int32_t  r12 = 0;
+        do {
+            rcx = rcx + a;
+            if (w > 0)
+                for (int32_t i = 0; i < w; i++) rcx[i] = rdi[i];
+            r12 += 1;
+        } while (r12 != bottom);
+    }
+
+    /* region 3 : left — replicate the window's left column into `left` cols */
+    if (left > 0) {
+        uint8_t *rdi = r11 - (int64_t)a * top;        /* frame top-left col */
+        int32_t  ebp = h + top + bottom;              /* full frame height */
+        uint8_t *r9  = rdi;
+        uint8_t *r14 = rdi - left;                    /* end column */
+        uint8_t *r13;
+        do {
+            r13 = r9 - 1;                             /* next column left */
+            if (ebp > 0) {
+                int32_t ecx = 0;
+                int64_t rax = 0;
+                do {
+                    r13[rax] = rdi[rax];              /* copy down the column */
+                    ecx += 1;
+                    rax += a;
+                } while (ecx != ebp);
+            }
+            r9 = r13;
+        } while (r14 != r13);
+    }
+
+    /* region 4 : right — replicate the window's right column into `right` cols */
+    if (right > 0) {
+        uint8_t *src = r11 + (int64_t)(w - 1) - (int64_t)a * top; /* frame top-right col */
+        int32_t  r8d = h + top + bottom;              /* full frame height */
+        uint8_t *rbx = src;
+        uint8_t *r10 = src + right;                   /* end column */
+        uint8_t *r9;
+        do {
+            r9 = rbx + 1;                             /* next column right */
+            if (r8d > 0) {
+                int32_t edx = 0;
+                int64_t rax = 0;
+                do {
+                    r9[rax] = src[rax];               /* copy down the column */
+                    edx += 1;
+                    rax += a;
+                } while (edx != r8d);
+            }
+            rbx = r9;
+        } while (r9 != r10);
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800356e0 — "saturation / usable-pixel" score for a byte image.
+ *   n = h * w ; if n <= 0 -> *out = 1000.
+ *   count = number of pixels equal to 0 or 255 (i.e. (uint8)(b-1) > 253).
+ *   *out = 1000 + (count * -1000) / n   (C truncated division, idiv).
+ * ------------------------------------------------------------------------ */
+void cr_saturation_score(int *out, const cr_pixbuf *s)
+{
+    int n = (int)s->h * (int)s->w;
+    if (n > 0) {
+        const uint8_t *p   = s->data;
+        const uint8_t *end = p + n;
+        int count = 0;
+        do {
+            uint8_t b = *p++;
+            count += (int)((uint8_t)(b - 1) > 253);
+        } while (p != end);
+        int32_t num = (int32_t)((uint32_t)count * 0xFFFFFC18u);  /* count * -1000 */
+        *out = 1000 + num / n;
+    } else {
+        *out = 1000;
+    }
+}

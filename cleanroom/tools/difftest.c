@@ -307,6 +307,10 @@ typedef void     (WINAPI *v_v_ppppbii)(void *, void *, const void *, const void 
 /* batch 11 */
 typedef int      (WINAPI *v_i_pph)(void *, const void *, int16_t);
 
+/* batch 14 */
+typedef void     (WINAPI *v_v_piiii)(void *, int, int, int, int);
+typedef void     (WINAPI *v_v_pi)(int *, const void *);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -1422,6 +1426,67 @@ static void test_image_border_fill(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_image_fill_border\n");
 }
 
+/* 0x18001fb80 — byte border extension (edge replication).  Args: img, top,
+ * bottom, left, right.  Same frame geometry as the fill_border leaf. */
+static void test_image_border_extend(void)
+{
+    v_v_piiii v = (v_v_piiii)fn_at(RVA(0x18001fb80));
+    begin("cr_image_border_extend");
+    int bad = g_fail;
+    const int BUFW = 128, BUFH = 128;
+    for (int t = 0; t < 20000; t++) {
+        uint8_t pv[BUFW * BUFH], pc[BUFW * BUFH];
+        unsigned char va[0x20], ca[0x20];
+        int offx = 32, offy = 32, w = 64, h = 64;
+        int top    = (int)(rnd() % 17u);
+        int bottom = (int)(rnd() % 17u);
+        int left   = (int)(rnd() % 17u);
+        int right  = (int)(rnd() % 17u);
+        for (int i = 0; i < BUFW * BUFH; i++) { pv[i] = (uint8_t)rnd(); pc[i] = pv[i]; }
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca);
+        *(int *)(va + 0) = BUFW;  *(int *)(ca + 0) = BUFW;
+        *(int *)(va + 4) = BUFH;  *(int *)(ca + 4) = BUFH;
+        *(int *)(va + 0x10) = w;  *(int *)(ca + 0x10) = w;
+        *(int *)(va + 0x14) = h;  *(int *)(ca + 0x14) = h;
+        *(int *)(va + 0x18) = offx; *(int *)(ca + 0x18) = offx;
+        *(int *)(va + 0x1c) = offy; *(int *)(ca + 0x1c) = offy;
+        *(void **)(va + 8) = pv;  *(void **)(ca + 8) = pc;
+        v(va, top, bottom, left, right);
+        cr_image_border_extend((cr_image *)ca, top, bottom, left, right);
+        cmp_buf("extend", (unsigned char *)pv, (unsigned char *)pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_border_extend\n");
+}
+
+/* 0x1800356e0 — saturation / usable-pixel score of a byte image. */
+static void test_saturation_score(void)
+{
+    v_v_pi v = (v_v_pi)fn_at(RVA(0x1800356e0));
+    begin("cr_saturation_score");
+    int bad = g_fail;
+    uint8_t buf[64 * 64];
+    for (int t = 0; t < 20000; t++) {
+        unsigned char va[0x20], ca[0x20];
+        int w = 1 + (int)(rnd() % 64u);
+        int h = 1 + (int)(rnd() % 64u);
+        int n = w * h;
+        for (int i = 0; i < n; i++) {
+            uint32_t r = rnd();
+            /* bias toward 0/255 to exercise the saturation counter */
+            buf[i] = (uint8_t)((r % 3u == 0) ? ((r & 1u) ? 255 : 0) : (r & 0xffu));
+        }
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca);
+        *(int16_t *)(va + 0) = (int16_t)w; *(int16_t *)(ca + 0) = (int16_t)w;
+        *(int16_t *)(va + 2) = (int16_t)h; *(int16_t *)(ca + 2) = (int16_t)h;
+        *(void **)(va + 0x10) = buf; *(void **)(ca + 0x10) = buf;
+        int ov = 0xdeadbeef, oc = 0xdeadbeef;
+        v(&ov, va);
+        cr_saturation_score(&oc, (const cr_pixbuf *)ca);
+        if (ov != oc) mismatch("score", (u32)t, (u32)ov, (u32)oc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_saturation_score\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1666,6 +1731,9 @@ int main(int argc, char **argv)
     test_sincos_f32();
     printf("\n== 384-byte leaf (border fill) ==\n");
     test_image_border_fill();
+    printf("\n== 400-byte leaf (border extend) + 96-byte leaf (saturation) ==\n");
+    test_image_border_extend();
+    test_saturation_score();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

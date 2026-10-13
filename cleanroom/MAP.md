@@ -142,6 +142,13 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x18001c4e0` | `fpc_bio_bep_sw23_3281879ff9` | `cr_image_fill_border` | fills the int16 frame around an image window with a constant `fill`. Args (ms_abi): `rcx=img`, `rdx=top`, `r8=bottom`, `r9=left`, `[rsp+0x20]=right`, `[rsp+0x28]=fill`. `r12 = data + (offy*a + offx)` (window top-left). Region 1: `top` rows above the window, `w` wide. Region 2: `bottom` rows below. Region 3: `left` columns left of the window (cols `offx-1 … offx-left`), each `h+top+bottom` tall. Region 4: `right` columns right of the window (cols `offx+w … offx+w+right-1`), same height. Row step = `a` int16 elements. The loop counters decrement/increment **before** the fill (off-by-one trap). |
 
+### Batch 14 — border-extend + saturation leaves
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18001fb80` | `fpc_bio_bep_sw23_442776bb33` | `cr_image_border_extend` | byte-per-pixel **edge replication** (the u8 twin of `cr_image_fill_border`): same four-region frame, but each region copies the window's edge row/column outward instead of writing a constant. Args `rcx=img, rdx=top, r8=bottom, r9=left, [rsp+0x20]=right` (5 args). `a` = row stride in **bytes**; row step `a`. |
+| `0x1800356e0` | `fpc_bio_bep_sw23_a45214d052.part.7` | `cr_saturation_score` | `n = (int16)h * (int16)w`; if `n<=0` → `*out = 1000`. Else count pixels where `(uint8)(b-1) > 253` (i.e. `b==0 || b==255`), then `*out = 1000 + (count * -1000) / n` (32-bit `imul`+`idiv`, truncating). Struct: `{int16 w@0, int16 h@2, ..., uint8 *data@0x10}`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

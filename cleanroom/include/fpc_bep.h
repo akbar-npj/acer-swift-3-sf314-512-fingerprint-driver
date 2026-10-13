@@ -195,4 +195,18 @@ int      cr_downsample_mean(cr_image *out, const cr_image *in,
 void     cr_image_fill_border(cr_image *img, int top, int bottom,
                               int left, int right, uint16_t fill);   /* 0x18001c4e0 */
 
+/* ---- batch 14: 400/96-byte border-extend + saturation leaves ----------- */
+void     cr_image_border_extend(cr_image *img, int top, int bottom,
+                                int left, int right);                /* 0x18001fb80 */
+
+/* byte image descriptor used by the saturation scorer: w/h at +0/+2, data at +0x10 */
+typedef struct {
+    int16_t  w;       /* +0x00 */
+    int16_t  h;       /* +0x02 */
+    int32_t  _r[3];   /* +0x04 .. +0x0f */
+    uint8_t *data;    /* +0x10 */
+} cr_pixbuf;
+
+void     cr_saturation_score(int *out, const cr_pixbuf *s);          /* 0x1800356e0 */
+
 #endif /* FPC_BEP_H */
