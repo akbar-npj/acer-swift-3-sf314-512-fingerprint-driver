@@ -930,3 +930,63 @@ void cr_inpaint_masked_box(cr_image *mask, cr_image *img,
         }
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003af20 — inpaint a list of pixels by a growing masked box mean.
+ *
+ *   void fn(cr_image *img, cr_image *mask, const uint16_t *count,
+ *           const uint16_t *const *indices);
+ *
+ * For each of the *count u16 linear indices `(*indices)[i]` whose mask byte
+ * has bit 2 set, walk the window sizes 3, 5, 7 (stopping at a per-pixel cap of
+ * 5 for interior pixels that are not near the right border, 7 otherwise) and
+ * call cr_masked_box_sum with and-mask 0x13.  Accept the first window whose
+ * count exceeds a floor of 5 (only for win == 5 interior-non-right) or 0:
+ * write the mean into the float image and mark the mask byte 8.  The walk
+ * stops early once the pixel is marked 8.
+ * ------------------------------------------------------------------------ */
+void cr_inpaint_index_list(cr_image *img, cr_image *mask,
+                           const uint16_t *count,
+                           const uint16_t *const *indices)
+{
+    float   *idata = (float *)img->data;
+    uint8_t *mdata = (uint8_t *)mask->data;
+    int w = img->w, h = img->h;
+    int n = (int)*count;
+
+    if (n == 0)
+        return;
+
+    for (int i = 0; i < n; i++) {
+        uint16_t idx = (*indices)[i];
+        if (!(mdata[idx] & 4))
+            continue;
+
+        int row = (int)((long long)idx / w);
+        int col;
+        int maxwin, right;
+
+        if (row < 2 || h - 2 <= row || (col = (int)((long long)idx % w)) < 2) {
+            maxwin = 7;
+            right  = 1;
+        } else {
+            right  = (w - 2 <= col);
+            maxwin = 5 + 2 * right;
+        }
+
+        int win = 3;
+        while (mdata[idx] != 8) {
+            int   cnt;
+            float sum;
+            cr_masked_box_sum(&cnt, &sum, img, mask, 0x13, win, idx);
+            int need = (win == 5 && !right) ? 5 : 0;
+            if (need < cnt) {
+                idata[idx] = sum / (float)cnt;
+                mdata[idx] = 8;
+            }
+            win += 2;
+            if (maxwin < win)
+                break;
+        }
+    }
+}

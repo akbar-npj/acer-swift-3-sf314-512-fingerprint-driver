@@ -121,6 +121,20 @@ cleanroom/
   and exits when it reaches `base-1`, so a `k*k`-tap correlation runs `k*k`
   times, not `k*k-1`. Transcribing it as `i < kk-1` shifted every correlation by
   one tap (~16% of random inputs flipped the branch decision).
+- **Preserve the vendor's *sub-expression grouping*, not just the operators.**
+  `cr_splat_accum16` computes `p4sq = p4*p4` once (in `xmm10`) and then
+  `a = pts[i] * p4sq`. Writing the "same" formula as `pts[i]*p4*p4` is
+  `(pts[i]*p4)*p4` — a different rounding — and produced 1-ULP mismatches on a
+  large fraction of inputs. Same lesson as `-ffp-contract=off`: the *order and
+  association* of float ops is part of the spec.
+- **A streaming ring buffer can be read *before* its start.** The vertical-FIR
+  mirror branch computes `rem = (2h - srcrow - n/2 - 3) % n`, which is
+  **negative** when `target > 2h - 2*(n/2) - 3`; `ring + rem*w` then indexes
+  *before* the ring. That is legal in the real caller (the ring lives inside a
+  larger allocation), but a test that places the ring at a small offset will
+  read the two sides' out-of-bounds padding and report false mismatches. Give
+  the test buffer generous head-room before the ring so the negative indices
+  stay inside identically-initialised memory.
 
 ## Progress
 
@@ -129,9 +143,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **185** (52.1% of functions, 46,096 B = 27.20% of bytes) |
+| rewritten + parity-verified | **190** (53.5% of functions, 49,008 B = 28.92% of bytes) |
 
-Fifty-five batches done so far:
+Fifty-six batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -205,6 +219,10 @@ Fifty-five batches done so far:
 55. pool users + ready wrappers: nearest-neighbour u8 affine resample, mirror-extend +
     polyphase FIR, masked box-mean inpainting, and the five descriptor-pool builders
     (cr_pool_alloc1..5, now with the pool_builder status code) (8 functions)
+56. streaming vertical FIR + correlation/splat: Pearson correlation of two int16 images,
+    index-list box-mean inpainting, the 16-point bilinear splat accumulator, and the
+    int16/uint8 streaming n-tap vertical FIR pair (with mirror-extend at the bottom
+    edge and the shared coefficient-rotation ring) (5 functions)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

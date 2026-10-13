@@ -516,4 +516,46 @@ int      cr_pool_alloc5(void **hdr, void **out0, uint32_t s0,
                         void **out3, uint32_t s3,
                         void **out4, uint32_t s4);             /* 0x18001d480 */
 
+/* ---- batch 56: streaming vertical FIR + correlation / splat -------------- */
+/* Ring-buffer context for the per-row streaming FIR drivers
+ * (0x18002af00 / 0x180010440).  Layout the vendor touches:
+ *   +0x00 int32 n            kernel taps (also the ring depth)
+ *   +0x04 int32 row          rows processed so far (advanced by the driver)
+ *   +0x08 void *base         allocation base for the three byte offsets below
+ *   +0x10 int32 coef_off     int16 coefficient array
+ *   +0x14 int32 out_off      int16 ring buffer (n rows of width w)
+ *   +0x18 int32 scratch_off  uint16 scratch for cr_u8_expand_convolve
+ * A driver call with target == ctx->row + 1 emits output row target-1 and
+ * advances ctx->row; any other target is a no-op that returns 1. */
+typedef struct {
+    int32_t n;
+    int32_t row;
+    void   *base;
+    int32_t coef_off;
+    int32_t out_off;
+    int32_t scratch_off;
+} cr_fir_row_ctx;
+
+int      cr_row_fir_i16(int16_t *out, cr_fir_row_ctx *ctx,
+                        const cr_image *img, int target);        /* 0x18002af00 */
+int      cr_row_fir_i8(uint8_t *out, cr_fir_row_ctx *ctx,
+                       const cr_image *img, int target);         /* 0x180010440 */
+
+/* Pearson correlation of two int16 images over the thresholded interior. */
+void     cr_corr_coeff(float *out_corr, int *out_valid,
+                       const int16_t *A, const int16_t *B,
+                       int width, int height, int16_t thresh,
+                       int marginy, int marginx);                /* 0x18002eba0 */
+
+/* Inpaint the pixels listed in `*indices` (whose mask byte has bit 2 set) by a
+ * 3x3/5x5/7x7 masked box mean, marking them done (mask byte 8). */
+void     cr_inpaint_index_list(cr_image *img, cr_image *mask,
+                               const uint16_t *count,
+                               const uint16_t *const *indices);  /* 0x18003af20 */
+
+/* 16-point bilinear splat + affine accumulation into two float buffers. */
+void     cr_splat_accum16(const float *pts, const float *alpha,
+                          float p3, float p4, float *bufA, float *bufB,
+                          float beta, int k);                    /* 0x180043120 */
+
 #endif /* FPC_BEP_H */

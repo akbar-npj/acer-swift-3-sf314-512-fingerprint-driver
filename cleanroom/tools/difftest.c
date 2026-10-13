@@ -5140,10 +5140,186 @@ static void test_tree_batch55(void)
     }
 }
 
+/* ---- batch 56: streaming FIR + correlation / splat --------------------- */
+static void fir_rows_test(const char *tag, u32 rva, int is_i8)
+{
+    typedef int (WINAPI *v_i_pppi)(void *, void *, const void *, int);
+    v_i_pppi v = (v_i_pppi)fn_at(rva);
+    begin(tag);
+    int bad = g_fail;
+    enum { BUF = 16384, IMG = 4096, OUTCAP = 256,
+           COEF_OFF = 0, RING_OFF = 4096, SCR_OFF = 4096 + 4096 };
+    static u8 bufv[BUF], bufc[BUF];
+    u8 img[IMG], outv[OUTCAP], outc[OUTCAP];
+
+    for (int t = 0; t < 1500; t++) {
+        int w    = 4 * (1 + (int)(rnd() % 12));      /* 4..48, multiple of 4 */
+        int h    = 1 + (int)(rnd() % 20);
+        int n    = 1 + (int)(rnd() % 8);             /* kernel taps          */
+        int rows = 1 + (int)(rnd() % 24);
+
+        for (int i = 0; i < w * h; i++)
+            img[i] = (u8)rnd();
+
+        /* identical starting state for both sides: arbitrary ring/scratch,
+           but small coefficients so the 32-bit accumulators cannot overflow */
+        for (int i = 0; i < BUF / 2; i++)
+            ((int16_t *)bufv)[i] = (int16_t)((int)(rnd() % 2001) - 1000);
+        for (int i = 0; i < 32; i++)
+            ((int16_t *)bufv)[i] = (int16_t)((int)(rnd() % 33) - 16);
+        memcpy(bufc, bufv, BUF);
+
+        cr_image dimg;
+        cr_image_set(&dimg, img, w, h);
+
+        cr_fir_row_ctx cv, cc;
+        memset(&cv, 0, sizeof cv);
+        memset(&cc, 0, sizeof cc);
+        cv.n = n; cv.row = 0; cv.base = bufv;
+        cv.coef_off = COEF_OFF; cv.out_off = RING_OFF; cv.scratch_off = SCR_OFF;
+        cc.n = n; cc.row = 0; cc.base = bufc;
+        cc.coef_off = COEF_OFF; cc.out_off = RING_OFF; cc.scratch_off = SCR_OFF;
+
+        for (int r = 1; r <= rows; r++) {
+            memset(outv, 0x5A, sizeof outv);
+            memset(outc, 0x5A, sizeof outc);
+            int rv = v(outv, &cv, &dimg, r);
+            int rc = is_i8 ? cr_row_fir_i8(outc, &cc, &dimg, r)
+                           : cr_row_fir_i16((int16_t *)outc, &cc, &dimg, r);
+            if (rv != rc) {
+                mismatch("fir-ret", (u32)t, (u32)rv, (u32)rc);
+                break;
+            }
+            if (cv.row != cc.row) {
+                mismatch("fir-row", (u32)t, (u32)cv.row, (u32)cc.row);
+                break;
+            }
+            if (is_i8)
+                cmp_buf("fir8", outv, outc, (size_t)w, (u32)t);
+            else
+                cmp_buf("fir16", outv, outc, sizeof(int16_t) * (size_t)w, (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL %s\n", tag);
+}
+
+static void test_tree_batch56(void)
+{
+    /* --- cr_corr_coeff (0x18002eba0) -------------------------------------- */
+    {
+        typedef void (WINAPI *v_v_pipiiii)(float *, int *, const int16_t *,
+                                           const int16_t *, int, int, int,
+                                           int, int);
+        v_v_pipiiii v = (v_v_pipiiii)fn_at(RVA(0x18002eba0));
+        begin("cr_corr_coeff");
+        int bad = g_fail;
+        enum { MAXW = 24, MAXH = 20 };
+        int16_t A[MAXW * MAXH], B[MAXW * MAXH];
+        for (int t = 0; t < 3000; t++) {
+            int w = 1 + (int)(rnd() % MAXW);
+            int h = 1 + (int)(rnd() % MAXH);
+            for (int i = 0; i < w * h; i++) {
+                A[i] = (int16_t)((int)(rnd() % 4001) - 2000);
+                B[i] = (int16_t)((int)(rnd() % 4001) - 2000);
+            }
+            int thr = (int)(rnd() % 4001) - 2000;
+            int my  = (int)(rnd() % (h + 1));
+            int mx  = (int)(rnd() % (w + 1));
+            float ov = 123.0f, oc = 123.0f;
+            int   vv = 0x5A, vc = 0x5A;
+            v(&ov, &vv, A, B, w, h, thr, my, mx);
+            cr_corr_coeff(&oc, &vc, A, B, w, h, (int16_t)thr, my, mx);
+            if (vv != vc)
+                mismatch("corr-valid", (u32)t, (u32)vv, (u32)vc);
+            cmp_buf("corr-val", (u8 *)&ov, (u8 *)&oc, sizeof(float), (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_corr_coeff\n");
+    }
+
+    /* --- cr_inpaint_index_list (0x18003af20) ------------------------------ */
+    {
+        typedef void (WINAPI *v_v_pppp)(void *, void *, const uint16_t *,
+                                        const uint16_t *const *);
+        v_v_pppp v = (v_v_pppp)fn_at(RVA(0x18003af20));
+        begin("cr_inpaint_index_list");
+        int bad = g_fail;
+        enum { MAXW = 24, MAXH = 16, MAXIDX = 64 };
+        u8  mv[MAXW * MAXH], mc[MAXW * MAXH];
+        float fv[MAXW * MAXH], fc[MAXW * MAXH];
+        uint16_t idxs[MAXIDX];
+        for (int t = 0; t < 3000; t++) {
+            int w = 1 + (int)(rnd() % MAXW);
+            int h = 1 + (int)(rnd() % MAXH);
+            for (int i = 0; i < w * h; i++) {
+                mv[i] = mc[i] = (u8)rnd();
+                fv[i] = fc[i] = (float)((int)(rnd() % 2001) - 1000) * 0.25f;
+            }
+            int cnt = (int)(rnd() % (MAXIDX + 1));
+            for (int i = 0; i < cnt; i++)
+                idxs[i] = (uint16_t)(rnd() % (w * h));
+            uint16_t c = (uint16_t)cnt;
+            const uint16_t *ip = idxs;
+            cr_image dv, dc, dmv, dmc;
+            cr_image_set(&dv, fv, w, h);
+            cr_image_set(&dc, fc, w, h);
+            cr_image_set(&dmv, mv, w, h);
+            cr_image_set(&dmc, mc, w, h);
+            v(&dv, &dmv, &c, &ip);
+            cr_inpaint_index_list(&dc, &dmc, &c, &ip);
+            cmp_buf("inpl-mask", mv, mc, (size_t)w * h, (u32)t);
+            cmp_buf("inpl-img", (u8 *)fv, (u8 *)fc,
+                    sizeof(float) * (size_t)w * h, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_inpaint_index_list\n");
+    }
+
+    /* --- cr_splat_accum16 (0x180043120) ----------------------------------- */
+    {
+        typedef void (WINAPI *v_v_ppffppfi)(float *, float *, float, float,
+                                            float *, float *, float, int);
+        v_v_ppffppfi v = (v_v_ppffppfi)fn_at(RVA(0x180043120));
+        begin("cr_splat_accum16");
+        int bad = g_fail;
+        enum { NBUF = 2048 };
+        static float av[NBUF], ac[NBUF], bv[NBUF], bc[NBUF];
+        float pts[16], alpha[16];
+        for (int t = 0; t < 1500; t++) {
+            for (int i = 0; i < 16; i++) {
+                pts[i]   = (float)((int)(rnd() % 2001) - 1000) * 0.01f;
+                alpha[i] = (float)((int)(rnd() % 2001) - 1000) * 0.01f;
+            }
+            int k = (int)(rnd() % 4);
+            float p3, p4;
+            if (rnd() & 1) {                        /* p3<0, p4>=0 -> x0,y0 >= 0 */
+                p3 = -(float)(rnd() % 101) * 0.01f;
+                p4 =  (float)(rnd() % 101) * 0.01f;
+            } else {                                /* p3>=0, p4<=0 -> x0,y0 >= 0 */
+                p3 =  (float)(rnd() % 101) * 0.01f;
+                p4 = -(float)(rnd() % 101) * 0.01f;
+            }
+            float beta = (float)((int)(rnd() % 2001) - 1000) * 0.01f;
+            for (int i = 0; i < NBUF; i++) {
+                av[i] = ac[i] = (float)((int)(rnd() % 2001) - 1000) * 0.25f;
+                bv[i] = bc[i] = (float)((int)(rnd() % 2001) - 1000) * 0.25f;
+            }
+            v(pts, alpha, p3, p4, av, bv, beta, k);
+            cr_splat_accum16(pts, alpha, p3, p4, ac, bc, beta, k);
+            cmp_buf("splat-A", (u8 *)av, (u8 *)ac,
+                    sizeof(float) * NBUF, (u32)t);
+            cmp_buf("splat-B", (u8 *)bv, (u8 *)bc,
+                    sizeof(float) * NBUF, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_splat_accum16\n");
+    }
+
+    /* --- cr_row_fir_i16 (0x18002af00) / cr_row_fir_i8 (0x180010440) ------- */
+    fir_rows_test("cr_row_fir_i16", RVA(0x18002af00u), 0);
+    fir_rows_test("cr_row_fir_i8",  RVA(0x180010440u), 1);
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
-{
-    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
+{    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
         "12b431fd-7d7e-4dd7-b87c-9ab3f9a3d01b/x64/fpc_enclave.dll";
 
     setup_teb();
@@ -5411,6 +5587,8 @@ int main(int argc, char **argv)
     test_tree_batch54();
     printf("\n== batch 55: pool users + ready wrappers ==\n");
     test_tree_batch55();
+    printf("\n== batch 56: streaming FIR + correlation / splat ==\n");
+    test_tree_batch56();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

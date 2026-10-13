@@ -426,12 +426,24 @@ side effects, never raw pointer values.
 | `0x18001b9e0` | `fpc_bio_bep_sw23_316605bf10` | `cr_pool_alloc4` | 4-block pool; on success writes the four block pointers out. |
 | `0x18001d480` | `fpc_bio_bep_sw23_361a5cb939.part.1` | `cr_pool_alloc5` | 5-block pool; on success writes the five block pointers out. |
 
+### Batch 56 — streaming vertical FIR + correlation / splat
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18002eba0` | `fpc_bio_bep_sw23_85451455f9` | `cr_corr_coeff` | Pearson correlation of two int16 images over `[marginy,h-marginy) x [marginx,w-marginx)`, counting only pixels where **both** `< thresh`. Two passes (sums → means, then `varA=Σda²`, `varB=Σdb²`, `cov=Σdb*da`); `out_corr = cov/(cr_sqrtf(varA)*cr_sqrtf(varB))`, `out_valid = varA>0 && varB>0`. |
+| `0x18003af20` | `fpc_bio_bep_sw23_b9b6032650` | `cr_inpaint_index_list` | Inpaint pixels from an index list: for each `idx` with mask bit2 (4) set, grow a box (3,5,7 wide; `maxwin=5+2*right`, `right = (w-2<=col)`, `maxwin=7,right=1` near a 2-pixel border) until `cr_masked_box_sum` returns `cnt>need` (`need=5` only for the win==5 & !right case); then `img[idx]=sum/cnt`, `mask[idx]=8`. |
+| `0x180043120` | `fpc_bio_bep_sw23_e69abb2a5d` | `cr_splat_accum16` | Bilinear splat of 16 points: `base=(k+17)*17`, `p4sq=p4*p4`, `scale=1-p4sq`. First `cr_splat_bilinear(pts, bufA+base, bufB+base, alpha, |p3|, -sign(p3)*p4, scale)`, then a 16-iteration accumulation with `fx=p3*0.5, fy=p4*0.5` stepping by `p3/p4`, `neg=(p3<0)`, `ix=(int)fx-neg, iy=(int)fy`, `a=pts[i]*p4sq`, weights `w00=(1-fy)(1-fx)a`, `w01=(1-fx)fy a`, `w10=(1-fy)fx a`, `w11=fx fy a`; `bufB += w`, `bufA = w*beta + bufA`. |
+| `0x18002af00` | `fpc_bio_bep_sw23_76ff29ef93` | `cr_row_fir_i16` | One output row of a streaming n-tap vertical FIR, int16 out. No-op (`return 1`) unless `ctx->row+1 == target`; advances `ctx->row`. `rr = old_row % n`. If `target>0`: `srcrow = target + n/2`; if `srcrow<h` widen+horizontally-FIR that image row into ring row `rr` via `cr_u8_expand_convolve` (coef = the shared i16 array), else mirror ring row `rem=(2h-srcrow-n/2-3)%n` into ring row `rr` (`rem` may be negative). Then `acc[col] = Σ_{k<n} coef[(n-1-rr)%n + k] * ring[k*w+col]`; `out[col]=(int16)((acc+0x4000)>>15)`, 4 columns per iteration, **no tail** (w must be a multiple of 4; `w<=3` returns 0). |
+| `0x180010440` | `fpc_bio_bep_sw23_0dc5ae5cbd` | `cr_row_fir_i8` | Byte twin: identical fill/rotation, `out[col]=(u8)((acc+0x104000)>>21)`, plus a scalar tail loop for `col>=4+((w-4)>>2)*4` (so `w<=3` is handled entirely by the tail). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
 |---|---|---|
 | `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | returns static table pointers — needs the table contents. |
 | `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued, out-of-tree). |
+| `0x18002ba80` | `fpc_bio_bep_sw23_7861b9e0de` | 624 B CORDIC/rotation: uses the u16 coefficient table at `0x180117120` (12 B/entry) and the `cr_clz` helper (`0x1800393b0`). |
+| `0x18001fd10` | `fpc_bio_bep_sw23_444798a52f` | 672 B fixed-point Q15 bilinear warp with `cr_ldexpf`-scaled step increments. |
 
 These are pointer/table-valued, so bit-exact comparison needs a structural (not
 address) check; they will be handled once the referenced tables are established.

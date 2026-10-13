@@ -969,3 +969,184 @@ void cr_u8_expand_convolve(int16_t *out, uint16_t *scratch, const uint8_t *in,
         out[i] = (int16_t)((acc + 0x100) >> 9);
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180043120 — 16-point bilinear splat followed by an affine accumulation.
+ *
+ *   void fn(const float *pts, const float *alpha, float p3, float p4,
+ *           float *bufA, float *bufB, float beta, int k);
+ *
+ * Both float buffers use a 17-float row stride.  First cr_splat_bilinear is run
+ * from the (k+17)*17 offset with (x0,y0) = (±p3, ∓p4) (sign chosen so p3 >= 0
+ * maps to x0 = p3) and scale = 1 - p4*p4.  Then, for i = 0..15, a point at
+ * (fx, fy) = (p3*(i+0.5), p4*(i+0.5)) is splatted with the four bilinear
+ * weights scaled by pts[i]*p4*p4: the raw weights accumulate into bufB and the
+ * beta-scaled weights into bufA.  ix = floor(fx) (via the vendor's truncate-
+ * then-correct-on-negative form), iy = (int)fy.
+ * ------------------------------------------------------------------------ */
+void cr_splat_accum16(const float *pts, const float *alpha,
+                      float p3, float p4, float *bufA, float *bufB,
+                      float beta, int k)
+{
+    long long base = (long long)(k + 17) * 17;
+    float p4sq = p4 * p4;                /* vendor precomputes p4*p4 once */
+    float scale = 1.0f - p4sq;
+
+    if (p3 < 0.0f)
+        cr_splat_bilinear(pts, bufA + base, bufB + base, alpha, -p3, p4, scale);
+    else
+        cr_splat_bilinear(pts, bufA + base, bufB + base, alpha, p3, -p4, scale);
+
+    float fx = p3 * 0.5f;
+    float fy = p4 * 0.5f;
+    int   neg = (p3 < 0.0f) ? 1 : 0;
+
+    for (int i = 0; i < 16; i++) {
+        int   ix = (int)fx - neg;
+        int   iy = (int)fy;
+        long long off = base + (long long)ix * 17 + iy;
+        float fyr = fy - (float)iy;
+        float fxr = fx - (float)ix;
+        float a = pts[i] * p4sq;
+        float w00 = (1.0f - fyr) * (1.0f - fxr) * a;
+        float w01 = (1.0f - fxr) * fyr * a;
+        float w10 = (1.0f - fyr) * fxr * a;
+        float w11 = fyr * fxr * a;
+
+        bufB[off]      += w00;
+        bufA[off]       = w00 * beta + bufA[off];
+        bufB[off + 1]  += w01;
+        bufA[off + 1]   = w01 * beta + bufA[off + 1];
+        bufB[off + 17] += w10;
+        bufA[off + 17]  = w10 * beta + bufA[off + 17];
+        bufB[off + 18] += w11;
+        bufA[off + 18]  = w11 * beta + bufA[off + 18];
+
+        fx += p3;
+        fy += p4;
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002af00 / 0x180010440 — streaming vertical FIR, one output row per call.
+ *
+ *   int fn(<i16|i8> *out, cr_fir_row_ctx *ctx, const cr_image *img, int target);
+ *
+ * No-op returning 1 unless target == ctx->row + 1; otherwise advances ctx->row
+ * and emits output row target-1:
+ *   rr = (target-1) % n  is the ring slot.  Source row target-1 + n/2 is
+ *   widened and horizontally FIR'd into ring row rr by cr_u8_expand_convolve
+ *   (coef = the shared int16 array); past the bottom edge the slot is filled by
+ *   mirroring ring row (((2h - (target-1+n/2) - (n/2) - 3) % n) * w).
+ *   The vertical n-tap Q15 FIR then reads the coefficient array linearly from
+ *   the rotation offset (n-1-rr)%n and the ring rows at stride w:
+ *       acc = Σ_{k<n} coef[rot+k] * ring[k*w + col]
+ *   i16 output:  out[col] = (int16)((acc + 0x4000) >> 15)
+ *   i8  output:  out[col] = (int8_t)((acc + 0x104000) >> 21)
+ * The i16 variant only emits the 4*((w-4)>>2)+4 unrolled columns (no tail, so
+ * w must be a multiple of 4); the i8 variant additionally emits the tail
+ * columns j = 4*((w-4)>>2)+4 .. w-1. */
+static int cr_row_fir(int is_i8, void *out, cr_fir_row_ctx *ctx,
+                      const cr_image *img, int target)
+{
+    int row = ctx->row;
+    int r1  = row + 1;
+    if (r1 != target)
+        return 1;
+
+    int n = ctx->n;
+    ctx->row = r1;
+
+    int16_t  *coef = (int16_t *)((uint8_t *)ctx->base + ctx->coef_off);
+    int16_t  *ring = (int16_t *)((uint8_t *)ctx->base + ctx->out_off);
+    uint16_t *scr  = (uint16_t *)((uint8_t *)ctx->base + ctx->scratch_off);
+    int w = img->w, h = img->h;
+    int rr = row % n;
+
+    if (r1 > 0) {
+        int srcrow = r1 + (n >> 1);
+        if (srcrow < h) {
+            cr_u8_expand_convolve(ring + w * rr, scr,
+                                  (const uint8_t *)img->data
+                                      + (long long)srcrow * w,
+                                  coef, w, n);
+        } else if (w > 0) {
+            int lv = ((h * 2 - (srcrow + 3 + (n >> 1))) % n) * w;
+            int16_t *p = ring + lv;
+            do {
+                p[w * rr - lv] = *p;
+                p++;
+            } while (ring + (w - 1) + lv + 1 != p);
+        }
+    }
+
+    int16_t *cr_  = coef + ((n - rr - 1) % n);
+    int done = 0;
+
+    if (w > 3) {
+        int16_t *rp0 = ring;
+        int16_t *end = ring + ((w - 4) >> 2) * 4 + 4;
+        do {
+            int c0 = cr_[0];
+            int a0 = rp0[0] * c0, a1 = rp0[1] * c0;
+            int a2 = rp0[2] * c0, a3 = rp0[3] * c0;
+            if (n > 1) {
+                const int16_t *cp = cr_ + 1;
+                const int16_t *rp = rp0;
+                do {
+                    int ck;
+                    rp += w;
+                    ck = *cp++;
+                    a0 += rp[0] * ck;
+                    a1 += rp[1] * ck;
+                    a2 += rp[2] * ck;
+                    a3 += rp[3] * ck;
+                } while (cr_ + (n - 2) + 2 != cp);
+            }
+            rp0 += 4;
+            if (is_i8) {
+                uint8_t *po = (uint8_t *)out + done;
+                po[0] = (uint8_t)((a0 + 0x104000) >> 21);
+                po[1] = (uint8_t)((a1 + 0x104000) >> 21);
+                po[2] = (uint8_t)((a2 + 0x104000) >> 21);
+                po[3] = (uint8_t)((a3 + 0x104000) >> 21);
+            } else {
+                int16_t *po = (int16_t *)out + done;
+                po[0] = (int16_t)((a0 + 0x4000) >> 15);
+                po[1] = (int16_t)((a1 + 0x4000) >> 15);
+                po[2] = (int16_t)((a2 + 0x4000) >> 15);
+                po[3] = (int16_t)((a3 + 0x4000) >> 15);
+            }
+            done += 4;
+        } while (end != rp0);
+    }
+
+    if (!is_i8)
+        return 0;                       /* the int16 variant has no tail */
+
+    for (int j = done; j < w; j++) {
+        int a = cr_[0] * ring[j];
+        if (n > 1) {
+            const int16_t *cp = cr_ + 1;
+            const int16_t *rp = ring + w + j;
+            do {
+                a += rp[0] * (*cp++);
+                rp += w;
+            } while (cr_ + (n - 2) + 2 != cp);
+        }
+        ((uint8_t *)out)[j] = (uint8_t)((a + 0x104000) >> 21);
+    }
+    return 0;
+}
+
+int cr_row_fir_i16(int16_t *out, cr_fir_row_ctx *ctx,
+                   const cr_image *img, int target)
+{
+    return cr_row_fir(0, out, ctx, img, target);
+}
+
+int cr_row_fir_i8(uint8_t *out, cr_fir_row_ctx *ctx,
+                  const cr_image *img, int target)
+{
+    return cr_row_fir(1, out, ctx, img, target);
+}

@@ -384,3 +384,78 @@ void cr_softmax2(float *out, const void *ctx, const int16_t *vals)
     float eb = cr_expf(b - m);
     *out = ea / (eb + ea);
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002eba0 — Pearson correlation coefficient of two int16 images.
+ *
+ *   void fn(float *out_corr, int *out_valid, const int16_t *A,
+ *           const int16_t *B, int width, int height, int16_t thresh,
+ *           int marginy, int marginx);
+ *
+ * Both images share the same W-stride layout (W = width).  Only the interior
+ * rows [marginy, height-marginy) and cols [marginx, width-marginx) are used,
+ * and only pixels where BOTH A and B are < thresh contribute.  It computes the
+ * two means over that set, then cov / (sqrt(varA)*sqrt(varB)) with the vendor's
+ * bit-trick cr_sqrtf.  If either variance is <= 0 (including the empty-window
+ * case) *out_valid = 0 and *out_corr is left untouched; otherwise
+ * *out_valid = 1.  Accumulation order is exactly the vendor's row-major walk.
+ * ------------------------------------------------------------------------ */
+void cr_corr_coeff(float *out_corr, int *out_valid,
+                   const int16_t *A, const int16_t *B,
+                   int width, int height, int16_t thresh,
+                   int marginy, int marginx)
+{
+    int r0 = marginy, r1 = height - marginy;
+    int c0 = marginx, c1 = width - marginx;
+    int   count = 0;
+    float sumA = 0.0f, sumB = 0.0f;
+    float meanA = 0.0f, meanB = 0.0f;
+    float varA = 0.0f, varB = 0.0f, cov = 0.0f;
+
+    if (r0 < r1) {
+        for (int r = r0; r < r1; r++) {
+            if (c0 < c1) {
+                const int16_t *pa = A + (long long)r * width + c0;
+                const int16_t *pb = B + (long long)r * width + c0;
+                for (int c = c0; c < c1; c++, pa++, pb++) {
+                    if (*pa < thresh && *pb < thresh) {
+                        count++;
+                        sumA = sumA + (float)*pa;
+                        sumB = sumB + (float)*pb;
+                    }
+                }
+            }
+        }
+        if (count == 0) {
+            meanA = 0.0f; meanB = 0.0f;
+        } else {
+            meanA = sumA / (float)count;
+            meanB = sumB / (float)count;
+        }
+
+        for (int r = r0; r < r1; r++) {
+            if (c0 < c1) {
+                const int16_t *pa = A + (long long)r * width + c0;
+                const int16_t *pb = B + (long long)r * width + c0;
+                for (int c = c0; c < c1; c++, pa++, pb++) {
+                    if (*pa < thresh && *pb < thresh) {
+                        float da = (float)*pa - meanA;
+                        float db = (float)*pb - meanB;
+                        varA = varA + da * da;
+                        varB = varB + db * db;
+                        cov  = cov  + db * da;
+                    }
+                }
+            }
+        }
+    }
+
+    varA = cr_sqrtf(varA);
+    varB = cr_sqrtf(varB);
+    if (varA <= 0.0f || varB <= 0.0f) {
+        *out_valid = 0;
+    } else {
+        *out_corr = cov / (varA * varB);
+        *out_valid = 1;
+    }
+}
