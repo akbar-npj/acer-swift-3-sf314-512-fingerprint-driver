@@ -263,4 +263,12 @@ int      cr_bitmap_copy_shift(cr_image *dst, const cr_image *src,
 /* ---- batch 25: right-shifted bitmap extract ------------------------------ */
 int      cr_bitmap_extract_shift(cr_image *dst, const cr_image *src);    /* 0x18003e590 */
 
+/* ---- batch 26: column-wise 7-tap clamped int16 FIR ----------------------- */
+int      cr_fir7_s16_col(cr_image *dst, const cr_image *src,
+                         const int16_t *coef);                           /* 0x18001c280 */
+
+/* ---- batch 27: masked per-column mean correction ------------------------- */
+int      cr_bitmap_mean_correct(cr_image *img, const cr_image *bm,
+                                const uint8_t *cfg);                     /* 0x18000d8e0 */
+
 #endif /* FPC_BEP_H */

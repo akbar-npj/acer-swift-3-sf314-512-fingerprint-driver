@@ -166,20 +166,81 @@ void cr_splat_bilinear(const float *w, float *bufA, float *bufB,
     }
 }
 
+/* 7-tap edge-clamped FIR along one 1-D signal.  `base` points at sample 0;
+ * samples are `base[j*stride]`, outputs `out[j*stride]` for j=0..n-1.  The taps
+ * are clamped to the signal (left edge repeats base[0], right edge repeats
+ * base[(n-1)*stride]).  Mirrors the vendor's two-loop split: a rolling-history
+ * loop for j=0..n-5 and a second loop for the last four samples whose newest
+ * tap is pinned at the end; n<5 takes only the second loop.  32-bit wrapping
+ * arithmetic, arithmetic `>>15`. */
+static void fir7_1d(int16_t *out, const int16_t *base, int n, int stride,
+                    const int16_t *coef)
+{
+    const int16_t *p = base + 3 * stride;         /* &x[3] */
+    int i8 = p[-3 * stride], i7 = p[-2 * stride], i16v = p[-stride];
+    int i9 = 0, i5 = 0, i17 = 0, i10 = 0, i18 = 0;
+    int16_t *po;
+    const int16_t *ps20;
+    int start, end;
+
+    if (n < 5) {
+        i9 = 0;
+        po = out;
+        ps20 = p;
+        i10 = i8; i17 = i8; i5 = i8;
+        start = 0; end = n;
+    } else {
+        int m = n - 5;
+        i9 = i8; i18 = i7; i10 = i8; i17 = i8;
+        for (int j = 0; j <= m; j++) {
+            i5 = i17; i17 = i10; i10 = i8; i7 = i16v; i8 = i18;
+            i16v = p[j * stride];
+            out[j * stride] = (int16_t)((int32_t)((uint32_t)coef[6] * (uint32_t)i16v
+                                                + (uint32_t)coef[4] * (uint32_t)i8
+                                                + (uint32_t)coef[2] * (uint32_t)i17
+                                                + (uint32_t)coef[0] * (uint32_t)i9
+                                                + (uint32_t)coef[1] * (uint32_t)i5
+                                                + (uint32_t)coef[3] * (uint32_t)i10
+                                                + (uint32_t)coef[5] * (uint32_t)i7) >> 15);
+            i9 = i5; i18 = i7;
+        }
+        po = out + (m + 1) * stride;
+        ps20 = p + (m + 1) * stride;
+        start = n - 4; end = n;
+    }
+
+    for (int j = start; j < end; j++) {
+        i18 = i17; i17 = i10; i10 = i8;
+        int16_t sv = *ps20;
+        *po = (int16_t)((int32_t)((uint32_t)coef[6] * (uint32_t)(int32_t)sv
+                                + (uint32_t)coef[5] * (uint32_t)i16v
+                                + (uint32_t)coef[3] * (uint32_t)i10
+                                + (uint32_t)coef[1] * (uint32_t)i18
+                                + (uint32_t)coef[0] * (uint32_t)i5
+                                + (uint32_t)coef[2] * (uint32_t)i17
+                                + (uint32_t)coef[4] * (uint32_t)i7) >> 15);
+        po += stride;
+        i8 = i7; i7 = i16v; i5 = i18; i16v = sv;
+    }
+}
+
+/* shared canonical-descriptor guard for the two 7-tap FIR twins */
+static int fir7_guard(const cr_image *dst, const cr_image *src)
+{
+    return !(src->a == src->w && src->b == src->h && src->offx == 0 && src->offy == 0 &&
+             dst->a == src->a && dst->b == src->b &&
+             dst->a == dst->w && dst->b == dst->h && dst->offx == 0 && dst->offy == 0);
+}
+
 /* 0x180020d80 — 7-tap int16 FIR applied to every row of `src`, writing `dst`.
  * Both descriptors must be canonical (a==w, b==h, offx==offy==0) and share the
  * same (a,b) pair, else the function returns 0x69.  For each row:
  *     out[j] = (int16_t)((sum_{k=0..6} coef[k] * x[j-3+k]) >> 15)
- * with the taps clamped to the row: the left edge repeats x[0] and the right
- * edge repeats x[w-1].  The vendor splits each row into a rolling-history loop
- * for columns 0..w-5 and a second loop for the last four columns whose newest
- * tap is pinned at x[w-1]; widths < 5 take only the second loop (reading x[3]
- * as the pinned tap).  Both loops are reproduced verbatim.  32-bit arithmetic. */
+ * with the taps clamped to the row (left edge repeats x[0], right edge repeats
+ * x[w-1]).  See fir7_1d for the loop split. */
 int cr_fir7_s16(cr_image *dst, const cr_image *src, const int16_t *coef)
 {
-    if (!(src->a == src->w && src->b == src->h && src->offx == 0 && src->offy == 0 &&
-          dst->a == src->a && dst->b == src->b &&
-          dst->a == dst->w && dst->b == dst->h && dst->offx == 0 && dst->offy == 0))
+    if (fir7_guard(dst, src))
         return 0x69;
 
     int w = src->w;
@@ -188,59 +249,125 @@ int cr_fir7_s16(cr_image *dst, const cr_image *src, const int16_t *coef)
         return 0;
 
     int stride = src->a;
-    const int16_t *srow = (const int16_t *)src->data;
-    int16_t *drow = (int16_t *)dst->data;
+    const int16_t *s = (const int16_t *)src->data;
+    int16_t *d = (int16_t *)dst->data;
 
-    for (int row = 0; row < h; row++) {
-        const int16_t *p = srow + 3;              /* &x[3] */
-        int i8 = p[-3], i7 = p[-2], i16v = p[-1];
-        int i9 = 0, i5 = 0, i17 = 0, i10 = 0, i18 = 0;
-        int16_t *po;
-        const int16_t *ps20;
-        int start, end;
+    for (int row = 0; row < h; row++)
+        fir7_1d(d + row * stride, s + row * stride, w, 1, coef);
 
-        if (w < 5) {
-            i9 = 0;
-            po = drow;
-            ps20 = p;
-            i10 = i8; i17 = i8; i5 = i8;
-            start = 0; end = w;
-        } else {
-            int n = w - 5;
-            i9 = i8; i18 = i7; i10 = i8; i17 = i8;
-            for (int j = 0; j <= n; j++) {
-                i5 = i17; i17 = i10; i10 = i8; i7 = i16v; i8 = i18;
-                i16v = p[j];
-                drow[j] = (int16_t)((int32_t)((uint32_t)coef[6] * (uint32_t)i16v
-                                            + (uint32_t)coef[4] * (uint32_t)i8
-                                            + (uint32_t)coef[2] * (uint32_t)i17
-                                            + (uint32_t)coef[0] * (uint32_t)i9
-                                            + (uint32_t)coef[1] * (uint32_t)i5
-                                            + (uint32_t)coef[3] * (uint32_t)i10
-                                            + (uint32_t)coef[5] * (uint32_t)i7) >> 15);
-                i9 = i5; i18 = i7;
+    return 0;
+}
+
+/* 0x18001c280 — the column-wise (vertical) twin of cr_fir7_s16: the same
+ * 7-tap edge-clamped FIR, but run down each of the `w` columns (each `h`
+ * samples long, step `a`) instead of across each row.  Same guard. */
+int cr_fir7_s16_col(cr_image *dst, const cr_image *src, const int16_t *coef)
+{
+    if (fir7_guard(dst, src))
+        return 0x69;
+
+    int w = src->w;
+    int h = src->h;
+    if (w <= 0)
+        return 0;
+
+    int stride = src->a;
+    const int16_t *s = (const int16_t *)src->data;
+    int16_t *d = (int16_t *)dst->data;
+
+    for (int col = 0; col < w; col++)
+        fir7_1d(d + col, s + col, h, stride, coef);
+
+    return 0;
+}
+
+/* 0x18000d8e0 — masked per-column mean correction.  `cfg[9]` is a mode byte:
+ * 0 returns 0, 2 runs the correction, anything else returns 0x69.  For mode 2,
+ * `r0 = cfg[0xc]`, `r1 = cfg[0x10] + r0`; it requires `r1 <= img->w` and
+ * `img->h > 29`, else 0x69.  A "global" mean is taken over the set bits of
+ * bitmap rows `bm->offy + r0 .. r1-1`, columns `bm->offx .. offx+h-1`, sampling
+ * image column `row` (i.e. `img->data[row + k*img->w]`).  Then for every image
+ * column `col` in `[0, img->w)` a local mean is taken over bitmap row
+ * `bm->offy + col` (same column span), and — if that row has any set bit —
+ * every pixel of the column is replaced by `clamp((int)(p + global - local),
+ * 0, 255)`.  All sums are 32-bit; the division/addition is single precision in
+ * exactly this order (built with -ffp-contract=off). */
+int cr_bitmap_mean_correct(cr_image *img, const cr_image *bm,
+                           const uint8_t *cfg)
+{
+    if (cfg[9] == 0)
+        return 0;
+    if (cfg[9] != 2)
+        return 0x69;
+
+    int w = img->w;
+    int h = img->h;
+    int r0 = *(const int *)(cfg + 0xc);
+    int r1 = *(const int *)(cfg + 0x10) + r0;
+    if (r1 > w || h <= 0x1d)
+        return 0x69;
+
+    const uint8_t *idata = (const uint8_t *)img->data;
+    const uint32_t *bdata = (const uint32_t *)bm->data;
+    int a = bm->a;
+    int offx = bm->offx, offy = bm->offy;
+
+    uint32_t gsum = 0;
+    int gcnt = 0;
+
+    if (r0 < r1) {
+        int y = r0;
+        int base = (offy + r0) * a;
+        do {
+            int bit = offx + base;
+            int idx = y;
+            do {
+                if ((bdata[bit >> 5] >> ((bit - base) & 0x1f)) & 1) {
+                    gcnt++;
+                    gsum += idata[idx];
+                }
+                bit++;
+                idx += w;
+            } while (h + offx + base != bit);
+            y++;
+            base += a;
+        } while (r1 != y);
+    }
+
+    if (gcnt != 0) {
+        for (int col = 0; col < w; col++) {
+            uint32_t lsum = 0;
+            int lcnt = 0;
+            int base = (offy + col) * a;
+            int bit = offx + base;
+            int idx = col;
+            do {
+                if ((bdata[bit >> 5] >> ((bit - base) & 0x1f)) & 1) {
+                    lcnt++;
+                    lsum += idata[idx];
+                }
+                bit++;
+                idx += w;
+            } while (h + offx + base != bit);
+
+            if (lcnt != 0) {
+                float gmean = (float)(int)gsum / (float)gcnt;
+                float lmean = (float)(int)lsum / (float)lcnt;
+                for (int k = 0; k < h; k++) {
+                    uint8_t *p = (uint8_t *)img->data + (w * k + col);
+                    int v = (int)((float)*p + (gmean - lmean));
+                    uint8_t b;
+                    if (v < 255) {
+                        b = (uint8_t)v;
+                        if (v < 1)
+                            b = 0;
+                    } else {
+                        b = 255;
+                    }
+                    *p = b;
+                }
             }
-            po = drow + n + 1;
-            ps20 = p + n + 1;
-            start = w - 4; end = w;
         }
-
-        for (int j = start; j < end; j++) {
-            i18 = i17; i17 = i10; i10 = i8;
-            int16_t sv = *ps20;
-            *po = (int16_t)((int32_t)((uint32_t)coef[6] * (uint32_t)(int32_t)sv
-                                    + (uint32_t)coef[5] * (uint32_t)i16v
-                                    + (uint32_t)coef[3] * (uint32_t)i10
-                                    + (uint32_t)coef[1] * (uint32_t)i18
-                                    + (uint32_t)coef[0] * (uint32_t)i5
-                                    + (uint32_t)coef[2] * (uint32_t)i17
-                                    + (uint32_t)coef[4] * (uint32_t)i7) >> 15);
-            po++;
-            i8 = i7; i7 = i16v; i5 = i18; i16v = sv;
-        }
-
-        srow += stride;
-        drow += stride;
     }
     return 0;
 }

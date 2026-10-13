@@ -218,6 +218,18 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x18003e590` | `fpc_bio_bep_sw23_cb8639ce35` | `cr_bitmap_extract_shift` | `int fn(cr_image *dst, const cr_image *src)`. Extract a `dst->a`-bit-wide, `dst->h`-row window from `src` at bit column `src->offx` and row `src->offy`, shifting source bits **right** by `src->offx & 31`; the last destination word is masked with `0xffffffff >> ((dst->a - dst->w) & 31)`. `dst` must have `offx==offy==0` and `src->a >= dst->a`, else `0x69`. Word-aligned: verbatim copy. Otherwise `dst[k] = (src[k+1]<<(32-s)) | (src[k]>>s)` and the last word `(src[dst_words-1]>>s) [| src[dst_words]<<(32-s) when src->a > dst->a]`, all `& mask`. |
 
+### Batch 26 — column-wise 7-tap clamped int16 FIR
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18001c280` | `fpc_bio_bep_sw23_326e82e939` | `cr_fir7_s16_col` | `int fn(cr_image *dst, const cr_image *src, const int16_t *coef)`. The **column-wise twin** of `cr_fir7_s16`: the same 7-tap edge-clamped FIR, run down each of the `w` columns (`h` samples, step `a`) instead of across each row. Same canonical-descriptor guard (returns `0x69`). Factored with `cr_fir7_s16` into a shared 1-D helper `fir7_1d(out, base, n, stride, coef)`. |
+
+### Batch 27 — masked per-column mean correction
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18000d8e0` | `fpc_bio_bep_sw23_02a79f65fe` | `cr_bitmap_mean_correct` | `int fn(cr_image *img, const cr_image *bm, const uint8_t *cfg)`. `cfg[9]` is a mode byte: `0` → `0`, `2` → run, else `0x69`; mode 2 needs `r0=cfg[0xc]`, `r1=cfg[0x10]+r0`, `r1 <= img->w` and `img->h > 29`, else `0x69`. A **global** mean is taken over set bits of bitmap rows `bm->offy+r0 .. r1-1`, columns `bm->offx .. offx+h-1` (sampling `img->data[row + k*img->w]`). Then for every image column `col` in `[0,img->w)` a **local** mean is taken over bitmap row `bm->offy+col` (same span) and, if that row has a set bit, every pixel of the column becomes `clamp((int)(p + global - local), 0, 255)`. All sums 32-bit; single-precision division/addition in exactly the written order. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

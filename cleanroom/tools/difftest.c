@@ -1549,14 +1549,17 @@ static void test_laplacian_3x3(void)
 
 /* ---- batch 22: 7-tap edge-clamped int16 FIR ---------------------------- */
 
-/* 0x180020d80 — 7-tap FIR over int16 rows.  Descriptor must be canonical
- * (a==w, b==h, offx==offy==0) for both images and share (a,b); occasionally we
- * corrupt one field to exercise the 0x69 guard. */
-static void test_fir7_s16(void)
+/* 0x180020d80 / 0x18001c280 — 7-tap edge-clamped int16 FIR, run across rows
+ * (`rowwise`) or down columns.  Descriptor must be canonical (a==w, b==h,
+ * offx==offy==0) for both images and share (a,b); occasionally we corrupt one
+ * field to exercise the 0x69 guard. */
+static void test_fir7_common(const char *name, u32 rva, int rowwise,
+                             int (*clean)(cr_image *, const cr_image *,
+                                          const int16_t *))
 {
     typedef int (WINAPI *fn_t)(void *, const void *, const void *);
-    fn_t v = (fn_t)fn_at(RVA(0x180020d80));
-    begin("cr_fir7_s16");
+    fn_t v = (fn_t)fn_at(rva);
+    begin(name);
     int bad = g_fail;
     for (int t = 0; t < 20000; t++) {
         unsigned char dv[0x20], dc[0x20], sv[0x20], sc[0x20];
@@ -1586,12 +1589,23 @@ static void test_fir7_s16(void)
         default: break;
         }
         int rv = v(dv, sv, coef);
-        int rc = cr_fir7_s16((cr_image *)dc, (const cr_image *)sc, coef);
+        int rc = clean((cr_image *)dc, (const cr_image *)sc, coef);
         if (rv != rc) mismatch("fir7_ret", (u32)t, (u32)rv, (u32)rc);
         cmp_buf("fir7", (unsigned char *)dbv, (unsigned char *)dbc,
                 sizeof dbv, (u32)t);
+        (void)rowwise;
     }
-    if (g_fail == bad) end(); else printf("  FAIL cr_fir7_s16\n");
+    if (g_fail == bad) end(); else printf("  FAIL %s\n", name);
+}
+
+static void test_fir7_s16(void)
+{
+    test_fir7_common("cr_fir7_s16", RVA(0x180020d80), 1, cr_fir7_s16);
+}
+
+static void test_fir7_s16_col(void)
+{
+    test_fir7_common("cr_fir7_s16_col", RVA(0x18001c280), 0, cr_fir7_s16_col);
 }
 
 /* ---- batch 23: in-place row permutation -------------------------------- */
@@ -1731,6 +1745,59 @@ static void test_bitmap_extract_shift(void)
                 sizeof dbv, (u32)t);
     }
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_extract_shift\n");
+}
+
+/* ---- batch 27: masked per-column mean correction ----------------------- */
+
+/* 0x18000d8e0 — cfg[9] is a mode byte (0 -> 0, 2 -> run, else 0x69); needs
+ * r1 <= img->w and img->h > 29.  Global mean over bitmap rows r0..r1-1, local
+ * mean per column, then clamp(p + global - local) written down each column. */
+static void test_bitmap_mean_correct(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x18000d8e0));
+    begin("cr_bitmap_mean_correct");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char iv[0x20], ic[0x20], bv[0x20], bc[0x20], cfg[0x20];
+        uint8_t ib[4096], ibc[4096];
+        uint32_t bw[1024], bwc[1024];
+        int w = 30 + (int)(rnd() % 11u);      /* 30..40 */
+        int h = 30 + (int)(rnd() % 11u);      /* 30..40 (> 29) */
+        int offx = (int)(rnd() % 17u);
+        int offy = (int)(rnd() % 3u);
+        int a = ((offx + h + 31) / 32) * 32;  /* row stride covers the column span */
+        for (int i = 0; i < 4096; i++) {
+            uint8_t x = (uint8_t)rnd(); ib[i] = x; ibc[i] = x;
+        }
+        for (int i = 0; i < 1024; i++) {
+            uint32_t u = (uint32_t)rnd(); bw[i] = u; bwc[i] = u;
+        }
+        memset(iv, 0, sizeof iv); memset(ic, 0, sizeof ic);
+        memset(bv, 0, sizeof bv); memset(bc, 0, sizeof bc);
+        memset(cfg, 0, sizeof cfg);
+        mk_image(iv, ib, w, w, h, 0, 0);
+        mk_image(ic, ibc, w, w, h, 0, 0);
+        mk_image(bv, bw, a, 0, 0, offx, offy);
+        mk_image(bc, bwc, a, 0, 0, offx, offy);
+        int r0 = (int)(rnd() % (unsigned)w);
+        int dy = 1 + (int)(rnd() % (unsigned)(w - r0));
+        cfg[9] = 2;
+        *(int *)(cfg + 0xc) = r0;
+        *(int *)(cfg + 0x10) = dy;
+        switch (t & 3) {                      /* exercise early-outs */
+        case 1: cfg[9] = 0; break;
+        case 2: cfg[9] = 1; break;
+        case 3: *(int *)(cfg + 0x10) = w + 1; break;   /* r1 > w */
+        default: break;
+        }
+        int rv = v(iv, bv, cfg);
+        int rc = cr_bitmap_mean_correct((cr_image *)ic, (const cr_image *)bc,
+                                        cfg);
+        if (rv != rc) mismatch("bmc_ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("bmc_img", ib, ibc, sizeof ib, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_mean_correct\n");
 }
 
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
@@ -2243,6 +2310,10 @@ int main(int argc, char **argv)
     test_bitmap_copy_shift();
     printf("\n== right-shifted bitmap extract ==\n");
     test_bitmap_extract_shift();
+    printf("\n== column-wise 7-tap clamped FIR ==\n");
+    test_fir7_s16_col();
+    printf("\n== masked per-column mean correction ==\n");
+    test_bitmap_mean_correct();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
