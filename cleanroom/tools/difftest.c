@@ -2678,6 +2678,33 @@ static void test_desc_getters(void)
     }
 }
 
+/* ---- batch 37: 9-tap triangular filter over an n x 9 float buffer ------- */
+static void test_tri9_filter(void)
+{
+    typedef void (WINAPI *v_v_ppi)(float *, float *, int);
+    v_v_ppi v = (v_v_ppi)fn_at(RVA(0x180043a50));
+    begin("cr_tri9_filter");
+    int bad = g_fail;
+    enum { MAXN = 64 };
+    float inv[9 * MAXN], outv[9 * MAXN], outc[9 * MAXN];
+    for (int t = 0; t < 20000; t++) {
+        int n = 9 + (int)(rnd() % (MAXN - 8));      /* n >= 9 (vendor assumes it) */
+        for (int i = 0; i < 9 * n; i++) {
+            uint32_t bits = rnd();
+            /* keep values finite-ish but exercise signed zeros/denormals */
+            if ((bits & 0x7f800000u) == 0x7f800000u) bits &= ~0x7f800000u;
+            inv[i] = cr_u2f(bits);
+        }
+        memset(outv, 0x5A, sizeof outv);
+        memset(outc, 0x5A, sizeof outc);
+        v(inv, outv, n);
+        cr_tri9_filter(inv, outc, n);
+        cmp_buf("out", (unsigned char *)outv, (unsigned char *)outc,
+                sizeof(float) * 9 * n, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_tri9_filter\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2826,6 +2853,8 @@ int main(int argc, char **argv)
     test_bitmap_centroid();
     printf("\n== descriptor / table-pointer getters ==\n");
     test_desc_getters();
+    printf("\n== 9-tap triangular filter (n x 9) ==\n");
+    test_tri9_filter();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

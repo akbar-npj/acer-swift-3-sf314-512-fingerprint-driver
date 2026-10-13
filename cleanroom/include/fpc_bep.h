@@ -355,4 +355,7 @@ uint8_t  cr_desc_get_ptr_size_69(void *p1, uint32_t *p2, char sel);      /* 0x18
 uint64_t cr_desc_get_tag_byte_ptr(void *p, char sel);                    /* 0x180028de0 */
 uint64_t cr_desc_get_triple(void *p, uint8_t sel);                       /* 0x18002d4e0 */
 
+/* ---- batch 37: 9-tap triangular filter over the 9 lines of an n x 9 buffer -- */
+void     cr_tri9_filter(float *in, float *out, int n);                   /* 0x180043a50 */
+
 #endif /* FPC_BEP_H */

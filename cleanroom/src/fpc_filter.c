@@ -91,3 +91,107 @@ void cr_box_blur_h_f32(void *dst_ref, const float *src, int nrows, int ncols,
         }
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180043a50 — 9-tap triangular (Bartlett) filter along the 9 lines of an
+ *   n x 9 float buffer (row stride 9).
+ *
+ *   Each of the 9 lines (elements t, t+9, t+18, ...) is filtered
+ *   independently with a triangular window of weights [1,2,3,4,5,4,3,2,1],
+ *   via the sliding-window recurrence
+ *       out[r] = out[r-1] - sum_{i=r-5}^{r-1} c[i] + sum_{i=r}^{r+4} c[i]
+ *   where c[k] = in[t + 9k].  Rows 0..4 use a triangular warm-up (the
+ *   out-of-range taps contribute 0) and the last four rows use the same
+ *   recurrence with the out-of-range "add" taps dropped.
+ *
+ *   Args (ms_abi): rcx = in (float*), rdx = out (float*), r8d = n (rows).
+ *   The buffer holds 9*n floats; the vendor assumes n >= 9 (no guard).  The
+ *   float operation order is transcribed verbatim for bit-for-bit parity.
+ * ------------------------------------------------------------------------ */
+void cr_tri9_filter(float *in, float *out, int n)
+{
+    const float c5 = 5.0f, c4 = 4.0f, c3 = 3.0f;
+    int n4 = n - 4;
+    float *r9 = in + n4 * 9 - 45;
+
+    for (int t = 0; t < 9; t++) {
+        float *c = in + t;
+        float *o = out + t;
+        float acc;
+
+        /* rows 0..4: triangular warm-up */
+        acc  = c[9] * c4;
+        acc += c[0] * c5;
+        acc += c[18] * c3;
+        acc += c[27] + c[27];
+        acc += c[36];
+        o[0] = acc;
+        acc -= c[0];
+        acc += c[9]; acc += c[18]; acc += c[27]; acc += c[36]; acc += c[45];
+        o[9] = acc;
+        acc -= c[0]; acc -= c[9];
+        acc += c[18]; acc += c[27]; acc += c[36]; acc += c[45]; acc += c[54];
+        o[18] = acc;
+        acc -= c[0]; acc -= c[9]; acc -= c[18];
+        acc += c[27]; acc += c[36]; acc += c[45]; acc += c[54]; acc += c[63];
+        o[27] = acc;
+        acc -= c[0]; acc -= c[9]; acc -= c[18]; acc -= c[27];
+        acc += c[36]; acc += c[45]; acc += c[54]; acc += c[63]; acc += c[72];
+        o[36] = acc;
+
+        /* rows 5..n-5: full sliding-window recurrence */
+        if (n4 > 5) {
+            float *rs = r9 + t;          /* termination pointer */
+            float *ra = c;               /* advances by 9 per row */
+            float *rg = o;               /* advances by 9 per row */
+            do {
+                acc = rg[36];
+                ra += 9;
+                acc -= ra[-9]; acc -= ra[0]; acc -= ra[9];
+                acc -= ra[18]; acc -= ra[27];
+                acc += ra[36]; acc += ra[45]; acc += ra[54];
+                acc += ra[63]; acc += ra[72];
+                rg += 9;
+                rg[36] = acc;
+            } while (rs != ra);
+        }
+
+        /* rows n-4..n-1: recurrence with truncated "add" taps */
+        acc = out[9 * (n - 4) + t - 9];
+        {
+            float *q = r9 + t;
+            acc -= q[0];
+            q += 1;
+            acc -= q[8]; acc -= q[17]; acc -= q[26]; acc -= q[35];
+            acc += q[44]; acc += q[53]; acc += q[62]; acc += q[71];
+        }
+        out[9 * (n - 4) + t] = acc;
+
+        acc = out[9 * (n - 3) + t - 9];
+        {
+            float *q = in + 9 * (n - 3) + t + 1;
+            acc -= q[-46]; acc -= q[-37]; acc -= q[-28];
+            acc -= q[-19]; acc -= q[-10];
+            acc += q[-1]; acc += q[8]; acc += q[17];
+        }
+        out[9 * (n - 3) + t] = acc;
+
+        acc = out[9 * (n - 2) + t - 9];
+        {
+            float *q = in + 9 * (n - 2) + t + 1;
+            acc -= q[-46]; acc -= q[-37]; acc -= q[-28];
+            acc -= q[-19]; acc -= q[-10];
+            acc += q[-1]; acc += q[8];
+        }
+        out[9 * (n - 2) + t] = acc;
+
+        acc = out[9 * (n - 1) + t - 9];
+        {
+            float *q = in + 9 * (n - 1) + t + 1;
+            acc -= q[-46]; acc -= q[-37]; acc -= q[-28];
+            acc -= q[-19]; acc -= q[-10];
+            acc += q[-1];
+        }
+        out[9 * (n - 1) + t] = acc;
+    }
+}
