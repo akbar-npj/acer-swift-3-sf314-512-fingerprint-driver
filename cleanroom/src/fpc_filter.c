@@ -426,6 +426,63 @@ void cr_sep11_row(int16_t *out, const uint8_t *in, const int16_t *coef,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180038ac0 — per-pixel kernel-bank 2D correlation.
+ *
+ *   Args (ms_abi): rcx = out (int32*), rdx = in (int16*), r8 = kbank (int16*),
+ *   r9 = selarr (int16*), [rsp+0x28] = unused (8 bytes), [rsp+0x30] = ow,
+ *   [rsp+0x38] = oh, [rsp+0x40] = iw (input row stride), [rsp+0x48] = ih,
+ *   [rsp+0x50] = K.  NOTE: the unused 8-byte 5th argument is load-bearing for
+ *   the stack layout — it must stay in the signature.
+ *
+ *   For each output pixel (r,c), sel = selarr[r*ow + c] picks a KxK kernel from
+ *   the bank, and the KxK input window at top-left (r,c) is correlated with it:
+ *       out[r*ow + c] = Σ_{ky,kx} in[(r+ky)*iw + c+kx] * kbank[sel*K*K + ky*K + kx]
+ *
+ *   Guards: `iw < ow-1+K` or `ih < oh-1+K` → 1.  The K==15 and K==7 paths add
+ *   `iw <= ow+13` / `ih <= oh+13` (resp. +5) → 0x69, and K==17 adds `iw <= ow+15`
+ *   → 1; all four are unreachable once the initial guards pass (same bound), but
+ *   they are reproduced verbatim.  K < 1 writes all-zero outputs.  Returns 0.
+ *
+ *   The vendor has 4-wide-unrolled specialised bodies for K=15, 17 and 7 (same
+ *   integer accumulation, so bit-identical to the closed form) plus a general
+ *   KxK body.  The accumulation is wrapping 32-bit (coef*coef can exceed int32).
+ * ------------------------------------------------------------------------ */
+int cr_corr_kbank(int32_t *out, const int16_t *in, const int16_t *kbank,
+                  const int16_t *selarr, long long unused,
+                  int ow, int oh, int iw, int ih, int K)
+{
+    if (iw < ow - 1 + K) return 1;
+    if (ih < oh - 1 + K) return 1;
+    if (K == 15) {
+        if (iw <= ow + 13) return 0x69;
+        if (ih <= oh + 13) return 0x69;
+    } else if (K == 17) {
+        if (iw <= ow + 15) return 1;
+        if (ih <= oh + 15) return 1;
+    } else if (K == 7) {
+        if (iw <= ow + 5) return 0x69;
+        if (ih <= oh + 5) return 0x69;
+    }
+    if (oh > 0) {
+        for (int r = 0; r < oh; r++) {
+            for (int c = 0; c < ow; c++) {
+                uint32_t acc = 0;
+                if (K >= 1) {
+                    int sel = selarr[r * ow + c];
+                    const int16_t *kb = kbank + (long long)sel * K * K;
+                    for (int ky = 0; ky < K; ky++)
+                        for (int kx = 0; kx < K; kx++)
+                            acc += (uint32_t)((int32_t)in[(r + ky) * iw + c + kx]
+                                              * (int32_t)kb[ky * K + kx]);
+                }
+                out[r * ow + c] = (int32_t)acc;
+            }
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x18002c600 — in-place separable box mean over a float image.
  *
  *   Args (ms_abi): rcx = dst descriptor, rdx = src descriptor, r8d = mode.

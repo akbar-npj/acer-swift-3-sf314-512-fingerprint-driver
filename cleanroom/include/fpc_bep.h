@@ -389,4 +389,9 @@ void     cr_vfir7_cols(int16_t *out, const int16_t *in, const int16_t *coef,
 void     cr_sep11_row(int16_t *out, const uint8_t *in, const int16_t *coef,
                       int w, int s);                                     /* 0x18002e6a0 */
 
+/* ---- batch 46: per-pixel kernel-bank 2D correlation ----------------------- */
+int      cr_corr_kbank(int32_t *out, const int16_t *in, const int16_t *kbank,
+                       const int16_t *selarr, long long unused,
+                       int ow, int oh, int iw, int ih, int K);           /* 0x180038ac0 */
+
 #endif /* FPC_BEP_H */

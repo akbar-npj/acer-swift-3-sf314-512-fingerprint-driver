@@ -2994,6 +2994,44 @@ static void test_sep11_row(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_sep11_row\n");
 }
 
+/* ---- batch 46: per-pixel kernel-bank 2D correlation --------------------- */
+static void test_corr_kbank(void)
+{
+    typedef int (WINAPI *v_i_piiiiiiiii)(int32_t *, const int16_t *,
+                                         const int16_t *, const int16_t *,
+                                         long long, int, int, int, int, int);
+    v_i_piiiiiiiii v = (v_i_piiiiiiiii)fn_at(RVA(0x180038ac0));
+    begin("cr_corr_kbank");
+    int bad = g_fail;
+    enum { MAXOW = 6, MAXOH = 6, MAXK = 19, NK = 4, MAXIN = 64 * 64 };
+    static const int ks[] = { 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 2, 4, 6, 8 };
+    static int32_t outv[64], outc[64];
+    static int16_t in[MAXIN], kbank[NK * MAXK * MAXK], selarr[64];
+    for (int t = 0; t < 20000; t++) {
+        int K = ks[rnd() % (sizeof ks / sizeof ks[0])];
+        int ow = 1 + (int)(rnd() % MAXOW);
+        int oh = 1 + (int)(rnd() % MAXOH);
+        /* The K==17 body processes output columns in groups of 4 aligned to
+         * ow-4, so for ow < 4 it writes before the output buffer (vendor quirk);
+         * the well-defined domain is ow >= 4. */
+        if (K == 17 && ow < 4) ow = 4;
+        int iw = ow - 1 + K + (int)(rnd() % 3);
+        int ih = oh - 1 + K + (int)(rnd() % 3);
+        if (iw > 64 || ih > 64) continue;
+        for (int i = 0; i < NK * K * K; i++) kbank[i] = (int16_t)rnd();
+        for (int i = 0; i < ow * oh; i++) selarr[i] = (int16_t)(rnd() % NK);
+        for (int i = 0; i < iw * ih; i++) in[i] = (int16_t)rnd();
+        memset(outv, 0x5A, sizeof outv);
+        memset(outc, 0x5A, sizeof outc);
+        int rv = v(outv, in, kbank, selarr, 0, ow, oh, iw, ih, K);
+        int rc = cr_corr_kbank(outc, in, kbank, selarr, 0, ow, oh, iw, ih, K);
+        if ((u32)rv != (u32)rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("out", (unsigned char *)outv, (unsigned char *)outc,
+                sizeof(int32_t) * ow * oh, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_corr_kbank\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3245,6 +3283,8 @@ int main(int argc, char **argv)
     test_vfir7_cols();
     printf("\n== separable 11x11 int16 FIR (one row) ==\n");
     test_sep11_row();
+    printf("\n== per-pixel kernel-bank 2D correlation ==\n");
+    test_corr_kbank();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
