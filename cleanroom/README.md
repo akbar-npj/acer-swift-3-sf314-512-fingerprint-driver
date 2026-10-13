@@ -73,6 +73,7 @@ cleanroom/
 ├── src/fpc_stats.c       masked variance + big-endian quad probe
 ├── src/fpc_filter.c      Q15 vertical FIR (4 columns at a time)
 ├── src/fpc_orient.c      orientation pick (fwd/rev correlation + half-swap)
+├── src/fpc_matmul.c      float N x T matrix multiply
 ├── tools/difftest.c      differential test vs the vendor DLL
 ├── Makefile              make / make check
 ├── REACHABLE.md          inventory of all 355 reachable functions
@@ -128,15 +129,16 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **56** (15.8% of functions, 6,016 B = 3.55% of bytes) |
+| rewritten + parity-verified | **59** (16.6% of functions, 6,832 B = 4.03% of bytes) |
 
-Six batches done so far:
+Seven batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
 4. rect fills + bitmap ops + misc leaves (10 functions)
 5. image copies + masked variance + affine transform (7 functions)
 6. 256-byte leaves: Q15 FIR, masked min/max, orientation pick, atan2-degrees (4 functions)
+7. 272-byte leaves: NxT matmul, mean/stddev, masked int16 min/max (3 functions)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **56** (15.8% of funcs, 6016 B = 3.55% of bytes) |
+| **rewritten + parity-verified** | **59** (16.6% of funcs, 6832 B = 4.03% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -78,7 +78,10 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 54 | `cr_masked_minmax` | `0x180020130` | `fpc_bio_bep_sw23_45d26c97de` | 256 | **done** |
 | 55 | `cr_orient_pick` | `0x1800309a0` | `fpc_bio_bep_sw23_90875da224` | 256 | **done** |
 | 56 | `cr_atan2_deg` | `0x1800391b0` | `fpc_bio_bep_sw23_b4118e23cd` | 256 | **done** |
-| … | 299 more | | | | pending |
+| 57 | `cr_matmul_nt` | `0x18003e9f0` | `fpc_bio_bep_sw23_cbfed5bc7c` | 272 | **done** |
+| 58 | `cr_mean_stddev` | `0x18003f460` | `fpc_bio_bep_sw23_d1adcab3af` | 272 | **done** |
+| 59 | `cr_masked_minmax_s16` | `0x1800277e0` | `fpc_bio_bep_sw23_69f82fab13` | 272 | **done** |
+| … | 296 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 
@@ -156,9 +159,9 @@ tested in isolation. Sorted by size (smallest first).
 | `0x180020130` | `fpc_bio_bep_sw23_45d26c97de` | 256 | 2 | **done** |
 | `0x1800309a0` | `fpc_bio_bep_sw23_90875da224` | 256 | 1 | **done** |
 | `0x1800391b0` | `fpc_bio_bep_sw23_b4118e23cd` | 256 | 1 | **done** |
-| `0x1800277e0` | `fpc_bio_bep_sw23_69f82fab13` | 272 | 2 |  |
-| `0x18003e9f0` | `fpc_bio_bep_sw23_cbfed5bc7c` | 272 | 1 |  |
-| `0x18003f460` | `fpc_bio_bep_sw23_d1adcab3af` | 272 | 1 |  |
+| `0x1800277e0` | `fpc_bio_bep_sw23_69f82fab13` | 272 | 2 | **done** |
+| `0x18003e9f0` | `fpc_bio_bep_sw23_cbfed5bc7c` | 272 | 1 | **done** |
+| `0x18003f460` | `fpc_bio_bep_sw23_d1adcab3af` | 272 | 1 | **done** |
 | `0x180017840` | `fpc_bio_bep_sw23_253a6224d6` | 288 | 2 |  |
 | `0x1800334c0` | `fpc_bio_bep_sw23_9a9c3581cf` | 288 | 3 |  |
 | `0x18001f790` | `fpc_bio_bep_sw23_4172e0ed57` | 304 | 2 |  |

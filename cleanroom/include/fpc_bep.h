@@ -149,4 +149,13 @@ void     cr_orient_pick(uint8_t *arr, uint8_t *flag, int *out,
                         int half, int k);                             /* 0x1800309a0 */
 float    cr_atan2_deg(float a, float b);                              /* 0x1800391b0 */
 
+/* ---- batch 7: 272-byte leaves ------------------------------------------ */
+int      cr_matmul_nt(const float *in, int nrows, int K, const float *W,
+                      int ncols, int Kcheck, float *out);             /* 0x18003e9f0 */
+void     cr_mean_stddev(float *out_mean, float *out_std,
+                        const uint8_t *data, int n);                  /* 0x18003f460 */
+void     cr_masked_minmax_s16(int *out_min, int *out_max, int *out_count,
+                              const cr_image *img, const cr_image *mask,
+                              uint8_t and_mask);                      /* 0x1800277e0 */
+
 #endif /* FPC_BEP_H */

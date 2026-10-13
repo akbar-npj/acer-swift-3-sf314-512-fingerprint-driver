@@ -291,6 +291,13 @@ typedef void     (WINAPI *v_v_ppppp)(void *, void *, void *, const void *, const
 typedef void     (WINAPI *v_v_pppppii)(void *, void *, void *, const void *,
                                        const void *, int, int);
 
+/* batch 7 */
+typedef int      (WINAPI *v_i_ppipii_p)(const float *, int, int,
+                                        const float *, int, int, float *);
+typedef void     (WINAPI *v_v_pppi)(float *, float *, const void *, int);
+typedef void     (WINAPI *v_v_pppppb)(void *, void *, void *, const void *,
+                                      const void *, uint8_t);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -988,6 +995,79 @@ static void test_orient_pick(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_orient_pick\n");
 }
 
+/* ---- batch 7: 272-byte leaves ------------------------------------------ */
+
+/* 0x18003e9f0 — out = in * W^T (N x T matmul), with a K==Kcheck guard. */
+static void test_matmul_nt(void)
+{
+    v_i_ppipii_p v = (v_i_ppipii_p)fn_at(RVA(0x18003e9f0));
+    begin("cr_matmul_nt");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        float in[64], W[64], ov[64], oc[64];
+        for (int i = 0; i < 64; i++) { in[i] = cr_u2f(rnd()); W[i] = cr_u2f(rnd()); }
+        int nrows = (int)(rnd() % 10u) - 1;
+        int K     = (int)(rnd() % 9u);
+        int ncols = (int)(rnd() % 10u) - 1;
+        int Kcheck = ((rnd() % 3u) == 0) ? K + (int)(rnd() % 3u) - 1 : K;
+        memset(ov, 0x3F, sizeof ov); memset(oc, 0x3F, sizeof oc);
+        int rv = v(in, nrows, K, W, ncols, Kcheck, ov);
+        int rc = cr_matmul_nt(in, nrows, K, W, ncols, Kcheck, oc);
+        if (rv != rc) mismatch("mm-ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("mm", (unsigned char *)ov, (unsigned char *)oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_matmul_nt\n");
+}
+
+/* 0x18003f460 — mean + stddev of a byte buffer. */
+static void test_mean_stddev(void)
+{
+    v_v_pppi v = (v_v_pppi)fn_at(RVA(0x18003f460));
+    begin("cr_mean_stddev");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        uint8_t data[64];
+        for (size_t i = 0; i < sizeof data; i++) data[i] = (uint8_t)rnd();
+        int n = (int)(rnd() % 66u) - 2;      /* includes <= 0 */
+        float mv = 0, sv = 0, mc = 0, sc = 0;
+        v(&mv, &sv, data, n);
+        cr_mean_stddev(&mc, &sc, data, n);
+        if (cr_f2u(mv) != cr_f2u(mc)) mismatch("mean", (u32)t, cr_f2u(mv), cr_f2u(mc));
+        if (cr_f2u(sv) != cr_f2u(sc)) mismatch("std",  (u32)t, cr_f2u(sv), cr_f2u(sc));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_mean_stddev\n");
+}
+
+/* 0x1800277e0 — min/max/count of int16 samples, optional byte mask. */
+static void test_masked_minmax_s16(void)
+{
+    v_v_pppppb v = (v_v_pppppb)fn_at(RVA(0x1800277e0));
+    begin("cr_masked_minmax_s16");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char iv[0x20], ic[0x20], mv[0x20], mc[0x20];
+        int16_t d[160];
+        uint8_t m[160];
+        for (size_t i = 0; i < sizeof d / sizeof d[0]; i++) d[i] = (int16_t)rnd();
+        for (size_t i = 0; i < sizeof m; i++) m[i] = (uint8_t)rnd();
+        int w = (int)(rnd() % 12u);
+        int h = (int)(rnd() % 12u);
+        uint8_t am = (uint8_t)rnd();
+        int usemask = (rnd() % 4u) != 0;
+        mk_image(iv, d, 0, w, h, 0, 0);
+        mk_image(ic, d, 0, w, h, 0, 0);
+        mk_image(mv, m, 0, 0, 0, 0, 0);
+        mk_image(mc, m, 0, 0, 0, 0, 0);
+        int a = -1, b = -1, c = -1, p = -1, q = -1, r = -1;
+        v(&a, &b, &c, iv, usemask ? mv : NULL, am);
+        cr_masked_minmax_s16(&p, &q, &r, (const cr_image *)ic,
+                             usemask ? (const cr_image *)mc : NULL, am);
+        if (a != p || b != q || c != r)
+            mismatch("mms16", (u32)t, (u32)a, (u32)p);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_minmax_s16\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1206,6 +1286,11 @@ int main(int argc, char **argv)
     test_vfir4_u8();
     test_masked_minmax();
     test_orient_pick();
+
+    printf("\n== 272-byte leaves ==\n");
+    test_matmul_nt();
+    test_mean_stddev();
+    test_masked_minmax_s16();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -98,6 +98,14 @@ The image descriptor layout (established from these functions):
 | `0x1800309a0` | `fpc_bio_bep_sw23_90875da224` | `cr_orient_pick` | correlate `*src` with `coeff` forwards and backwards over `k*k` taps; if `|rev|>|fwd|` flip flag bit 7, swap the first `d` bytes of `arr` with the next `d` (`d` from `half`), report 1; else report 0. |
 | `0x1800391b0` | `fpc_bio_bep_sw23_b4118e23cd` | `cr_atan2_deg` | `atan2(a,b)` in **degrees**, range `[0,360)`, via an odd polynomial `(((C2*u+C3)*u-C4)*u+C5)*t` plus the quadrant fixes (C6=90, C7=180, C8=360). |
 
+### Batch 7 — 272-byte leaves
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18003e9f0` | `fpc_bio_bep_sw23_cbfed5bc7c` | `cr_matmul_nt` | `out[i*ncols+j] = Σ_k in[i*K+k] * W[j*K+k]` (`in` is N x K, `W` is ncols x K); returns 1 when `K != Kcheck`, else 0. |
+| `0x18003f460` | `fpc_bio_bep_sw23_d1adcab3af` | `cr_mean_stddev` | `mean = sum/n`, `var = sumsq/n - mean²`, `*out_std = sqrt(var)` (reuses `cr_sqrtf`); `n<=0 -> NaN`. |
+| `0x1800277e0` | `fpc_bio_bep_sw23_69f82fab13` | `cr_masked_minmax_s16` | min/max/count of int16 samples selected by `(mask[i] & and_mask) != 0` (or all when `mask == NULL`); defaults `+32767 / -32768`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

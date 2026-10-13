@@ -128,3 +128,93 @@ void cr_masked_minmax(int *out_min, int *out_max, int *out_count,
     *out_max = (int)mx;
     *out_count = count;
 }
+
+/*
+ * 0x18003f460 — mean and standard deviation of a byte buffer.
+ *
+ *   sum   = sum_{i<n} data[i]
+ *   sumsq = sum_{i<n} data[i]^2
+ *   *out_mean = sum / n
+ *   var       = sumsq / n - mean*mean
+ *   *out_std  = sqrt(var)          (via the vendor's seed + 2 Newton steps)
+ *
+ * The seed/Newton part is exactly cr_sqrtf, so we reuse it.  For n <= 0 the
+ * sums are 0 and the divisions by (float)n = 0.0 yield NaN, as in the vendor.
+ */
+void cr_mean_stddev(float *out_mean, float *out_std,
+                    const uint8_t *data, int n)
+{
+    int32_t sum = 0, sumsq = 0;
+
+    if (n > 0) {
+        for (int i = 0; i < n; i++) {
+            int32_t b = data[i];
+            sum   += b;
+            sumsq += b * b;
+        }
+    }
+
+    float fn = (float)n;
+    float mean = (float)sum / fn;
+    float eq   = (float)sumsq / fn;
+
+    *out_mean = mean;
+
+    float var = eq - mean * mean;
+    *out_std = cr_sqrtf(var);
+}
+
+/*
+ * 0x1800277e0 — min / max / count of int16 image samples, optionally masked.
+ *
+ * `img` is an int16 image (data at +8, w at +0x10, h at +0x14).  When `mask`
+ * is non-NULL its byte array (+8) selects samples: sample i is used iff
+ * (mask[i] & and_mask) != 0.  When `mask` is NULL every sample is used.
+ *
+ * min/max are signed int16 comparisons, reported sign-extended; they default
+ * to +32767 / -32768 when nothing is selected.  count is the number of selected
+ * samples (or h*w in the unmasked case).
+ */
+void cr_masked_minmax_s16(int *out_min, int *out_max, int *out_count,
+                          const cr_image *img, const cr_image *mask,
+                          uint8_t and_mask)
+{
+    int total = img->h * img->w;
+    const int16_t *d = (const int16_t *)img->data;
+    int32_t mn = 0x7fff, mx = (int32_t)0xffff8000;
+
+    if (!mask) {
+        if (total > 0) {
+            for (int i = 0; i < total; i++) {
+                int32_t v = d[i];
+                if ((int16_t)mn > (int16_t)v) mn = v;
+                if ((int16_t)mx < (int16_t)v) mx = v;
+            }
+        }
+        *out_min = (int)mn;
+        *out_max = (int)mx;
+        *out_count = total;
+        return;
+    }
+
+    if (total <= 0) {
+        *out_min = 0x7fff;
+        *out_max = (int)0xffff8000;
+        *out_count = 0;
+        return;
+    }
+
+    const uint8_t *m = (const uint8_t *)mask->data;
+    int count = 0;
+    for (int i = 0; i < total; i++) {
+        if (m[i] & and_mask) {
+            int32_t v = d[i];
+            if ((int16_t)mn > (int16_t)v) mn = v;
+            if ((int16_t)mx < (int16_t)v) mx = v;
+            count++;
+        }
+    }
+    *out_min = (int)mn;
+    *out_max = (int)mx;
+    *out_count = count;
+}
