@@ -358,4 +358,8 @@ uint64_t cr_desc_get_triple(void *p, uint8_t sel);                       /* 0x18
 /* ---- batch 37: 9-tap triangular filter over the 9 lines of an n x 9 buffer -- */
 void     cr_tri9_filter(float *in, float *out, int n);                   /* 0x180043a50 */
 
+/* ---- batch 38: reflect-101-padded int16 FIR down each column -------------- */
+int      cr_fir_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
+                        int p4, int W, int L);                           /* 0x180030fc0 */
+
 #endif /* FPC_BEP_H */

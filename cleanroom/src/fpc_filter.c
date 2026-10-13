@@ -195,3 +195,51 @@ void cr_tri9_filter(float *in, float *out, int n)
         out[9 * (n - 1) + t] = acc;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180030fc0 (.isra.6) — reflect-101-padded int16 FIR down each column.
+ *
+ *   Args (ms_abi): rcx = out (int16*), rdx = in (int16*), r8 = coef (int16*),
+ *   r9d = p4 (kernel length request), [rsp+0x20] = W (row length / stride),
+ *   [rsp+0x28] = L (column length).
+ *
+ *   For each column c (0..W-1) the L samples buf[i] = in[c + i*W] are gathered
+ *   and correlated with the kernel:
+ *       K = clamp(p4, 0, L-1);  H = K >> 1;
+ *       out[c + j*W] = (int16)(( Σ_{k=0}^{K-1} coef[k]*buf[refl(j-H+k)]
+ *                                + 0x4000 ) >> 15)        for j = 0..L-1
+ *   with BORDER_REFLECT_101 padding: refl(i) = -i for i<0, 2*(L-1)-i for
+ *   i>=L, else i.  (The vendor splits this into a descending "left" pass, a
+ *   plain middle pass and a descending "right" pass; since the accumulation is
+ *   integer and order-independent, the closed form is bit-identical.)
+ *   The vendor uses a 256-short stack buffer, so L must be <= 256.
+ *   Returns 0; a non-positive W makes it a no-op.
+ * ------------------------------------------------------------------------ */
+int cr_fir_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
+                   int p4, int W, int L)
+{
+    int K = p4;
+    if (K < 0) K = 0;
+    if (K > L - 1) K = L - 1;
+    int H = K >> 1;
+
+    if (W <= 0)
+        return 0;
+
+    int16_t buf[256];
+    for (int c = 0; c < W; c++) {
+        for (int i = 0; i < L; i++)
+            buf[i] = in[c + i * W];
+        for (int j = 0; j < L; j++) {
+            uint32_t s = 0;
+            for (int k = 0; k < K; k++) {
+                int idx = j - H + k;
+                if (idx < 0) idx = -idx;
+                else if (idx >= L) idx = 2 * (L - 1) - idx;
+                s += (uint32_t)((int32_t)coef[k] * (int32_t)buf[idx]);
+            }
+            out[c + j * W] = (int16_t)((int32_t)(s + 0x4000u) >> 15);
+        }
+    }
+    return 0;
+}

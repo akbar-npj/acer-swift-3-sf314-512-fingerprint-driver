@@ -2705,6 +2705,33 @@ static void test_tri9_filter(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_tri9_filter\n");
 }
 
+/* ---- batch 38: reflect-101-padded int16 FIR down each column ------------ */
+static void test_fir_reflect(void)
+{
+    typedef int (WINAPI *v_i_pppiii)(int16_t *, const int16_t *,
+                                     const int16_t *, int, int, int);
+    v_i_pppiii v = (v_i_pppiii)fn_at(RVA(0x180030fc0));
+    begin("cr_fir_reflect");
+    int bad = g_fail;
+    enum { MAXW = 40, MAXL = 200 };
+    int16_t inv[MAXW * MAXL], coefv[MAXL], outv[MAXW * MAXL], outc[MAXW * MAXL];
+    for (int t = 0; t < 20000; t++) {
+        int W = 1 + (int)(rnd() % MAXW);
+        int L = 1 + (int)(rnd() % MAXL);
+        int p4 = (int)(rnd() % (L + 4)) - 2;      /* exercise the clamp */
+        for (int i = 0; i < W * L; i++) inv[i] = (int16_t)rnd();
+        for (int i = 0; i < L; i++) coefv[i] = (int16_t)rnd();
+        memset(outv, 0x5A, sizeof outv);
+        memset(outc, 0x5A, sizeof outc);
+        int rv = v(outv, inv, coefv, p4, W, L);
+        int rc = cr_fir_reflect(outc, inv, coefv, p4, W, L);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("out", (unsigned char *)outv, (unsigned char *)outc,
+                sizeof(int16_t) * W * L, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fir_reflect\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2855,6 +2882,8 @@ int main(int argc, char **argv)
     test_desc_getters();
     printf("\n== 9-tap triangular filter (n x 9) ==\n");
     test_tri9_filter();
+    printf("\n== reflect-101-padded column FIR ==\n");
+    test_fir_reflect();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
