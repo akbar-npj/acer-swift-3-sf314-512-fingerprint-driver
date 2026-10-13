@@ -126,4 +126,17 @@ uint64_t cr_copy_or_relu(void *dst, const void *src, int n, int mode);/* 0x18003
 void     cr_array_rotate(uint64_t *a, int n);                         /* 0x18001d7b0 */
 uint64_t cr_type_desc_getter(void *p, char type);                     /* 0x18003d8f0 */
 
+/* ---- batch 5: image copies / stats / affine ---------------------------- */
+uint64_t cr_image_copy_u8(cr_image *dst, const cr_image *src);        /* 0x1800308d0 */
+uint64_t cr_image_copy_u32(cr_image *dst, const cr_image *src);       /* 0x18000f600 */
+void     cr_image_copy_u16_shl(cr_image *dst, const cr_image *src,
+                               uint8_t shift);                        /* 0x18002ade0 */
+float    cr_masked_variance(const float *data, int rows, int cols,
+                            const uint8_t *const *mask);              /* 0x180037e70 */
+int      cr_read_quad(const int *p);                                  /* 0x1800469e0 */
+uint64_t cr_buffer_pixels_setup(void *p, const void *src, uint32_t len,
+                                int a, int b, int c);                 /* 0x1800491e0 */
+void     cr_affine_transform(float *out, const float *pts,
+                             const float *scores);                    /* 0x180014b30 */
+
 #endif /* FPC_BEP_H */

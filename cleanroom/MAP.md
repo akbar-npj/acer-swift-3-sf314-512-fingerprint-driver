@@ -77,10 +77,23 @@ The image descriptor layout (established from these functions):
 | `0x18001d7b0` | `fpc_bio_bep_sw23_38df1c2726` | `cr_array_rotate` | rotate the head of a u64 array about pivot `(n>>1)-1`. |
 | `0x18003d8f0` | `fpc_bio_bep_sw23_c9c1caf0a0.constprop.2` | `cr_type_desc_getter` | init a 32-byte descriptor; type 2 -> byte 0x10, type 4 -> 4, tag `0x1_00000019`; else 1. |
 
+### Batch 5 — image copies / stats / affine
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x1800308d0` | `fpc_bio_bep_sw23_901c599831.isra.1` | `cr_image_copy_u8` | copy the `w x h` byte block (each image's own stride `a` and origin `offx/offy`); returns `0x69` if `src->w/h != dst->w/h`, else 0. |
+| `0x18000f600` | `fpc_bio_bep_sw23_06c5524131` | `cr_image_copy_u32` | same, 32-bit elements (`movss` load/store, so also usable for floats); same `0x69` w/h check. |
+| `0x18002ade0` | `fpc_bio_bep_sw23_768fe83277` | `cr_image_copy_u16_shl` | copy `dst->w x dst->h` int16 elements, each shifted left by `shift & 0x1f`; no dimension check. |
+| `0x180037e70` | `fpc_bio_bep_sw23_aed252bf13` | `cr_masked_variance` | column-major `count*sumsq - sum^2` over samples whose mask byte (`(*mask)[i + j*rows]`) is 0; `rows<=0 -> 0`. |
+| `0x1800469e0` | `fpc_bio_bep_sw23_f3d41f1091` | `cr_read_quad` | big-endian 4-byte probe of an image-like descriptor (`+0 stride`, `+8 data`, `+0x10 A`, `+0x14 B`) at rows/cols `{A/3,2A/3} x {B/3,2B/3}`; returns -1 if NULL or the value is 0. |
+| `0x1800491e0` | `fpc_buffer_pixels_check_size` | `cr_buffer_pixels_setup` | validate `len` against capacity-0x18 (with signed-overflow guard), `memmove` into `+0x24`, then record `a,b,c` at `+0xc/+0x10/+0x14`, `a*b` at `+8`, `0x100000000` at `+0x18`, `(a*c<0?a*c+7:a*c)>>3` at `+0x20`. |
+| `0x180014b30` | `fpc_bio_bep_sw23_1cbe178998` | `cr_affine_transform` | pick `k` = first argmin of `scores[0..9)`, then `out[i] = pts[3k]*T[k][i] + pts[3k+1]*T[k][16+i] + pts[3k+2]` for `i<16`, using the 9x32 basis table at `0x18008ec40`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
 |---|---|---|
+| `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | returns static table pointers — needs the table contents. |
 | `0x18002aeb0` | `fpc_bio_bep_sw23_769acc1eef` | returns a pointer to the static table `DAT_180159ea0` (type 4) — needs the table contents. |
 | `0x180020860` | `fpc_bio_bep_sw23_46f04b866a` | static tables `DAT_180122980` (type 0xc), `DAT_1801598e0` (0xd). |
 | `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | static table `DAT_1801174e0` (type 6) + writes `0x100`. |

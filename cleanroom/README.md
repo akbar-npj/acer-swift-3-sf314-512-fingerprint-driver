@@ -68,6 +68,9 @@ cleanroom/
 ├── src/fpc_image.c       image-descriptor leaves
 ├── src/fpc_rect.c        rectangle fills (u8/u16/f32)
 ├── src/fpc_bitmap.c      bitmap clear/set/unpack
+├── src/fpc_copy.c        image copies (u8/u32/u16-shift)
+├── src/fpc_affine.c      table-driven affine transform
+├── src/fpc_stats.c       masked variance + big-endian quad probe
 ├── tools/difftest.c      differential test vs the vendor DLL
 ├── Makefile              make / make check
 ├── REACHABLE.md          inventory of all 355 reachable functions
@@ -100,6 +103,16 @@ cleanroom/
   being the 3rd arg in `r8d`.
 - **`maxss` is not `if (v <= 0) v = 0`.** `maxss xmm0, 0` returns `0.0` for NaN
   as well as for `v <= 0`; the faithful form is `(v > 0.0f) ? v : 0.0f`.
+- **Count the table rows from the *index range*, not the data you first see.**
+  `cr_affine_transform` scores `scores[0..9)`, so `k` ranges over 9 values and the
+  basis table at `0x18008ec40` is **9**x32 floats, not 8x32. Missing the 9th row
+  only breaks the ~1/9 of cases where `k==8`, which is easy to misread as a
+  rounding bug. The table also contains **signed zeros** (`-0.0`) that are
+  load-bearing for bit parity — transcribe them, never normalise to `0.0`.
+- **A "pointer to a mask" is dereferenced once, not indexed per row.**
+  `cr_masked_variance`'s 4th arg is a `const uint8_t **`: the vendor does
+  `mov rdx,[r9]` once and then walks a *flat* column-major byte array
+  `(*mask)[i + j*rows]`, not `mask[j][i]`.
 
 ## Progress
 
@@ -108,13 +121,14 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **45** (12.7% of functions, 3,744 B = 2.21% of bytes) |
+| rewritten + parity-verified | **52** (14.6% of functions, 4,992 B = 2.95% of bytes) |
 
-Four batches done so far:
+Five batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
 4. rect fills + bitmap ops + misc leaves (10 functions)
+5. image copies + masked variance + affine transform (7 functions)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

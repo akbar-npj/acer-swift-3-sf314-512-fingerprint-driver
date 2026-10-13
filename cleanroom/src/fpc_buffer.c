@@ -112,6 +112,53 @@ int cr_meta_put_u32(void *store, uint32_t key, uint32_t value, bool overwrite)
     return -1;
 }
 
+/* --- pixel buffer setup ------------------------------------------------ */
+
+/*
+ * 0x1800491e0 — initialise a pixel-buffer descriptor from a source block.
+ *
+ * `p` is the descriptor: +0x04 is its payload capacity.  The payload begins at
+ * +0x24.  The call copies `len` bytes of `src` into p+0x24 and records the
+ * geometry (a, b, c) supplied by the caller:
+ *     +0x08 = a*b          +0x0c = a          +0x10 = b
+ *     +0x14 = c            +0x18 = 0x100000000 (two u32: 0, 1)
+ *     +0x20 = (a*c < 0 ? a*c + 7 : a*c) >> 3
+ * Returns 0 on success, 0xffffffff if p is NULL or `len` does not fit the
+ * remaining capacity (including a signed-overflow guard on the capacity add).
+ */
+uint64_t cr_buffer_pixels_setup(void *p, const void *src, uint32_t len,
+                                int a, int b, int c)
+{
+    if (!p)
+        return 0xffffffffu;
+
+    int32_t cap = (int32_t)*(uint32_t *)((uint8_t *)p + 4) - 0x18;
+    int32_t l   = (int32_t)len;
+
+    if (l < 0)
+        return 0xffffffffu;
+    if (l > cap)
+        return 0xffffffffu;
+    if (l > (int32_t)((uint32_t)cap + (uint32_t)l))
+        return 0xffffffffu;
+
+    uint8_t *pb = (uint8_t *)p;
+    memmove(pb + 0x24, src, (size_t)len);
+
+    *(int32_t *)(pb + 0x0c) = a;
+    *(int32_t *)(pb + 0x10) = b;
+    *(int32_t *)(pb + 0x14) = c;
+    *(int32_t *)(pb + 0x08) = a * b;
+
+    int32_t ac = a * c;
+    if (ac < 0)
+        ac += 7;
+    *(int32_t *)(pb + 0x20) = ac >> 3;
+    *(uint64_t *)(pb + 0x18) = 0x100000000ull;
+
+    return 0;
+}
+
 /* --- image slot table -------------------------------------------------- *
  * 22 (0x16) slots of 8-byte pointers starting at +0x10.
  */

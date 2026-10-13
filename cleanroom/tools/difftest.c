@@ -274,6 +274,16 @@ typedef uint64_t (WINAPI *v_u64_ppii)(void *, const void *, int, int);
 typedef void     (WINAPI *v_v_pli)(uint64_t *, int);
 typedef uint64_t (WINAPI *v_u64_pc)(void *, char);
 
+/* batch 5 */
+typedef uint64_t (WINAPI *v_u64_pp)(void *, const void *);
+typedef void     (WINAPI *v_v_ppb)(void *, const void *, uint8_t);
+typedef float    (WINAPI *v_f_piipp)(const float *, int, int,
+                                     const uint8_t *const *);
+typedef int      (WINAPI *v_i_p)(const void *);
+typedef uint64_t (WINAPI *v_u64_ppuiii)(void *, const void *, uint32_t,
+                                        int, int, int);
+typedef void     (WINAPI *v_v_ppp)(float *, const float *, const float *);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -717,6 +727,156 @@ static void test_type_desc(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_type_desc_getter\n");
 }
 
+/* ---- batch 5: image copies / stats / affine ---------------------------- */
+
+/* 0x1800308d0 / 0x18000f600 / 0x18002ade0 — image copies.  The u8/u32 forms
+ * bail with 0x69 on a w/h mismatch; the u16 form shifts each element left. */
+static void test_image_copies(void)
+{
+    v_u64_pp v8  = (v_u64_pp) fn_at(RVA(0x1800308d0));
+    v_u64_pp v32 = (v_u64_pp) fn_at(RVA(0x18000f600));
+    v_v_ppb  v16 = (v_v_ppb)fn_at(RVA(0x18002ade0));
+    const char *nm[3] = { "cr_image_copy_u8", "cr_image_copy_u32",
+                          "cr_image_copy_u16_shl" };
+
+    for (int kind = 0; kind < 3; kind++) {
+        begin(nm[kind]);
+        int bad = g_fail;
+        int esz = (kind == 2) ? 2 : (kind == 1 ? 4 : 1);
+        for (int t = 0; t < 12000; t++) {
+            unsigned char dv[0x20], dc[0x20], sv[0x20], sc[0x20];
+            unsigned char pv[8192], pc[8192], qv[8192], qc[8192];
+            int dstride = (int)(rnd() % 48u) + 1;
+            int sstride = (int)(rnd() % 48u) + 1;
+            int dw = (int)(rnd() % 8u), dh = (int)(rnd() % 8u);
+            int sw = dw, sh = dh;
+            if (kind != 2 && (rnd() % 4u) == 0) {       /* force mismatch */
+                sw = dw + (int)(rnd() % 3u) - 1;
+                sh = dh + (int)(rnd() % 3u) - 1;
+            }
+            int dox = (int)(rnd() % 4u), doy = (int)(rnd() % 4u);
+            int sox = (int)(rnd() % 4u), soy = (int)(rnd() % 4u);
+            for (size_t i = 0; i < sizeof pv; i++) {
+                unsigned char b = (unsigned char)rnd();
+                pv[i] = b; pc[i] = b; qv[i] = b; qc[i] = b;
+            }
+            mk_image(dv, pv, dstride, dw, dh, dox, doy);
+            mk_image(dc, pc, dstride, dw, dh, dox, doy);
+            mk_image(sv, qv, sstride, sw, sh, sox, soy);
+            mk_image(sc, qc, sstride, sw, sh, sox, soy);
+
+            uint8_t shift = (uint8_t)rnd();
+            uint64_t rv, rc;
+            if (kind == 0)      { rv = v8 (dv, sv);            rc = cr_image_copy_u8 ((cr_image *)dc, (const cr_image *)sc); }
+            else if (kind == 1) { rv = v32(dv, sv);            rc = cr_image_copy_u32((cr_image *)dc, (const cr_image *)sc); }
+            else                { v16(dv, sv, shift); rv = 0;  cr_image_copy_u16_shl((cr_image *)dc, (const cr_image *)sc, shift); rc = 0; }
+            if (kind != 2 && rv != rc) mismatch("cp-ret", (u32)t, rv, rc);
+            cmp_buf("cp-dst", pv, pc, sizeof pv, (u32)t);
+            cmp_buf("cp-src", qv, qc, sizeof qv, (u32)t); /* src must be untouched */
+        }
+        if (g_fail == bad) end(); else printf("  FAIL %s\n", nm[kind]);
+    }
+}
+
+/* 0x180037e70 — count*sumsq - sum^2 over the samples a mask selects. */
+static void test_masked_variance(void)
+{
+    v_f_piipp v = (v_f_piipp)fn_at(RVA(0x180037e70));
+    begin("cr_masked_variance");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        float data[512];
+        unsigned char m[512];
+        int rows = (int)(rnd() % 20u) - 2;      /* sometimes <= 0 */
+        int cols = (int)(rnd() % 20u);
+        if (rows > 20) rows = 20;
+        for (int i = 0; i < 512; i++) {
+            data[i] = cr_u2f(rnd());
+            m[i] = (unsigned char)((rnd() % 3u == 0) ? 0 : (rnd() & 0xff));
+        }
+        const unsigned char *mp = m;
+        float rv = v(data, rows, cols, &mp);
+        float rc = cr_masked_variance(data, rows, cols, &mp);
+        if (cr_f2u(rv) != cr_f2u(rc))
+            mismatch("var", (u32)t, cr_f2u(rv), cr_f2u(rc));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_variance\n");
+}
+
+/* 0x1800469e0 — big-endian 4-byte probe of an image-like descriptor. */
+static void test_read_quad(void)
+{
+    v_i_p v = (v_i_p)fn_at(RVA(0x1800469e0));
+    begin("cr_read_quad");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char d[0x20], pix[4096];
+        for (size_t i = 0; i < sizeof pix; i++) pix[i] = (unsigned char)rnd();
+        int stride = (int)(rnd() % 40u) + 1;
+        int A = (int)(rnd() % 30u);
+        int B = (int)(rnd() % 30u);
+        int isnull = (rnd() % 16u) == 0;
+        memset(d, 0, sizeof d);
+        *(int   *)(d + 0x00) = stride;
+        *(void **)(d + 0x08) = pix;
+        *(int   *)(d + 0x10) = A;
+        *(int   *)(d + 0x14) = B;
+        int rv = v(isnull ? NULL : d);
+        int rc = cr_read_quad(isnull ? NULL : (const int *)d);
+        if (rv != rc) mismatch(isnull ? "quad-null" : "quad",
+                               (u32)t, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_read_quad\n");
+}
+
+/* 0x1800491e0 — pixel-buffer descriptor init (6 args; 5th/6th on the stack). */
+static void test_buffer_pixels_setup(void)
+{
+    v_u64_ppuiii v = (v_u64_ppuiii)fn_at(RVA(0x1800491e0));
+    begin("cr_buffer_pixels_setup");
+    int bad = g_fail;
+    for (int t = 0; t < 12000; t++) {
+        unsigned char pv[1024], pc[1024], src[256];
+        for (size_t i = 0; i < sizeof src; i++) src[i] = (unsigned char)rnd();
+        uint32_t cap = (rnd() % 200u) + 8u;
+        uint32_t len = rnd() % 260u;
+        int a = (int)(rnd() % 40u) - 10;
+        int b = (int)(rnd() % 40u) - 10;
+        int c = (int)(rnd() % 40u) - 10;
+        memset(pv, 0xA5, sizeof pv); memset(pc, 0xA5, sizeof pc);
+        *(uint32_t *)(pv + 4) = cap;
+        *(uint32_t *)(pc + 4) = cap;
+        int isnull = (rnd() % 16u) == 0;
+
+        uint64_t rv = v(isnull ? NULL : pv, src, len, a, b, c);
+        uint64_t rc = cr_buffer_pixels_setup(isnull ? NULL : pc, src, len, a, b, c);
+        if (rv != rc) mismatch("bps-ret", (u32)t, rv, rc);
+        if (!isnull) cmp_buf("bps", pv, pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_buffer_pixels_setup\n");
+}
+
+/* 0x180014b30 — table-driven affine transform (picks the min score). */
+static void test_affine_transform(void)
+{
+    v_v_ppp v = (v_v_ppp)fn_at(RVA(0x180014b30));
+    begin("cr_affine_transform");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        float pts[27], scores[9];
+        float ov[16], oc[16];
+        for (int i = 0; i < 27; i++) pts[i] = cr_u2f(rnd());
+        for (int i = 0; i < 9; i++)  scores[i] = cr_u2f(rnd());
+        if ((rnd() % 8u) == 0) scores[rnd() % 9u] = 0.0f;  /* force ties */
+        memset(ov, 0x3F, sizeof ov); memset(oc, 0x3F, sizeof oc);
+        v(ov, pts, scores);
+        cr_affine_transform(oc, pts, scores);
+        cmp_buf("aff", (unsigned char *)ov, (unsigned char *)oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_affine_transform\n");
+}
+
+
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
  * the pixel buffer. */
@@ -921,6 +1081,13 @@ int main(int argc, char **argv)
     test_copy_or_relu();
     test_array_rotate();
     test_type_desc();
+
+    printf("\n== image copies / stats / affine ==\n");
+    test_image_copies();
+    test_masked_variance();
+    test_read_quad();
+    test_buffer_pixels_setup();
+    test_affine_transform();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **45** (12.7% of funcs, 3744 B = 2.21% of bytes) |
+| **rewritten + parity-verified** | **52** (14.6% of funcs, 4992 B = 2.95% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -67,7 +67,14 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 43 | `cr_copy_or_relu` | `0x180030270` | `fpc_bio_bep_sw23_8ca6f25abc` | 128 | **done** |
 | 44 | `cr_array_rotate` | `0x18001d7b0` | `fpc_bio_bep_sw23_38df1c2726` | 112 | **done** |
 | 45 | `cr_type_desc_getter` | `0x18003d8f0` | `fpc_bio_bep_sw23_c9c1caf0a0.constprop.2` | 112 | **done** |
-| … | 310 more | | | | pending |
+| 46 | `cr_buffer_pixels_setup` | `0x1800491e0` | `fpc_buffer_pixels_check_size` | 144 | **done** |
+| 47 | `cr_image_copy_u8` | `0x1800308d0` | `fpc_bio_bep_sw23_901c599831.isra.1` | 208 | **done** |
+| 48 | `cr_image_copy_u32` | `0x18000f600` | `fpc_bio_bep_sw23_06c5524131` | 208 | **done** |
+| 49 | `cr_image_copy_u16_shl` | `0x18002ade0` | `fpc_bio_bep_sw23_768fe83277` | 208 | **done** |
+| 50 | `cr_masked_variance` | `0x180037e70` | `fpc_bio_bep_sw23_aed252bf13` | 160 | **done** |
+| 51 | `cr_read_quad` | `0x1800469e0` | `fpc_bio_bep_sw23_f3d41f1091` | 160 | **done** |
+| 52 | `cr_affine_transform` | `0x180014b30` | `fpc_bio_bep_sw23_1cbe178998` | 160 | **done** |
+| … | 303 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 
@@ -132,15 +139,15 @@ tested in isolation. Sorted by size (smallest first).
 | `0x180030270` | `fpc_bio_bep_sw23_8ca6f25abc` | 128 | 3 |  **done** |
 | `0x180041cc0` | `fpc_bio_bep_sw23_e285f0085a` | 128 | 1 |  **done** |
 | `0x180003080` | `FpcSin` | 144 | 7 | **done** |
-| `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | 144 | 1 |  |
-| `0x1800491e0` | `fpc_buffer_pixels_check_size` | 144 | 1 |  |
+| `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | 144 | 1 | deferred (returns static table pointers) |
+| `0x1800491e0` | `fpc_buffer_pixels_check_size` | 144 | 1 | **done** |
 | `0x18004b670` | `fpc_metadata_put_uint16` | 144 | 1 | **done** |
-| `0x180014b30` | `fpc_bio_bep_sw23_1cbe178998` | 160 | 1 |  |
-| `0x180037e70` | `fpc_bio_bep_sw23_aed252bf13` | 160 | 1 |  |
-| `0x1800469e0` | `fpc_bio_bep_sw23_f3d41f1091` | 160 | 1 |  |
-| `0x18000f600` | `fpc_bio_bep_sw23_06c5524131` | 208 | 1 |  |
-| `0x18002ade0` | `fpc_bio_bep_sw23_768fe83277` | 208 | 1 |  |
-| `0x1800308d0` | `fpc_bio_bep_sw23_901c599831.isra.1` | 208 | 4 |  |
+| `0x180014b30` | `fpc_bio_bep_sw23_1cbe178998` | 160 | 1 | **done** |
+| `0x180037e70` | `fpc_bio_bep_sw23_aed252bf13` | 160 | 1 | **done** |
+| `0x1800469e0` | `fpc_bio_bep_sw23_f3d41f1091` | 160 | 1 | **done** |
+| `0x18000f600` | `fpc_bio_bep_sw23_06c5524131` | 208 | 1 | **done** |
+| `0x18002ade0` | `fpc_bio_bep_sw23_768fe83277` | 208 | 1 | **done** |
+| `0x1800308d0` | `fpc_bio_bep_sw23_901c599831.isra.1` | 208 | 4 | **done** |
 | `0x18000fb20` | `fpc_bio_bep_sw23_097e23479a` | 256 | 1 |  |
 | `0x180020130` | `fpc_bio_bep_sw23_45d26c97de` | 256 | 2 |  |
 | `0x1800309a0` | `fpc_bio_bep_sw23_90875da224` | 256 | 1 |  |
