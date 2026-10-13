@@ -113,6 +113,14 @@ The image descriptor layout (established from these functions):
 | `0x180017840` | `fpc_bio_bep_sw23_253a6224d6` | `cr_masked_minmax_f32` | float twin of `cr_masked_minmax_s16`: min/max/count of `img->h*img->w` contiguous floats selected by `(mask[i] & and_mask) != 0`; defaults `+FLT_MAX / -FLT_MAX`; SSE `minss`/`maxss` (NaN → sample). |
 | `0x1800334c0` | `fpc_bio_bep_sw23_9a9c3581cf` | `cr_i16_to_f32_scaled` | convert int16 image → float image, scale `= 1/(float)(1<<(shift&31))` for `shift>0`, `1.0f` for `shift==0`, `(float)(1<<((-shift)&31))` for `shift<0`; each image's own stride/origin, `dst`'s w/h. |
 
+### Batch 9 — 304-byte leaves
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18001f790` | `fpc_bio_bep_sw23_4172e0ed57` | `cr_bilinear_sample_u8` | Q15 bilinear resample of a byte image along the affine path `x=xcoef*idx+xbase+i*xstep`, `y=ycoef*idx+ybase+i*ystep` (see `cr_sampler`); weights `((0x8000-fx)*(0x8000-fy))>>15` etc., result `(Σ w*p)>>15`; honours the image stride/origin. |
+| `0x18002cc00` | `fpc_bio_bep_sw23_7b12c18a30` | `cr_box_blur_h_f32` | if `win` even, copy `nrows*ncols` floats; else horizontal box blur of width `win` (clamp-to-edge, `lo=-(win-1)/2`), each output `= Σ win clamped samples / (float)win`; column-major (`stride==nrows`). `*dst_ref` is the dest pointer. |
+| `0x180037330` | `fpc_bio_bep_sw23_ab8df24280` | `cr_masked_box_sum` | sum+count of masked pixels in the centred `(2r+1)²` box (`r=win/2`) around linear index `idx` (`cy=idx/W`, `cx=idx%W`), clamped to the image; `*out_sum += img[y*W+x]` and `*out_count++` when `mask[y*W+x] & and_mask`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

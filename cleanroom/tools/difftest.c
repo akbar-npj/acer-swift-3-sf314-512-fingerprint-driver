@@ -298,6 +298,11 @@ typedef void     (WINAPI *v_v_pppi)(float *, float *, const void *, int);
 typedef void     (WINAPI *v_v_pppppb)(void *, void *, void *, const void *,
                                       const void *, uint8_t);
 
+/* batch 9 */
+typedef void     (WINAPI *v_v_ppiii)(void *, const void *, int, int, int);
+typedef void     (WINAPI *v_v_ppppbii)(void *, void *, const void *, const void *,
+                                       uint8_t, int, int);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -1134,6 +1139,101 @@ static void test_i16_to_f32_scaled(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_i16_to_f32_scaled\n");
 }
 
+/* ---- batch 9: 304-byte leaves ------------------------------------------ */
+
+/* 0x18001f790 — Q15 bilinear resample of a byte image along an affine path. */
+static void test_bilinear_sample_u8(void)
+{
+    v_v_pppii v = (v_v_pppii)fn_at(RVA(0x18001f790));
+    begin("cr_bilinear_sample_u8");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char iv[0x20], ic[0x20];
+        uint8_t pool[8192];
+        uint8_t ov[64], oc[64];
+        for (size_t i = 0; i < sizeof pool; i++) pool[i] = (uint8_t)rnd();
+        int stride = (int)(rnd() % 20u) + 1;
+        int w = (int)(rnd() % 11u) + 2;
+        int h = (int)(rnd() % 11u) + 2;
+        int offx = (int)(rnd() % 5u), offy = (int)(rnd() % 5u);
+        uint8_t *data = pool + 4096;      /* margin so negative coords stay in-bounds */
+        int32_t s[6];
+        int idx = (int)(rnd() % 5u) - 2;
+        s[0] = (int32_t)(rnd() % 0x8001u) - 0x4000;                       /* xstep */
+        s[1] = (int32_t)(rnd() % 3u) - 1;                                 /* xcoef */
+        s[2] = (int32_t)(rnd() % ((uint32_t)(w - 2) * 0x8000u + 1u));     /* xbase */
+        s[3] = (int32_t)(rnd() % 0x8001u) - 0x4000;                       /* ystep */
+        s[4] = (int32_t)(rnd() % 3u) - 1;                                 /* ycoef */
+        s[5] = (int32_t)(rnd() % ((uint32_t)(h - 2) * 0x8000u + 1u));     /* ybase */
+        int n = (int)(rnd() % 4u) + 1;
+        mk_image(iv, data, stride, w, h, offx, offy);
+        mk_image(ic, data, stride, w, h, offx, offy);
+        memset(ov, 0xAA, sizeof ov); memset(oc, 0xAA, sizeof oc);
+        v(ov, iv, s, n, idx);
+        cr_bilinear_sample_u8(oc, (const cr_image *)ic, (const cr_sampler *)s, n, idx);
+        cmp_buf("bilin", ov, oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bilinear_sample_u8\n");
+}
+
+/* 0x18002cc00 — horizontal box blur (even window => plain copy). */
+static void test_box_blur_h_f32(void)
+{
+    v_v_ppiii v = (v_v_ppiii)fn_at(RVA(0x18002cc00));
+    static const int wins[] = { 0, 1, 2, 3, 4, 5, 6, 7, 9 };
+    begin("cr_box_blur_h_f32");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        float src[256], dv[256], dc[256];
+        for (int i = 0; i < 256; i++) src[i] = cr_u2f(rnd());
+        for (int i = 0; i < 256; i++) {
+            uint32_t u = (uint32_t)rnd();
+            memcpy(&dv[i], &u, 4);
+            dc[i] = dv[i];
+        }
+        int nrows = (int)(rnd() % 9u);
+        int ncols = (int)(rnd() % 9u);
+        int win = wins[rnd() % (sizeof wins / sizeof wins[0])];
+        float *pv = dv, *pc = dc;
+        v(&pv, src, nrows, ncols, win);
+        cr_box_blur_h_f32(&pc, src, nrows, ncols, win);
+        cmp_buf("blur", (unsigned char *)dv, (unsigned char *)dc, sizeof dv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_box_blur_h_f32\n");
+}
+
+/* 0x180037330 — masked sum/count of a centred box around a linear pixel index. */
+static void test_masked_box_sum(void)
+{
+    v_v_ppppbii v = (v_v_ppppbii)fn_at(RVA(0x180037330));
+    begin("cr_masked_box_sum");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char iv[0x20], ic[0x20], mv[0x20], mc[0x20];
+        float d[256];
+        uint8_t m[256];
+        for (int i = 0; i < 256; i++) d[i] = cr_u2f(rnd());
+        for (int i = 0; i < 256; i++) m[i] = (uint8_t)rnd();
+        int W = (int)(rnd() % 16u) + 1;   /* > 0: the vendor does a signed /W */
+        int H = (int)(rnd() % 16u);
+        int win = (int)(rnd() % 10u);
+        int idx = (int)(rnd() % 400u) - 50;
+        uint8_t am = (uint8_t)rnd();
+        mk_image(iv, d, W, W, H, 0, 0);
+        mk_image(ic, d, W, W, H, 0, 0);
+        mk_image(mv, m, W, W, H, 0, 0);
+        mk_image(mc, m, W, W, H, 0, 0);
+        int cv = -1, cc = -1;
+        float sv = 0, sc = 0;
+        v(&cv, &sv, iv, mv, am, win, idx);
+        cr_masked_box_sum(&cc, &sc, (const cr_image *)ic, (const cr_image *)mc,
+                          am, win, idx);
+        if (cv != cc || cr_f2u(sv) != cr_f2u(sc))
+            mismatch("boxsum", (u32)t, (u32)cv, (u32)cc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_box_sum\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1361,6 +1461,11 @@ int main(int argc, char **argv)
     printf("\n== 288-byte leaves ==\n");
     test_masked_minmax_f32();
     test_i16_to_f32_scaled();
+
+    printf("\n== 304-byte leaves ==\n");
+    test_bilinear_sample_u8();
+    test_box_blur_h_f32();
+    test_masked_box_sum();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

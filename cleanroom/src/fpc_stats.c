@@ -268,3 +268,50 @@ void cr_masked_minmax_f32(float *out_min, float *out_max, int *out_count,
     *out_max = mx;
     *out_count = count;
 }
+
+/* 0x180037330 — sum + count of the masked pixels in a centred square box.
+ *
+ * `idx` is a linear pixel index into an image `W x H` (row-major, stride W):
+ * cy = idx / W, cx = idx % W (signed).  The box is [cy-r, cy+r] x [cx-r, cx+r]
+ * with r = win/2, clamped to the image; if it is empty nothing happens.  For
+ * every pixel in the box with (mask[y*W+x] & and_mask) != 0 the float sample
+ * img[y*W+x] is added to *out_sum and *out_count is incremented.  Both outputs
+ * are zeroed up front.  (img and mask share the same W-stride pixel layout.) */
+void cr_masked_box_sum(int *out_count, float *out_sum,
+                       const cr_image *img, const cr_image *mask,
+                       uint8_t and_mask, int win, int idx)
+{
+    int W = img->w;
+    int H = img->h;
+    const float   *data = (const float *)img->data;
+    const uint8_t *mdat = (const uint8_t *)mask->data;
+
+    *out_count = 0;
+    *out_sum = 0.0f;
+
+    int r  = win / 2;
+    int cy = idx / W;
+    int cx = idx % W;
+
+    int y0 = cy - r; if (y0 < 0) y0 = 0;
+    int x0 = cx - r; if (x0 < 0) x0 = 0;
+    int y1 = cy + r; if (y1 > H - 1) y1 = H - 1;
+    int x1 = cx + r; if (x1 > W - 1) x1 = W - 1;
+
+    if (y0 > y1)
+        return;
+
+    for (int y = y0; y <= y1; y++) {
+        if (x0 > x1)
+            continue;
+        int yw = y * W;
+        const float   *frow = data + yw;
+        const uint8_t *mrow = mdat + yw;
+        for (int x = x0; x <= x1; x++) {
+            if (mrow[x] & and_mask) {
+                *out_sum += frow[x];
+                (*out_count)++;
+            }
+        }
+    }
+}

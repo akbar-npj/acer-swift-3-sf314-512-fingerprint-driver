@@ -49,3 +49,45 @@ void cr_vfir4_u8(uint8_t *out, const uint8_t *in, const int16_t *coeff,
         out += 4;
     }
 }
+
+/* 0x18002cc00 — horizontal box blur of a float image, or a plain copy when the
+ * window width `win` is even.  `*dst_ref` is the destination float buffer; `src`
+ * is a float image with `nrows` rows and `ncols` columns stored column-major
+ * (column stride == nrows).  For odd `win`, each output pixel is the mean of
+ * `win` horizontally-consecutive input pixels centred on it, with clamp-to-edge
+ * (`lo = -(win-1)/2`; sample columns clamp(j) into [0,ncols-1]).  The mean is a
+ * running float sum divided once by (float)win. */
+void cr_box_blur_h_f32(void *dst_ref, const float *src, int nrows, int ncols,
+                       int win)
+{
+    float *dst = *(float **)dst_ref;
+
+    if (!(win & 1)) {
+        int total = nrows * ncols;
+        if (total > 0)
+            for (int i = 0; i < total; i++)
+                dst[i] = src[i];
+        return;
+    }
+
+    if (nrows <= 0)
+        return;
+
+    int lo = -((win - 1) / 2);   /* C truncation matches the vendor's signed /2 */
+    int last = ncols - 1;
+
+    for (int i = 0; i < nrows; i++) {
+        if (ncols <= 0)
+            continue;
+        for (int j = lo; j < lo + ncols; j++) {
+            float sum = 0.0f;
+            for (int k = j; k != j + win; k++) {
+                int c = k;
+                if (c < 0) c = 0;
+                if (c > last) c = last;
+                sum += src[c * nrows + i];
+            }
+            dst[(j - lo) * nrows + i] = sum / (float)win;
+        }
+    }
+}

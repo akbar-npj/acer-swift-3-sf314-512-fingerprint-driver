@@ -165,4 +165,19 @@ void     cr_masked_minmax_f32(float *out_min, float *out_max, int *out_count,
 void     cr_i16_to_f32_scaled(cr_image *dst, const cr_image *src,
                               int shift);                             /* 0x1800334c0 */
 
+/* ---- batch 9: 304-byte leaves ------------------------------------------ */
+/* affine Q15 sampler parameters (six consecutive int32 fields, 24 bytes) */
+typedef struct {
+    int32_t xstep, xcoef, xbase;   /* +0x00 x(i) = xcoef*idx + xbase + i*xstep */
+    int32_t ystep, ycoef, ybase;   /* +0x0c y(i) = ycoef*idx + ybase + i*ystep */
+} cr_sampler;
+
+void     cr_bilinear_sample_u8(uint8_t *out, const cr_image *img,
+                               const cr_sampler *s, int n, int idx); /* 0x18001f790 */
+void     cr_box_blur_h_f32(void *dst_ref, const float *src, int nrows,
+                           int ncols, int win);                      /* 0x18002cc00 */
+void     cr_masked_box_sum(int *out_count, float *out_sum,
+                           const cr_image *img, const cr_image *mask,
+                           uint8_t and_mask, int win, int idx);      /* 0x180037330 */
+
 #endif /* FPC_BEP_H */
