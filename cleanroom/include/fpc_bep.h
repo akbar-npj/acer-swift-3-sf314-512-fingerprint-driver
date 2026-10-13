@@ -385,4 +385,8 @@ void     cr_line_orient_fit(float *samples, int px, int py,
 void     cr_vfir7_cols(int16_t *out, const int16_t *in, const int16_t *coef,
                        int n, int sel);                                  /* 0x1800433b0 */
 
+/* ---- batch 45: separable 11x11 int16 FIR, one output row ------------------ */
+void     cr_sep11_row(int16_t *out, const uint8_t *in, const int16_t *coef,
+                      int w, int s);                                     /* 0x18002e6a0 */
+
 #endif /* FPC_BEP_H */

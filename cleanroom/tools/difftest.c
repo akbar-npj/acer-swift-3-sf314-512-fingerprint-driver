@@ -2967,6 +2967,33 @@ static void test_vfir7_cols(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_vfir7_cols\n");
 }
 
+/* ---- batch 45: separable 11x11 int16 FIR, one output row ---------------- */
+static void test_sep11_row(void)
+{
+    typedef void (WINAPI *v_v_pupii)(int16_t *, const uint8_t *,
+                                     const int16_t *, int, int);
+    v_v_pupii v = (v_v_pupii)fn_at(RVA(0x18002e6a0));
+    begin("cr_sep11_row");
+    int bad = g_fail;
+    enum { MAXW = 40, MAXS = 8, PAD = 5 * MAXS + 16, BUF = PAD + MAXW + 64 };
+    static uint8_t inbuf[BUF];
+    static int16_t coefv[11], outv[128], outc[128];
+    for (int t = 0; t < 20000; t++) {
+        int w = (int)(rnd() % (MAXW + 1));
+        int s = 1 + (int)(rnd() % MAXS);
+        const uint8_t *in = inbuf + PAD;   /* pad absorbs negative indices */
+        for (int i = 0; i < 11; i++) coefv[i] = (int16_t)rnd();
+        for (int i = 0; i < BUF; i++) inbuf[i] = (uint8_t)rnd();
+        memset(outv, 0x5A, sizeof outv);
+        memset(outc, 0x5A, sizeof outc);
+        v(outv, in, coefv, w, s);
+        cr_sep11_row(outc, in, coefv, w, s);
+        cmp_buf("out", (unsigned char *)outv, (unsigned char *)outc,
+                sizeof(int16_t) * (w + 10), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_sep11_row\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3216,6 +3243,8 @@ int main(int argc, char **argv)
     test_line_orient_fit();
     printf("\n== fixed 7-tap reflect-101 column FIR ==\n");
     test_vfir7_cols();
+    printf("\n== separable 11x11 int16 FIR (one row) ==\n");
+    test_sep11_row();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

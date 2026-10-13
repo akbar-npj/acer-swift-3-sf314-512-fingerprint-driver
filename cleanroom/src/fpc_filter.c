@@ -378,6 +378,54 @@ void cr_vfir7_cols(int16_t *out, const int16_t *in, const int16_t *coef,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x18002e6a0 — separable 11x11 int16 FIR, one output row.
+ *
+ *   Args (ms_abi): rcx = out (int16*), rdx = in (uint8_t*), r8 = coef (int16*),
+ *   r9d = w (output width), [rsp+0x20] = s (input row stride in bytes).
+ *
+ *   Two passes, with the (w+10)-short intermediate held in `out` in place:
+ *     pass 1 (vertical):   mid[j] = (Σ_{d=-5..5} K[j][d]*in[(j-5)+d*s]) >> 12
+ *     pass 2 (horizontal): out[i] = (Σ_{k=0..10} coef[k]*mid[i+k]) >> 12
+ *   for j = 0..w+9 and i = 0..w-1.  `in` is read as *bytes* (zero-extended).
+ *
+ *   Pass 1 has two code paths: the 4-wide-unrolled bulk (j < (w+10)&~3) uses
+ *   the *symmetric* kernel K[d] = coef[5-|d|] (the vendor only reads
+ *   coef[0..5] there), while the scalar tail (j >= (w+10)&~3) reads the full
+ *   11-tap coef[0..10] with K[d] = coef[d+5].  The two coincide for a symmetric
+ *   kernel; the rewrite reproduces both so arbitrary coefficients match.
+ *   Pass 2 accumulates in wrapping 32-bit (coef*mid can exceed int32) and there
+ *   is no rounding bias — just an arithmetic >>12, in both passes.
+ * ------------------------------------------------------------------------ */
+void cr_sep11_row(int16_t *out, const uint8_t *in, const int16_t *coef,
+                  int w, int s)
+{
+    int bulk = (w + 10) & ~3;
+    if (bulk > 0) {
+        for (int j = 0; j < bulk; j++) {
+            int acc = 0;
+            for (int d = -5; d <= 5; d++)
+                acc += (int)coef[5 - (d < 0 ? -d : d)]
+                       * (int)in[(j - 5) + d * s];
+            out[j] = (int16_t)(acc >> 12);
+        }
+    }
+    if (bulk <= w + 9) {
+        for (int j = bulk; j <= w + 9; j++) {
+            int acc = 0;
+            for (int k = 0; k <= 10; k++)
+                acc += (int)coef[k] * (int)in[(j - 5) + (k - 5) * s];
+            out[j] = (int16_t)(acc >> 12);
+        }
+    }
+    for (int i = 0; i < w; i++) {
+        uint32_t acc = 0;
+        for (int k = 0; k <= 10; k++)
+            acc += (uint32_t)((int32_t)coef[k] * (int32_t)out[i + k]);
+        out[i] = (int16_t)((int32_t)acc >> 12);
+    }
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x18002c600 — in-place separable box mean over a float image.
  *
  *   Args (ms_abi): rcx = dst descriptor, rdx = src descriptor, r8d = mode.
