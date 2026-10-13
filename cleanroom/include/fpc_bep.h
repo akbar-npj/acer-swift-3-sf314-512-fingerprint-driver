@@ -370,4 +370,7 @@ int      cr_fir_reflect_rows(int16_t *out, const int16_t *in,
 void     cr_fir7_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
                          int W, int R);                                  /* 0x180033b40 */
 
+/* ---- batch 41: in-place separable box mean (3x3 / 5x5) on a float image --- */
+int      cr_box_mean_f32(void *img1, void *img2, int mode);              /* 0x18002c600 */
+
 #endif /* FPC_BEP_H */

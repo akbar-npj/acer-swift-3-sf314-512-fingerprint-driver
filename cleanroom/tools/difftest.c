@@ -2791,6 +2791,44 @@ static void test_fir7_reflect(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir7_reflect\n");
 }
 
+/* ---- batch 41: in-place separable box mean (3x3 / 5x5) ------------------ */
+static void test_box_mean(void)
+{
+    typedef int (WINAPI *v_i_pppi)(void *, void *, int);
+    v_i_pppi v = (v_i_pppi)fn_at(RVA(0x18002c600));
+    begin("cr_box_mean_f32");
+    int bad = g_fail;
+    enum { MAXW = 40, MAXH = 40, MAXP = MAXW * MAXH };
+    struct desc { int a, b; float *data; int w, h; } vd, vs, cd, cs;
+    static float vin[MAXP], cin[MAXP], ov[MAXP], oc[MAXP];
+    for (int t = 0; t < 20000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int mode = (rnd() & 1) ? 3 : 5;
+        if (t % 3 == 0) { w &= ~1; h &= ~1; }   /* force the valid domain */
+        if (w < 1) w = 2;
+        if (h < 1) h = 2;
+        for (int i = 0; i < MAXP; i++)
+            vin[i] = cin[i] = (float)(int)(rnd() % 2001) - 1000.0f;
+        memset(ov, 0x5A, sizeof ov);
+        memset(oc, 0x5A, sizeof oc);
+        int inplace = !(t % 4 == 1);            /* mostly in-place (real use) */
+        vd.a = vs.a = cd.a = cs.a = 0;
+        vd.b = vs.b = cd.b = cs.b = 0;
+        vd.w = vs.w = cd.w = cs.w = w;
+        vd.h = vs.h = cd.h = cs.h = h;
+        vs.data = vin;  cs.data = cin;
+        vd.data = inplace ? vin : ov;
+        cd.data = inplace ? cin : oc;
+        int rv = v(&vd, &vs, mode);
+        int rc = cr_box_mean_f32(&cd, &cs, mode);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("out", (unsigned char *)vd.data, (unsigned char *)cd.data,
+                sizeof(float) * w * h, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_box_mean_f32\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2832,6 +2870,36 @@ int main(int argc, char **argv)
                 printf("]");
             }
             printf("\n");
+        }
+        return 0;
+    }
+
+    if (argc > 2 && strcmp(argv[2], "probe_box") == 0) {
+        /* Impulse response of 0x18002c600 (in-place separable box mean).
+         * Struct: { int a,b; float *data@8; int w@0x10; int h@0x14; } */
+        struct { int a, b; float *data; int w, h; } img;
+        typedef int (WINAPI *v_i_pppi)(void *, void *, int);
+        v_i_pppi v = (v_i_pppi)fn_at(RVA(0x18002c600));
+        enum { WW = 8, HH = 8 };
+        static float buf[WW * HH];
+        static const int pts[][2] = {{0,0},{0,1},{1,0},{1,1},{2,2},{3,3},{5,5},{6,6},{7,7}};
+        for (int mode = 3; mode <= 5; mode += 2) {
+            for (int p = 0; p < (int)(sizeof pts / sizeof pts[0]); p++) {
+                int oy = pts[p][0], ox = pts[p][1];
+                {
+                    for (int i = 0; i < WW * HH; i++) buf[i] = 0.0f;
+                    buf[oy * WW + ox] = 1.0f;
+                    img.a = 0; img.b = 0; img.data = buf; img.w = WW; img.h = HH;
+                    int r = v(&img, &img, mode);
+                    printf("mode=%d delta(%d,%d) ret=%d:\n", mode, oy, ox, r);
+                    for (int y = 0; y < HH; y++) {
+                        printf("   ");
+                        for (int x = 0; x < WW; x++)
+                            printf(" %8.5f", buf[y * WW + x]);
+                        printf("\n");
+                    }
+                }
+            }
         }
         return 0;
     }
@@ -2971,6 +3039,8 @@ int main(int argc, char **argv)
     test_fir_reflect_rows();
     printf("\n== fixed 7-tap reflect-101 row FIR ==\n");
     test_fir7_reflect();
+    printf("\n== in-place separable box mean (3x3 / 5x5) ==\n");
+    test_box_mean();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

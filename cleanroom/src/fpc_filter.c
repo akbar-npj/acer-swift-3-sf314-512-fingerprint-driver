@@ -15,6 +15,14 @@
  * ((n-4)>>2)+1, so trailing columns that do not fill a group are left alone.
  */
 #include "fpc_bep.h"
+#include <string.h>
+
+static float f32_from_bits(uint32_t b)
+{
+    float f;
+    memcpy(&f, &b, sizeof f);
+    return f;
+}
 
 void cr_vfir4_u8(uint8_t *out, const uint8_t *in, const int16_t *coeff,
                  int n, int m)
@@ -327,4 +335,111 @@ void cr_fir7_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
         return;
     for (int r = 0; r < R; r++)
         fir_reflect_line(out + r * W, 1, in + r * W, coef, 7, 3, W);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002c600 — in-place separable box mean over a float image.
+ *
+ *   Args (ms_abi): rcx = dst descriptor, rdx = src descriptor, r8d = mode.
+ *   Descriptor: +0x08 = float *data, +0x10 = w (uint), +0x14 = h (uint).
+ *   Both w and h must be even, else returns 0x69.
+ *
+ *   mode == 3 : 3x3 box mean   (multiply by 0x3de38e39 ~= 1/9)
+ *   mode != 3 : 5x5 box mean   (multiply by 0x3d23d70a ~= 0.04)
+ *
+ *   Two passes — horizontal then vertical — each a clamp-to-edge box sum
+ *   accumulated left-to-right (ascending index) and the vertical result then
+ *   multiplied by the 1/k^2 constant.  The vendor runs both passes in place,
+ *   reading ahead and keeping the already-overwritten samples in shift
+ *   registers; we reproduce that with a two-deep history per line so the
+ *   result is identical whether or not dst == src.  Verified against the
+ *   vendor's impulse response (separable clamp box) and random floats.
+ * ------------------------------------------------------------------------ */
+int cr_box_mean_f32(void *img1, void *img2, int mode)
+{
+    uint32_t w = *(uint32_t *)((char *)img2 + 0x10);
+    uint32_t h = *(uint32_t *)((char *)img2 + 0x14);
+
+    if ((w & 1u) || (h & 1u))
+        return 0x69;
+
+    float *dst = *(float **)((char *)img1 + 8);
+    const float *src = *(const float **)((char *)img2 + 8);
+
+    int r = (mode == 3) ? 1 : 2;
+    float c = (mode == 3) ? f32_from_bits(0x3de38e39u)
+                          : f32_from_bits(0x3d23d70au);
+
+    if (w == 0 || h == 0)
+        return 0;
+
+    /* pass 1 — horizontal box sum (undivided), in place */
+    for (uint32_t i = 0; i < h; i++) {
+        float *row = dst + (size_t)i * w;
+        const float *s = src + (size_t)i * w;
+        float p1 = s[0], p2 = s[0];      /* original s[j-1], s[j-2] */
+        for (uint32_t j = 0; j < w; j++) {
+            float oj = s[j];
+            float acc;
+            int t0 = (int)j - r;
+            if (t0 < 0) t0 = 0;
+            if (t0 < (int)j) {
+                int d = (int)j - t0;
+                acc = (d == 1) ? p1 : p2;
+            } else {
+                acc = s[t0];
+            }
+            for (int t = (int)j - r + 1; t <= (int)j + r; t++) {
+                int idx = t;
+                if (idx < 0) idx = 0;
+                if (idx > (int)w - 1) idx = (int)w - 1;
+                float v;
+                if (idx < (int)j) {
+                    int d = (int)j - idx;
+                    v = (d == 1) ? p1 : p2;
+                } else {
+                    v = s[idx];
+                }
+                acc += v;
+            }
+            row[j] = acc;
+            p2 = p1;
+            p1 = oj;
+        }
+    }
+
+    /* pass 2 — vertical box sum, times the 1/k^2 constant, in place */
+    for (uint32_t j = 0; j < w; j++) {
+        float p1 = dst[j], p2 = dst[j];  /* original dst[i-1][j], dst[i-2][j] */
+        for (uint32_t i = 0; i < h; i++) {
+            float oj = dst[(size_t)i * w + j];
+            float acc;
+            int t0 = (int)i - r;
+            if (t0 < 0) t0 = 0;
+            if (t0 < (int)i) {
+                int d = (int)i - t0;
+                acc = (d == 1) ? p1 : p2;
+            } else {
+                acc = dst[(size_t)t0 * w + j];
+            }
+            for (int t = (int)i - r + 1; t <= (int)i + r; t++) {
+                int idx = t;
+                if (idx < 0) idx = 0;
+                if (idx > (int)h - 1) idx = (int)h - 1;
+                float v;
+                if (idx < (int)i) {
+                    int d = (int)i - idx;
+                    v = (d == 1) ? p1 : p2;
+                } else {
+                    v = dst[(size_t)idx * w + j];
+                }
+                acc += v;
+            }
+            dst[(size_t)i * w + j] = acc * c;
+            p2 = p1;
+            p1 = oj;
+        }
+    }
+
+    return 0;
 }
