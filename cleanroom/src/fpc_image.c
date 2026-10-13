@@ -683,3 +683,52 @@ int cr_subview_extend_u8(cr_image *img, int t, int b, int l, int r)
     cr_image_border_extend(&local, t, b, l, r);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * Batch 59 — "blit a source image into a sub-window of a container image,
+ * then fix up the window border".  All three share the same prologue:
+ *   cr_image sub;
+ *   cr_image_subview(&sub, dst, left, top, src->w, src->h);
+ *   r = cr_copy_u16_shl_guarded(&sub, src, 0);      // guarded dim match
+ *   if (r == 0) <border op>(&sub, top, bottom, left, right[, fill]);
+ *   return r;
+ * The sub-window shares dst's data pointer (only the origin moves), so the
+ * border operation writes into dst's buffer.
+ * ------------------------------------------------------------------------ */
+
+/* 0x180024fa0 — mirror-extend (BORDER_REFLECT) the placed window. */
+uint32_t cr_blit_mirror_s16(cr_image *dst, const cr_image *src,
+                            int top, int bottom, int left, int right)
+{
+    cr_image sub;
+    cr_image_subview(&sub, dst, left, top, src->w, src->h);
+    uint32_t r = cr_copy_u16_shl_guarded(&sub, src, 0);
+    if ((int)r == 0)
+        cr_mirror_extend_s16(&sub, top, bottom, left, right);
+    return r;
+}
+
+/* 0x180046a80 — edge-replicate the placed window's border. */
+uint32_t cr_blit_extend_s16(cr_image *dst, const cr_image *src,
+                            int top, int bottom, int left, int right)
+{
+    cr_image sub;
+    cr_image_subview(&sub, dst, left, top, src->w, src->h);
+    uint32_t r = cr_copy_u16_shl_guarded(&sub, src, 0);
+    if ((int)r == 0)
+        cr_image_border_extend_s16(&sub, top, bottom, left, right);
+    return r;
+}
+
+/* 0x18003cf00 — fill the placed window's border with a constant. */
+uint32_t cr_blit_fillborder_s16(cr_image *dst, const cr_image *src,
+                                int top, int bottom, int left, int right,
+                                uint16_t fill)
+{
+    cr_image sub;
+    cr_image_subview(&sub, dst, left, top, src->w, src->h);
+    uint32_t r = cr_copy_u16_shl_guarded(&sub, src, 0);
+    if ((int)r == 0)
+        cr_image_fill_border(&sub, top, bottom, left, right, fill);
+    return r;
+}

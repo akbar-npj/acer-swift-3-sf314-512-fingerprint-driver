@@ -147,7 +147,7 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **202** (56.9% of functions, 51,920 B = 30.63% of bytes) |
+| rewritten + parity-verified | **206** (58.0% of functions, 52,480 B = 30.87% of bytes) |
 
 Fifty-eight batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
@@ -234,6 +234,9 @@ Fifty-eight batches done so far:
 58. window generators + masked median + angle sampler: the masked float median, the Q15
     Gaussian window, the Q15 Gaussian 1st/2nd-derivative window trio, and the bilinear
     orientation-field angle sampler (4 functions)
+59. gaussian-blur + blit wrappers: the separable 7-tap Gaussian blur of two int16 images
+    and the three "copy source into a sub-window of a container, then fix its border"
+    wrappers (mirror-extend / edge-replicate / constant-fill) (4 functions)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

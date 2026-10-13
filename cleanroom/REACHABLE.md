@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **202** (56.9% of funcs, 51920 B = 30.63% of bytes) |
+| **rewritten + parity-verified** | **206** (58.0% of funcs, 52480 B = 30.87% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -217,7 +217,11 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 200 | `cr_gaussian_window_q15` | `0x1800345f0` | `fpc_bio_bep_sw23_a1cbee6c60` | 336 | **done** |
 | 201 | `cr_gaussian_deriv_windows_q15` | `0x180018a10` | `fpc_bio_bep_sw23_2bf628d2b6` | 400 | **done** |
 | 202 | `cr_bilinear_angle_sample` | `0x18003e7a0` | `fpc_bio_bep_sw23_cbae7209ea` | 400 | **done** |
-| … | 153 more | | | | pending |
+| 203 | `cr_gauss_blur7_pair` | `0x180034740` | `fpc_bio_bep_sw23_a237dc497c` | 112 | **done** |
+| 204 | `cr_blit_mirror_s16` | `0x180024fa0` | `fpc_bio_bep_sw23_601bc7e441` | 144 | **done** |
+| 205 | `cr_blit_extend_s16` | `0x180046a80` | `fpc_bio_bep_sw23_f439d0d904` | 144 | **done** |
+| 206 | `cr_blit_fillborder_s16` | `0x18003cf00` | `fpc_bio_bep_sw23_c61d1d8196` | 160 | **done** |
+| … | 149 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 

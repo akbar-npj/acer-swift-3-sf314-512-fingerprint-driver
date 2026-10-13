@@ -1117,3 +1117,25 @@ void cr_gaussian_deriv_windows_q15(int16_t *g, int16_t *dg, int16_t *d2g,
         d2g[k] = (int16_t)cr_roundf_to_int(((u2 * d + (q + q) * e) * 32768.0f) / sum);
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180034740 — separable 7-tap Gaussian blur of two int16 images.
+ *   void fn(cr_image *a, cr_image *b, float sigma):
+ *     int16_t coef[7]; cr_gaussian_window_q15(coef, sigma, 7);
+ *     if (cr_fir7_s16(a,a,coef) == 0)
+ *       if (cr_fir7_s16_col(a,a,coef) == 0)
+ *         if (cr_fir7_s16(b,b,coef) == 0)
+ *           cr_fir7_s16_col(b,b,coef);
+ *   Both images are filtered in place (row pass then column pass); the
+ *   short-circuit means a guard failure on `a` skips `b` entirely.
+ * ------------------------------------------------------------------------ */
+void cr_gauss_blur7_pair(cr_image *a, cr_image *b, float sigma)
+{
+    int16_t coef[7];
+    cr_gaussian_window_q15(coef, sigma, 7);
+
+    if (cr_fir7_s16(a, a, coef) == 0)
+        if (cr_fir7_s16_col(a, a, coef) == 0)
+            if (cr_fir7_s16(b, b, coef) == 0)
+                cr_fir7_s16_col(b, b, coef);
+}

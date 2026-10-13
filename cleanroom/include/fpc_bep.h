@@ -588,4 +588,14 @@ void     cr_gaussian_deriv_windows_q15(int16_t *g, int16_t *dg, int16_t *d2g,
 int      cr_bilinear_angle_sample(const cr_angle_field *d,
                                   int px, int py);                  /* 0x18003e7a0 */
 
+/* ---- batch 59: gaussian-blur wrapper + blit-to-subview wrappers ---------- */
+void     cr_gauss_blur7_pair(cr_image *a, cr_image *b, float sigma); /* 0x180034740 */
+uint32_t cr_blit_mirror_s16(cr_image *dst, const cr_image *src,
+                            int top, int bottom, int left, int right); /* 0x180024fa0 */
+uint32_t cr_blit_extend_s16(cr_image *dst, const cr_image *src,
+                            int top, int bottom, int left, int right); /* 0x180046a80 */
+uint32_t cr_blit_fillborder_s16(cr_image *dst, const cr_image *src,
+                                int top, int bottom, int left, int right,
+                                uint16_t fill);                        /* 0x18003cf00 */
+
 #endif /* FPC_BEP_H */

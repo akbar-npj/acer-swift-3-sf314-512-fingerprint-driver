@@ -5659,6 +5659,103 @@ static void test_tree_batch58(void)
     }
 }
 
+static void test_tree_batch59(void)
+{
+    typedef void     (WINAPI *p59_v_ppf)(cr_image *, cr_image *, float);
+    typedef uint32_t (WINAPI *p59_u_ppiiiii)(cr_image *, const cr_image *,
+                                             int, int, int, int);
+    typedef uint32_t (WINAPI *p59_u_ppiiiiih)(cr_image *, const cr_image *,
+                                              int, int, int, int, uint16_t);
+
+    /* --- cr_gauss_blur7_pair (0x180034740) -------------------------------- */
+    {
+        p59_v_ppf v = (p59_v_ppf)fn_at(RVA(0x180034740));
+        begin("cr_gauss_blur7_pair");
+        int bad = g_fail;
+        enum { CW = 32, CH = 32 };
+        static int16_t av[CW * CH], bv[CW * CH], ac[CW * CH], bc[CW * CH];
+        for (int t = 0; t < 4000; t++) {
+            int   w     = 8 + (int)(rnd() % (CW - 8));
+            int   h     = 8 + (int)(rnd() % (CH - 8));
+            float sigma = (float)(1 + (int)(rnd() % 12)) * 0.5f;
+            for (int i = 0; i < CW * CH; i++) {
+                av[i] = (int16_t)rnd(); bv[i] = (int16_t)rnd();
+            }
+            memcpy(ac, av, sizeof av); memcpy(bc, bv, sizeof bv);
+            cr_image ai, bi, aci, bci;
+            cr_image_set(&ai, av, w, h);  cr_image_set(&bi, bv, w, h);
+            cr_image_set(&aci, ac, w, h); cr_image_set(&bci, bc, w, h);
+            v(&ai, &bi, sigma);
+            cr_gauss_blur7_pair(&aci, &bci, sigma);
+            cmp_buf("gb7-a", (u8 *)av, (u8 *)ac, sizeof av, (u32)t);
+            cmp_buf("gb7-b", (u8 *)bv, (u8 *)bc, sizeof bv, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_gauss_blur7_pair\n");
+    }
+
+    /* --- cr_blit_mirror_s16 / cr_blit_extend_s16 (6-arg) ------------------ */
+    {
+        enum { DW = 48, DH = 48, SW = 8, SH = 8 };
+        static int16_t dv[DW * DH], dc[DW * DH], sv[SW * SH];
+
+        struct { const char *tag; int rva;
+                 uint32_t (*clean)(cr_image *, const cr_image *,
+                                   int, int, int, int); } cases[2] = {
+            { "cr_blit_mirror_s16", 0x180024fa0, cr_blit_mirror_s16 },
+            { "cr_blit_extend_s16", 0x180046a80, cr_blit_extend_s16 },
+        };
+        for (int c = 0; c < 2; c++) {
+            p59_u_ppiiiii v = (p59_u_ppiiiii)fn_at(RVA(cases[c].rva));
+            begin(cases[c].tag);
+            int bad = g_fail;
+            for (int t = 0; t < 4000; t++) {
+                for (int i = 0; i < DW * DH; i++) dv[i] = (int16_t)rnd();
+                memcpy(dc, dv, sizeof dc);
+                for (int i = 0; i < SW * SH; i++) sv[i] = (int16_t)rnd();
+                int top = (int)(rnd() % 7), bottom = (int)(rnd() % 7);
+                int left = (int)(rnd() % 7), right = (int)(rnd() % 7);
+                cr_image dvimg, dcimg, simg;
+                cr_image_set(&dvimg, dv, DW, DH);
+                cr_image_set(&dcimg, dc, DW, DH);
+                cr_image_set(&simg, sv, SW, SH);
+                uint32_t rv = v(&dvimg, &simg, top, bottom, left, right);
+                uint32_t rc = cases[c].clean(&dcimg, &simg,
+                                             top, bottom, left, right);
+                if (rv != rc) mismatch("blit-ret", (u32)t, rv, rc);
+                cmp_buf("blit", (u8 *)dv, (u8 *)dc, sizeof dv, (u32)t);
+            }
+            if (g_fail == bad) end(); else printf("  FAIL %s\n", cases[c].tag);
+        }
+    }
+
+    /* --- cr_blit_fillborder_s16 (0x18003cf00, 7-arg) ---------------------- */
+    {
+        enum { DW = 48, DH = 48, SW = 8, SH = 8 };
+        static int16_t dv[DW * DH], dc[DW * DH], sv[SW * SH];
+        p59_u_ppiiiiih v = (p59_u_ppiiiiih)fn_at(RVA(0x18003cf00));
+        begin("cr_blit_fillborder_s16");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            for (int i = 0; i < DW * DH; i++) dv[i] = (int16_t)rnd();
+            memcpy(dc, dv, sizeof dc);
+            for (int i = 0; i < SW * SH; i++) sv[i] = (int16_t)rnd();
+            int top = (int)(rnd() % 7), bottom = (int)(rnd() % 7);
+            int left = (int)(rnd() % 7), right = (int)(rnd() % 7);
+            uint16_t fill = (uint16_t)rnd();
+            cr_image dvimg, dcimg, simg;
+            cr_image_set(&dvimg, dv, DW, DH);
+            cr_image_set(&dcimg, dc, DW, DH);
+            cr_image_set(&simg, sv, SW, SH);
+            uint32_t rv = v(&dvimg, &simg, top, bottom, left, right, fill);
+            uint32_t rc = cr_blit_fillborder_s16(&dcimg, &simg,
+                                                 top, bottom, left, right, fill);
+            if (rv != rc) mismatch("bfb-ret", (u32)t, rv, rc);
+            cmp_buf("bfb", (u8 *)dv, (u8 *)dc, sizeof dv, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_blit_fillborder_s16\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -5936,6 +6033,9 @@ int main(int argc, char **argv)
 
     printf("\n== batch 58: window generators + masked median + angle sampler ==\n");
     test_tree_batch58();
+
+    printf("\n== batch 59: gaussian-blur wrapper + blit-to-subview wrappers ==\n");
+    test_tree_batch59();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -458,6 +458,15 @@ side effects, never raw pointer values.
 | `0x180018a10` | `fpc_bio_bep_sw23_2bf628d2b6` | `cr_gaussian_deriv_windows_q15` | Q15 Gaussian + 1st/2nd derivative windows. Pass 1 sums `(t*q)*t`; pass 2 uses `(q*u)*u`, `u2=(u+u)*q`, `d=e*u2`, emitting `g=e`, `dg=d`, `d2g=(u2*d + (q+q)*e)` (all `*32768/sum`, rounded). Grouping differs between passes. |
 | `0x18003e7a0` | `fpc_bio_bep_sw23_cbae7209ea` | `cr_bilinear_angle_sample` | Orientation-field bilinear sampler: Q6 position `(px-ox, py-oy)`, corners clamped, each byte → `cr_sincos` (cos,sin), bilinear-interpolate both with Q6 weights (`>>12`), then `(cr_atan2_fixed(sin_i, cos_i)+0x400000)>>23`. Field descriptor = `cr_angle_field` (a `cr_image` + `ox@0x20, oy@0x24`). |
 
+### Batch 59 — gaussian-blur wrappers + blit-to-subview wrappers
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180034740` | `fpc_bio_bep_sw23_a237dc497c` | `cr_gauss_blur7_pair` | Separable 7-tap Gaussian blur of two int16 images in place: `cr_gaussian_window_q15(coef,sigma,7)`, then for each image `cr_fir7_s16` (row) + `cr_fir7_s16_col` (col), short-circuited so a guard failure on the first image skips the second. |
+| `0x180024fa0` | `fpc_bio_bep_sw23_601bc7e441` | `cr_blit_mirror_s16` | `cr_image_subview(&sub,dst,left,top,src->w,src->h)`; `cr_copy_u16_shl_guarded(&sub,src,0)`; then `cr_mirror_extend_s16(&sub,top,bottom,left,right)`. |
+| `0x180046a80` | `fpc_bio_bep_sw23_f439d0d904` | `cr_blit_extend_s16` | Same prologue; border op is `cr_image_border_extend_s16` (edge-replicate). |
+| `0x18003cf00` | `fpc_bio_bep_sw23_c61d1d8196` | `cr_blit_fillborder_s16` | Same prologue; border op is `cr_image_fill_border(&sub,top,bottom,left,right,fill)`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
