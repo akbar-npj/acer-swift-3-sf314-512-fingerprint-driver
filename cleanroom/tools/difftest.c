@@ -2228,6 +2228,70 @@ static void test_image_leaves(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_image_mark_nonpos\n");
 }
 
+/* ---- batch 29: u8->i16 shift widen + symmetric border extend ----------- */
+
+/* 0x1800337e0 — widen a byte image to int16 with a signed shift. */
+static void test_u8_to_u16_shifted(void)
+{
+    v_v_ppi v = (v_v_ppi)fn_at(RVA(0x1800337e0));
+    begin("cr_u8_to_u16_shifted");
+    int bad = g_fail;
+    enum { W = 40, H = 24 };
+    for (int t = 0; t < 20000; t++) {
+        uint8_t sbuf[W * H];
+        uint16_t dv[W * H], dc[W * H];
+        unsigned char sv[0x20], sc[0x20], dstv[0x20], dstc[0x20];
+        for (int i = 0; i < W * H; i++) sbuf[i] = (uint8_t)rnd();
+        int shift = (int)(int16_t)rnd();
+        memset(sv, 0, sizeof sv);   memset(sc, 0, sizeof sc);
+        memset(dstv, 0, sizeof dstv); memset(dstc, 0, sizeof dstc);
+        *(void **)(sv + 8) = sbuf;  *(void **)(sc + 8) = sbuf;
+        *(int *)(sv + 0x10) = W;    *(int *)(sc + 0x10) = W;
+        *(int *)(sv + 0x14) = H;    *(int *)(sc + 0x14) = H;
+        *(void **)(dstv + 8) = dv;  *(void **)(dstc + 8) = dc;
+        *(int *)(dstv + 0x10) = W;  *(int *)(dstc + 0x10) = W;
+        *(int *)(dstv + 0x14) = H;  *(int *)(dstc + 0x14) = H;
+        memset(dv, 0xAA, sizeof dv); memset(dc, 0xAA, sizeof dc);
+        v(dstv, sv, shift);
+        cr_u8_to_u16_shifted((cr_image *)dstc, (const cr_image *)sc, shift);
+        cmp_buf("u8u16", (unsigned char *)dv, (unsigned char *)dc,
+                sizeof dv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_u8_to_u16_shifted\n");
+}
+
+/* 0x180028930 — symmetric (BORDER_REFLECT) int16 border extension. */
+static void test_mirror_extend_s16(void)
+{
+    v_v_piiii v = (v_v_piiii)fn_at(RVA(0x180028930));
+    begin("cr_mirror_extend_s16");
+    int bad = g_fail;
+    const int BUFW = 128, BUFH = 128;
+    for (int t = 0; t < 20000; t++) {
+        int16_t pv[BUFW * BUFH], pc[BUFW * BUFH];
+        unsigned char va[0x20], ca[0x20];
+        int offx = 32, offy = 32, w = 48, h = 40;
+        int top    = (int)(rnd() % 21u);
+        int bottom = (int)(rnd() % 21u);
+        int left   = (int)(rnd() % 21u);
+        int right  = (int)(rnd() % 21u);
+        for (int i = 0; i < BUFW * BUFH; i++) { pv[i] = (int16_t)rnd(); pc[i] = pv[i]; }
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca);
+        *(int *)(va + 0)  = BUFW;  *(int *)(ca + 0)  = BUFW;
+        *(int *)(va + 4)  = BUFH;  *(int *)(ca + 4)  = BUFH;
+        *(int *)(va + 0x10) = w;   *(int *)(ca + 0x10) = w;
+        *(int *)(va + 0x14) = h;   *(int *)(ca + 0x14) = h;
+        *(int *)(va + 0x18) = offx;*(int *)(ca + 0x18) = offx;
+        *(int *)(va + 0x1c) = offy;*(int *)(ca + 0x1c) = offy;
+        *(void **)(va + 8) = pv;   *(void **)(ca + 8) = pc;
+        v(va, top, bottom, left, right);
+        cr_mirror_extend_s16((cr_image *)ca, top, bottom, left, right);
+        cmp_buf("mirror16", (unsigned char *)pv, (unsigned char *)pc,
+                sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_mirror_extend_s16\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2358,6 +2422,10 @@ int main(int argc, char **argv)
     test_bitmap_mean_correct();
     printf("\n== bit-packed sign signature ==\n");
     test_signpack_dot();
+    printf("\n== u8->i16 shift widen ==\n");
+    test_u8_to_u16_shifted();
+    printf("\n== symmetric int16 border extend ==\n");
+    test_mirror_extend_s16();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

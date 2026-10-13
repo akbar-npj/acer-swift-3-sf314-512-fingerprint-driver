@@ -275,4 +275,10 @@ int      cr_bitmap_mean_correct(cr_image *img, const cr_image *bm,
 int      cr_signpack_dot(uint8_t *out, const void *const *inpp,
                          const uint8_t *cfg);                            /* 0x180043db0 */
 
+/* ---- batch 29: u8->i16 shift widen + symmetric border extend ------------- */
+void     cr_u8_to_u16_shifted(cr_image *dst, const cr_image *src,
+                              int shift);                                /* 0x1800337e0 */
+void     cr_mirror_extend_s16(cr_image *img, int top, int bottom,
+                              int left, int right);                      /* 0x180028930 */
+
 #endif /* FPC_BEP_H */

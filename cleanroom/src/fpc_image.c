@@ -506,3 +506,138 @@ void cr_saturation_score(int *out, const cr_pixbuf *s)
         *out = 1000;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800337e0 — widen a byte image to int16 with a signed shift.
+ *   `dst` and `src` share w/h; both are packed (row stride = src->w).  For
+ *   every pixel, with b = (uint8_t)shift:
+ *     shift >= 1 : out = (uint16_t)((uint16_t)in << (b & 31))
+ *     shift == 0 : out = in
+ *     shift <  0 : sh = ((uint8_t)-b) & 31;
+ *                  rnd = (int32_t)(int16_t)(1u << sh) >> 1;   (16-bit trunc)
+ *                  out = (uint16_t)((int32_t)((uint32_t)in + (uint32_t)rnd) >> sh)
+ *   (The vendor splits rows into pairs for speed; the flat form below is
+ *    bit-identical, including the odd trailing row.)
+ * ------------------------------------------------------------------------ */
+void cr_u8_to_u16_shifted(cr_image *dst, const cr_image *src, int shift)
+{
+    int w = src->w, h = src->h;
+    const uint8_t *s = (const uint8_t *)src->data;
+    uint16_t *d = (uint16_t *)dst->data;
+    uint8_t b = (uint8_t)shift;
+
+    if (shift >= 1) {
+        unsigned sh = b & 31u;
+        for (int r = 0; r < h; r++)
+            for (int c = 0; c < w; c++)
+                d[(long long)r * w + c] =
+                    (uint16_t)((uint16_t)s[(long long)r * w + c] << sh);
+    } else if (shift == 0) {
+        for (int r = 0; r < h; r++)
+            for (int c = 0; c < w; c++)
+                d[(long long)r * w + c] = (uint16_t)s[(long long)r * w + c];
+    } else {
+        unsigned sh = ((uint8_t)(-b)) & 31u;
+        int32_t rnd = (int32_t)(int16_t)(uint16_t)(1u << sh) >> 1;
+        for (int r = 0; r < h; r++)
+            for (int c = 0; c < w; c++) {
+                uint32_t v = (uint32_t)s[(long long)r * w + c] + (uint32_t)rnd;
+                d[(long long)r * w + c] = (uint16_t)((int32_t)v >> sh);
+            }
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180028930 — symmetric (BORDER_REFLECT) extension of an int16 image.
+ *   Extends the window by `top`/`bottom` rows and `left`/`right` columns with
+ *   reflection that repeats the edge sample (row -1 <- row 0, row h <- row
+ *   h-1).  The reflection index is computed exactly as the vendor does:
+ *       idx = v % (2n);  if (idx >= n) idx = 2n - idx - 1;
+ *   with v counting down from n<<16 for the top/left and up from (n<<16)+n
+ *   for the bottom/right.  Top and bottom bars cover only the middle w
+ *   columns; the left and right bars then cover the full frame height, so the
+ *   corners are filled from the already-extended frame.  `a` is the row
+ *   stride in int16 elements.
+ * ------------------------------------------------------------------------ */
+static int cr_reflect_idx(int v, int n)
+{
+    int idx = v % (n * 2);
+    if (idx >= n)
+        idx = (n * 2 - idx) - 1;
+    return idx;
+}
+
+void cr_mirror_extend_s16(cr_image *img, int top, int bottom, int left,
+                          int right)
+{
+    int a = img->a;
+    int w = img->w;
+    int h = img->h;
+    int16_t *base = (int16_t *)img->data
+        + ((long long)img->offy * a + img->offx);
+
+    /* top : `top` rows above the window, middle w columns */
+    if (top > 0) {
+        int ctr = h * 0x10000;
+        int end = ctr - top;
+        int16_t *dp = base;
+        do {
+            ctr--;
+            dp -= a;
+            int idx = cr_reflect_idx(ctr, h);
+            if (w > 0)
+                for (int i = 0; i < w; i++)
+                    dp[i] = base[(long long)idx * a + i];
+        } while (end != ctr);
+    }
+
+    /* bottom : `bottom` rows below the window, middle w columns */
+    if (bottom > 0) {
+        int ctr = h * 0x10001;
+        int end = bottom + ctr;
+        int16_t *dp = base + (long long)h * a;
+        do {
+            int idx = cr_reflect_idx(ctr, h);
+            if (w > 0)
+                for (int i = 0; i < w; i++)
+                    dp[i] = base[(long long)idx * a + i];
+            ctr++;
+            dp += a;
+        } while (end != ctr);
+    }
+
+    int16_t *frame_top = base - (long long)a * top;
+    int nrows = top + h + bottom;
+
+    /* left : `left` columns left of the window, full frame height */
+    if (left > 0) {
+        int ctr = w * 0x10000;
+        int end = ctr - left;
+        int16_t *dp = frame_top;
+        do {
+            ctr--;
+            int idx = cr_reflect_idx(ctr, w);
+            if (nrows > 0)
+                for (int r = 0; r < nrows; r++)
+                    dp[-1 + (long long)r * a] =
+                        frame_top[(long long)idx + (long long)r * a];
+            dp -= 1;
+        } while (ctr != end);
+    }
+
+    /* right : `right` columns right of the window, full frame height */
+    if (right > 0) {
+        int ctr = w * 0x10001;
+        int end = right + ctr;
+        int16_t *dp = frame_top + w;
+        do {
+            int idx = cr_reflect_idx(ctr, w);
+            if (nrows > 0)
+                for (int r = 0; r < nrows; r++)
+                    dp[(long long)r * a] =
+                        frame_top[(long long)idx + (long long)r * a];
+            ctr++;
+            dp += 1;
+        } while (ctr != end);
+    }
+}

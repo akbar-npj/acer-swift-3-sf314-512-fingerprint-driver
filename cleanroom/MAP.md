@@ -236,6 +236,13 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x180043db0` | `fpc_bio_bep_sw23_e809dd007c` | `cr_signpack_dot` | `int fn(uint8_t *out, const void *const *inpp, const uint8_t *cfg)`. `cfg[0x10]` = 16-byte-aligned matrix pointer, `cfg[4]` = window size `m`, `cfg[8]` = signed byte `b8` with output count `n = b8/2`; `*inpp` = input window. Guards: NULL matrix → `0x69`, misaligned → `1`, `n <= 0` → `0`. For each matrix row `i` the window (`m*m` bytes) is scanned forward and backward; each matrix entry (16 bytes = 8 int16, stride `b8*8` bytes) is split `lo`=entries 0..3 / `hi`=4..7 (sign-extended to int32). Four 4-lane 32-bit SIMD dot products `A=Σlo*in[k]`, `B=Σhi*in[k]`, `C=Σlo*in[nwin-1-k]`, `D=Σhi*in[nwin-1-k]` are reduced to sign bits: `out[i]=pack(A,B)`, `out[i+n]=pack(C,D)` with `pack(P,Q)=Σ_l (P[l]>0?1<<l:0)|(Q[l]>0?0x10<<l:0)`. The packing constants at `0x18008c470`/`0x18008c480` are `{1,2,4,8}` and `{0x10,0x20,0x40,0x80}`. |
 
+### Batch 29 — u8→i16 shift widen + symmetric border extend
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x1800337e0` | `fpc_bio_bep_sw23_9bbd6b7a97` | `cr_u8_to_u16_shifted` | `void fn(cr_image *dst, const cr_image *src, int16_t shift)`. Widens each byte of `src` to int16 in `dst` (both packed, row stride = `src->w`). `shift>0`: `(uint16)in << (shift&31)`; `shift==0`: `in`; `shift<0`: `sh=(-shift)&31`, `rnd=(int16)(1u<<sh)>>1`, `out=(int16)(((uint32)in+(uint32)rnd)>>sh)`. |
+| `0x180028930` | `fpc_bio_bep_sw23_6f845fb02c` | `cr_mirror_extend_s16` | `void fn(cr_image *img, int top, int bottom, int left, int right)`. Symmetric (BORDER_REFLECT, edge repeated) extension of an int16 image. Reflection index `idx = v % (2n); if (idx>=n) idx = 2n-idx-1;` with `v` counting down from `n<<16` (top/left) or up from `(n<<16)+n` (bottom/right). Top/bottom bars fill only the middle `w` columns; left/right bars then fill the full frame height, so corners come from the already-extended frame. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
@@ -243,6 +250,14 @@ The image descriptor layout (established from these functions):
 | `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | returns static table pointers — needs the table contents. |
 | `0x18002aeb0` | `fpc_bio_bep_sw23_769acc1eef` | returns a pointer to the static table `DAT_180159ea0` (type 4) — needs the table contents. |
 | `0x180020860` | `fpc_bio_bep_sw23_46f04b866a` | static tables `DAT_180122980` (type 0xc), `DAT_1801598e0` (0xd). |
+| `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | static table `DAT_1801174e0` (type 6, size 0x100). |
+| `0x18002dab0` | `fpc_bio_bep_sw23_81499c2105` | writes u64 tag `0x1f5_00000009` + static table `DAT_180145240` (type 0). |
+| `0x1800448f0` | `fpc_bio_bep_sw23_eb7a7b573f` | static tables `DAT_180120480` (type 0), `DAT_18011dd40` (type 1); else `0x69`. |
+| `0x180018e50` | `fpc_bio_bep_sw23_2db989eca6` | static tables `DAT_180117340` (type 0) / `DAT_180120220` (type 1) + dims 9,9. |
+| `0x180017960` | `fpc_bio_bep_sw23_25c6d755fa` | static tables `DAT_1801229e0` (type 0xf, size 0x620), `DAT_1800a0c80` (0x10, size 0x100). |
+| `0x180028de0` | `fpc_bio_bep_sw23_702329d57c` | non-constprop sibling of `cr_type_desc_getter`; also stores `DAT_1801253a0`/`DAT_18011df40`. |
+| `0x18002d4e0` | `fpc_bio_bep_sw23_7c99980763` | writes u64 tag `0x2_00000010` + tables `DAT_180159a00`, `DAT_180117780` (type 5); tag≥6 → `0x69`. |
+| `0x180048d40` | `fpc_bio_init` | returns `FUN_18006b4e0() + 8` (out-of-tree global getter) — no in-tree leaf to compose. |
 | `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | static table `DAT_1801174e0` (type 6) + writes `0x100`. |
 | `0x1800448f0` | `fpc_bio_bep_sw23_eb7a7b573f` | static tables `DAT_180120480` (0), `DAT_18011dd40` (1). |
 | `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued). |
