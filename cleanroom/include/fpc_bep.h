@@ -220,4 +220,20 @@ void     cr_sized_free(void **p);                                    /* 0x18003b
 void     cr_bitmap_dilate(cr_image *dst, const cr_image *src, int count); /* 0x180024cb0 */
 void     cr_bitmap_erode(cr_image *dst, const cr_image *src, int count);  /* 0x1800220e0 */
 
+/* ---- batch 18: affine resample + 4-phase FIR --------------------------- */
+/* affine Q15 grid: x = x_org + row*x_row + col*x_col, y likewise */
+typedef struct {
+    int32_t x_col;   /* +0x00  x step per column */
+    int32_t x_row;   /* +0x04  x step per row    */
+    int32_t x_org;   /* +0x08  x origin (Q15)    */
+    int32_t y_col;   /* +0x0c  y step per column */
+    int32_t y_row;   /* +0x10  y step per row    */
+    int32_t y_org;   /* +0x14  y origin (Q15)    */
+} cr_affine_map;
+
+void     cr_affine_sample_u8(cr_image *dst, const cr_image *src,
+                             const cr_affine_map *s);                     /* 0x18002ca30 */
+void     cr_polyphase_fir4(uint8_t *out, const uint8_t *in,
+                           const int16_t *coef, int nbytes, int ncoef);   /* 0x18000ee70 */
+
 #endif /* FPC_BEP_H */

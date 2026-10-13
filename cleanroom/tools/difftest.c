@@ -317,6 +317,9 @@ typedef int      (WINAPI *v_i_ppz)(void *, size_t);
 /* batch 17 */
 typedef void     (WINAPI *v_v_ppim)(void *, const void *, int);
 
+/* batch 18 */
+typedef void     (WINAPI *v_v_ppp_fir)(void *, const void *, const void *, int, int);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -1384,6 +1387,67 @@ static void test_bitmap_morph(void)
     }
 }
 
+/* ---- batch 18: affine resample + 4-phase FIR --------------------------- */
+
+/* 0x18002ca30 — Q15 bilinear resample of a byte image over an affine grid.
+ * Source is 32-byte-stride; the origin is kept near x=20,y=20 (in Q15 pixels)
+ * and the steps are small so all four taps stay inside the buffer. */
+static void test_affine_sample_u8(void)
+{
+    typedef void (WINAPI *fn_t)(void *, const void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x18002ca30));
+    begin("cr_affine_sample_u8");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char dv[0x20], dc[0x20], sv[0x20], sc[0x20];
+        uint8_t src[2048], ov[512], oc[512];
+        int32_t s[6];
+        for (size_t i = 0; i < sizeof src; i++) src[i] = (uint8_t)rnd();
+        int w = 1 + (int)(rnd() % 8u);
+        int h = 1 + (int)(rnd() % 8u);
+        s[0] = (int32_t)((int)(rnd() % 0x4000u) - 0x2000);            /* x_col */
+        s[1] = (int32_t)((int)(rnd() % 0x4000u) - 0x2000);            /* x_row */
+        s[2] = (int32_t)(20u * 0x8000u + (rnd() % 0x8000u));          /* x_org */
+        s[3] = (int32_t)((int)(rnd() % 0x4000u) - 0x2000);            /* y_col */
+        s[4] = (int32_t)((int)(rnd() % 0x4000u) - 0x2000);            /* y_row */
+        s[5] = (int32_t)(20u * 0x8000u + (rnd() % 0x8000u));          /* y_org */
+        memset(ov, 0xAA, sizeof ov); memset(oc, 0xAA, sizeof oc);
+        mk_image(dv, ov, 16, w, h, 0, 0);
+        mk_image(dc, oc, 16, w, h, 0, 0);
+        mk_image(sv, src, 32, 0, 0, 0, 0);
+        mk_image(sc, src, 32, 0, 0, 0, 0);
+        v(dv, sv, s);
+        cr_affine_sample_u8((cr_image *)dc, (const cr_image *)sc,
+                            (const cr_affine_map *)s);
+        cmp_buf("affs", ov, oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_affine_sample_u8\n");
+}
+
+/* 0x18000ee70 — 4-phase FIR over interleaved bytes.  Input is a stream of
+ * 4-byte groups; each output byte is a shifted dot product with the int16
+ * coefficient vector. */
+static void test_polyphase_fir4(void)
+{
+    v_v_ppp_fir v = (v_v_ppp_fir)fn_at(RVA(0x18000ee70));
+    begin("cr_polyphase_fir4");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        uint8_t inb[128], ov[128], oc[128];
+        int16_t coef[16];
+        for (size_t i = 0; i < sizeof inb; i++) inb[i] = (uint8_t)rnd();
+        for (size_t i = 0; i < 16; i++) coef[i] = (int16_t)rnd();
+        int npix   = (int)(rnd() % 8u);       /* 0..7 groups (incl. the no-op) */
+        int nbytes = npix * 4;
+        int ncoef  = 2 + (int)(rnd() % 9u);   /* 2..10 (even and odd) */
+        memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+        v(ov, inb, coef, nbytes, ncoef);
+        cr_polyphase_fir4(oc, inb, coef, nbytes, ncoef);
+        cmp_buf("fir4", ov, oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_polyphase_fir4\n");
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -1877,6 +1941,9 @@ int main(int argc, char **argv)
     test_alloc_wrappers();
     printf("\n== bitmap morphology ==\n");
     test_bitmap_morph();
+    printf("\n== affine resample + 4-phase FIR ==\n");
+    test_affine_sample_u8();
+    test_polyphase_fir4();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

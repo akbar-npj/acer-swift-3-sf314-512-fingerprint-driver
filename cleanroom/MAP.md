@@ -169,6 +169,13 @@ The image descriptor layout (established from these functions):
 
 > Both functions take the destination image (which supplies the stride/height and is written in place) and a separate source image; the difftest exercises 1..4 words/row, 1..6 rows and 1..3 passes so the multi-word carry path and the self-feed path are both covered.
 
+### Batch 18 — affine resample + 4-phase FIR
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18002ca30` | `fpc_bio_bep_sw23_79a4530e21.part.4` | `cr_affine_sample_u8` | `void fn(cr_image *dst, const cr_image *src, const cr_affine_map *s)`. Q15 bilinear resample: for each dst pixel `x = x_org + row*x_row + col*x_col`, `y = y_org + row*y_row + col*y_col` (all Q15, `xi=x>>15`, `xf=x&0x7fff`); `idx = yi*src->a + xi`; `out = (int8_t)((w00*P00 + w01*P01 + w10*P10 + w11*P11) >> 15)` with `w00=((0x8000-xf)(0x8000-yf))>>15`, `w10=((0x8000-yf)xf)>>15`, `w01=((0x8000-xf)yf)>>15`, `w11=(xf*yf)>>15`. Origin = `data + (offy*a + offx)` for both images; `dst->w x dst->h` pixels. |
+| `0x18000ee70` | `fpc_bio_bep_sw23_04faa0a17d.part.1` | `cr_polyphase_fir4` | `void fn(uint8_t *out, const uint8_t *in, const int16_t *coef, int nbytes, int ncoef)`. A 4-phase FIR: for each 4-byte input group at offset `4p`, `out[4p+r] = (int8_t)((0x4000 + Σ_{j=0}^{2*iters} in[4p+r+j]*coef[j]) >> 15)` where `iters = ((unsigned)(ncoef-2)>>1)+1`. `nbytes <= 3` is a no-op; accumulators are 32-bit signed; each output byte is the low byte of the SAR-15 result. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
