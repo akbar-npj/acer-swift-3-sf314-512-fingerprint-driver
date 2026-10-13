@@ -311,6 +311,9 @@ typedef int      (WINAPI *v_i_pph)(void *, const void *, int16_t);
 typedef void     (WINAPI *v_v_piiii)(void *, int, int, int, int);
 typedef void     (WINAPI *v_v_pi)(int *, const void *);
 
+/* batch 16 */
+typedef int      (WINAPI *v_i_ppz)(void *, size_t);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -1518,6 +1521,62 @@ static void test_saturation_score(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_saturation_score\n");
 }
 
+/* 0x180002fe0 / 0x180002fb0 / 0x18003bf40 — allocator wrappers.  Only the
+ * observable contract is compared (status codes, null-ing); the raw pointer
+ * values necessarily differ between the two allocators. */
+static void test_alloc_wrappers(void)
+{
+    v_i_ppz vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+    v_v_p   vfree   = (v_v_p)fn_at(RVA(0x180002fb0));
+    v_v_p   vsfree  = (v_v_p)fn_at(RVA(0x18003bf40));
+
+    begin("cr_malloc");
+    int bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        size_t sz = (rnd() % 5u == 0) ? 0 : (size_t)(rnd() % 4096u);
+        void *pv = (void *)0xdead, *pc = (void *)0xdead;
+        int rv = vmalloc(&pv, sz);
+        int rc = cr_malloc(&pc, sz);
+        if (rv != rc) mismatch("malloc-status", sz, rv, rc);
+        if ((pv == NULL) != (pc == NULL))
+            mismatch("malloc-null", sz, pv ? 1 : 0, pc ? 1 : 0);
+        vfree(&pv); cr_free(&pc);
+        if (pv != NULL || pc != NULL)
+            mismatch("free-null", sz, (u64)pv, (u64)pc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_malloc\n");
+
+    begin("cr_free");
+    bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        size_t sz = (size_t)(1 + rnd() % 4096u);
+        void *pv = NULL, *pc = NULL;
+        vmalloc(&pv, sz); cr_malloc(&pc, sz);
+        vfree(&pv); cr_free(&pc);
+        if (pv != NULL || pc != NULL)
+            mismatch("free2-null", sz, (u64)pv, (u64)pc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_free\n");
+
+    begin("cr_sized_free");
+    bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        size_t S = (size_t)(2 + rnd() % 128u);
+        int    sz = 1 + (int)(rnd() % (uint32_t)S);
+        void *vb = NULL, *cb = NULL;
+        vmalloc(&vb, S); cr_malloc(&cb, S);
+        memset(vb, 0, S); memset(cb, 0, S);
+        ((uint8_t *)vb)[sz - 1] = (uint8_t)sz;
+        ((uint8_t *)cb)[sz - 1] = (uint8_t)sz;
+        void *vp = (uint8_t *)vb + sz;
+        void *cp = (uint8_t *)cb + sz;
+        vsfree(&vp); cr_sized_free(&cp);
+        if (vp != NULL || cp != NULL)
+            mismatch("sfree-null", sz, (u64)vp, (u64)cp);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_sized_free\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1766,6 +1825,8 @@ int main(int argc, char **argv)
     test_image_border_extend();
     test_image_border_extend_s16();
     test_saturation_score();
+    printf("\n== allocator wrappers ==\n");
+    test_alloc_wrappers();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

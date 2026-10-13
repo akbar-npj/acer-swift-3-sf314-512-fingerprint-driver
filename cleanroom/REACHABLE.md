@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **73** (20.6% of funcs, 11296 B = 6.66% of bytes) |
+| **rewritten + parity-verified** | **76** (21.4% of funcs, 11488 B = 6.78% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -95,7 +95,10 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 71 | `cr_image_border_extend` | `0x18001fb80` | `fpc_bio_bep_sw23_442776bb33` | 400 | **done** |
 | 72 | `cr_saturation_score` | `0x1800356e0` | `fpc_bio_bep_sw23_a45214d052.part.7` | 96 | **done** |
 | 73 | `cr_image_border_extend_s16` | `0x180016df0` | `fpc_bio_bep_sw23_214aef3596` | 416 | **done** |
-| … | 282 more | | | | pending |
+| 74 | `cr_malloc` | `0x180002fe0` | `FpcFree` (malloc wrapper) | 64 | **done** |
+| 75 | `cr_free` | `0x180002fb0` | `FpcFloor` (free wrapper) | 48 | **done** |
+| 76 | `cr_sized_free` | `0x18003bf40` | `fpc_bio_bep_sw23_bdbfe0d964` | 80 | **done** |
+| … | 279 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 
@@ -114,13 +117,13 @@ tested in isolation. Sorted by size (smallest first).
 | `0x180048d40` | `fpc_bio_init` | 32 | 1 |  |
 | `0x180049120` | `fpc_buffer_is_meta` | 32 | 2 | **done** |
 | `0x18004aa70` | `fpc_image_data_get_size_from_defs` | 32 | 2 | **done** |
-| `0x180002fb0` | `FpcFloor` | 48 | 1 |  |
+| `0x180002fb0` | `FpcFloor` | 48 | 1 |  **done** |
 | `0x180003020` | `FpcMalloc` | 48 | 5 | **done** |
 | `0x180023a60` | `fpc_bio_bep_sw23_53297280e7` | 48 | 1 | **done** |
 | `0x1800490f0` | `fpc_buffer_is_debug` | 48 | 1 | **done** |
 | `0x180002d60` | `FpcBioTemplateSave` | 64 | 5 |  **done** |
 | `0x180002f70` | `FpcExp` | 64 | 1 | **done** |
-| `0x180002fe0` | `FpcFree` | 64 | 1 |  |
+| `0x180002fe0` | `FpcFree` | 64 | 1 |  **done** |
 | `0x180010ef0` | `fpc_bio_bep_sw23_0fdf5f04f4` | 64 | 5 | **done** |
 | `0x180012060` | `fpc_bio_bep_sw23_14aab7a29c` | 64 | 7 |  **done** |
 | `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | 64 | 1 |  |

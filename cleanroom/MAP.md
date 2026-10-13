@@ -150,6 +150,16 @@ The image descriptor layout (established from these functions):
 | `0x180016df0` | `fpc_bio_bep_sw23_214aef3596` | `cr_image_border_extend_s16` | the **int16 twin** of `cr_image_border_extend`: identical four-region edge-replication frame logic, but pixels are `int16_t` and `a` is the row stride in **elements**. |
 | `0x1800356e0` | `fpc_bio_bep_sw23_a45214d052.part.7` | `cr_saturation_score` | `n = (int16)h * (int16)w`; if `n<=0` → `*out = 1000`. Else count pixels where `(uint8)(b-1) > 253` (i.e. `b==0 || b==255`), then `*out = 1000 + (count * -1000) / n` (32-bit `imul`+`idiv`, truncating). Struct: `{int16 w@0, int16 h@2, ..., uint8 *data@0x10}`. |
 
+### Batch 16 — allocator wrappers
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180002fe0` | `FpcFree` | `cr_malloc` | malloc wrapper. `int fn(void **out, size_t size)`: `size==0` → `*out=NULL`, return 1; else `*out=malloc(size)`, return `(ptr==NULL)`. |
+| `0x180002fb0` | `FpcFloor` | `cr_free` | free wrapper. `void fn(void **p)`: `if (*p) { free(*p); *p = NULL; }`. |
+| `0x18003bf40` | `fpc_bio_bep_sw23_bdbfe0d964` | `cr_sized_free` | sized free. `void fn(void **p)`: `if (*p) { base = *p - *((uint8_t*)*p - 1); free_wrapper(&base); *p = NULL; }` — the 1-byte value just before the pointer is the offset back to the allocation base. |
+
+> The allocator wrappers call the platform allocator; the differential test compares only the observable contract (status codes, null-ing), since raw pointer values differ between allocators.
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
@@ -160,12 +170,9 @@ The image descriptor layout (established from these functions):
 | `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | static table `DAT_1801174e0` (type 6) + writes `0x100`. |
 | `0x1800448f0` | `fpc_bio_bep_sw23_eb7a7b573f` | static tables `DAT_180120480` (0), `DAT_18011dd40` (1). |
 | `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued). |
-| `0x180002fb0` | `FpcFloor` | free-wrapper around `0x180069b60`. |
-| `0x180002fe0` | `FpcFree` | malloc-wrapper around `0x18006afa0`. |
 
-These are pointer/table/allocator-valued, so bit-exact comparison needs a
-structural (not address) check; they will be handled once the referenced tables
-and the allocator semantics are established.
+These are pointer/table-valued, so bit-exact comparison needs a structural (not
+address) check; they will be handled once the referenced tables are established.
 
 ## Notes on the naming
 

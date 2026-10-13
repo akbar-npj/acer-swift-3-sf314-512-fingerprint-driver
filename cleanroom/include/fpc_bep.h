@@ -211,4 +211,9 @@ typedef struct {
 
 void     cr_saturation_score(int *out, const cr_pixbuf *s);          /* 0x1800356e0 */
 
+/* ---- batch 16: allocator wrappers -------------------------------------- */
+int      cr_malloc(void **out, size_t size);                         /* 0x180002fe0 */
+void     cr_free(void **p);                                          /* 0x180002fb0 */
+void     cr_sized_free(void **p);                                    /* 0x18003bf40 */
+
 #endif /* FPC_BEP_H */
