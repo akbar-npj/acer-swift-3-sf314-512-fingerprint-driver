@@ -15,8 +15,8 @@
 #include "drivers_api.h"
 #include "fpc_protocol.h"
 
-#define FPC2040_DEFAULT_WIDTH  160
-#define FPC2040_DEFAULT_HEIGHT 160
+#define FPC2040_DEFAULT_WIDTH  64
+#define FPC2040_DEFAULT_HEIGHT 176
 
 struct _FpiDeviceFpc2040 {
     FpImageDevice parent;
@@ -83,9 +83,6 @@ static void fpc2040_process_packet(FpiDeviceFpc2040 *self, const uint8_t *buf, g
     fp_dbg("Received event %s (0x%02x), status=0x%x, length=%u",
            fpc_event_to_str(hdr->event_id), hdr->event_id, hdr->status, hdr->length);
 
-    const uint8_t *payload = buf + sizeof(struct fpc_packet_header);
-    gsize payload_len = len - sizeof(struct fpc_packet_header);
-
     switch (hdr->event_id) {
         case EVT_FINGER_DWN:
             fp_dbg("Sensor reports finger down");
@@ -107,10 +104,12 @@ static void fpc2040_process_packet(FpiDeviceFpc2040 *self, const uint8_t *buf, g
             break;
 
         case EVT_IMG: {
-            fp_dbg("Received image payload (%zu bytes)", payload_len);
-            if (payload_len > FPC_IMG_HEADER_SIZE) {
-                const uint8_t *raw_pixels = payload + FPC_IMG_HEADER_SIZE;
-                gsize img_size = payload_len - FPC_IMG_HEADER_SIZE;
+            fp_dbg("Received image payload (total %zu bytes)", len);
+            /* Raw pixels begin at byte offset 34 (0x22) from packet start:
+             * 12-byte bulk event header + 22-byte EVT_IMG sub-header. */
+            if (len > 34) {
+                const uint8_t *raw_pixels = buf + 34;
+                gsize img_size = len - 34;
 
                 gint width = FPC2040_DEFAULT_WIDTH;
                 gint height = (gint)(img_size / width);
@@ -197,15 +196,21 @@ static void fpc2040_dev_activate(FpImageDevice *dev) {
 
     self->is_capturing = TRUE;
 
+    /* 0. Indicate S0 Host Active State (wValue=0x0010 = 16) */
+    fpc2040_send_cmd_async(self, CMD_INDICATE_S_STATE, 0x0010, 0x0000, NULL, 0);
+
     /* 1. Send CMD_INIT */
     uint32_t init_val = 0x00000001;
     fpc2040_send_cmd_async(self, CMD_INIT, 0x0001, 0x0000, (uint8_t *)&init_val, 4);
 
-    /* 2. Send CMD_ARM */
+    /* 2. Refresh / Calibrate Sensor Matrix Baseline */
+    fpc2040_send_cmd_async(self, CMD_REFRESH_SENSOR, 0x0001, 0x0000, NULL, 0);
+
+    /* 3. Send CMD_ARM */
     uint32_t arm_val = 0x00000001;
     fpc2040_send_cmd_async(self, CMD_ARM, 0x0001, 0x0000, (uint8_t *)&arm_val, 4);
 
-    /* 3. Begin continuous interrupt polling */
+    /* 4. Begin continuous bulk/interrupt polling */
     fpc2040_read_events(self);
 
     fpi_image_device_activate_complete(dev, NULL);
