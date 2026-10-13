@@ -448,4 +448,24 @@ void    *cr_image_get_meta_dp(const void *defs, uint32_t idx); /* 0x18004a910 */
 void     cr_cleanup_ptr8_clear_b(void *obj);                 /* 0x18003b920 */
 void     cr_free_4args(void *p0, void *p1, void *p2, void *p3); /* 0x18000fd40 */
 
+/* ---- batch 52: ready wrappers / allocators ------------------------------ */
+void     cr_free_4slot_guard(void *obj);                     /* 0x180046490 */
+void     cr_clear_6ptr(void *obj);                           /* 0x180011890 */
+int      cr_bit_alloc(void **out, int n);                    /* 0x18001f080 */
+int      cr_image_alloc_f32(cr_image *img, int w, int h);    /* 0x18001e8b0 */
+void     cr_image_alloc_quarter(cr_image *img, int w, int h); /* 0x180026d00 */
+int      cr_copy_image_fields(void *a, void *b);             /* 0x1800357a0 */
+int      cr_sqrt_q16(uint32_t x);                            /* 0x180038a50 */
+int      cr_u8_to_u16_guarded(cr_image *dst, const cr_image *src,
+                              int16_t shift);                /* 0x180032530 */
+int      cr_copy_u16_shl_guarded(cr_image *dst, const cr_image *src,
+                                 uint8_t shift);             /* 0x180024e60 */
+int      cr_fir_reflect_guarded(int16_t *out, const int16_t *in,
+                                const int16_t *coef, int K, int W, int L); /* 0x1800280d0 */
+int      cr_fir_reflect_rows_guarded(int16_t *out, const int16_t *in,
+                                     const int16_t *coef, int K,
+                                     int W, int R);          /* 0x18002d960 */
+int      cr_palette_remap(void *ctx, const cr_image *lut_desc,
+                         const void *flag_obj);              /* 0x180010e60 */
+
 #endif /* FPC_BEP_H */

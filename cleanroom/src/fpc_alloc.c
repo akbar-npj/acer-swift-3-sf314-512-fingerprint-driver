@@ -57,3 +57,28 @@ void cr_sized_free(void **p)
         *p = NULL;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001f080 — allocate a zeroed bit vector of `n` bits: ceil(n/8) bytes via
+ * the 16-byte-aligned allocator, then zeroed.
+ *   int fn(void **out, int n):
+ *     if (n < 1) { *out = NULL; return 0; }
+ *     r = cr_malloc_aligned16(out, ((uint32_t)(n + 7) & ~7u) >> 3);
+ *     if (r == 0) { zero ((uint32_t)(n + 7)) >> 3 bytes at *out; }
+ *     return r;
+ * ------------------------------------------------------------------------ */
+int cr_bit_alloc(void **out, int n)
+{
+    if (n < 1) {
+        *out = NULL;
+        return 0;
+    }
+    int r = cr_malloc_aligned16(out, (size_t)(((uint32_t)(n + 7) & 0xfffffff8u) >> 3));
+    if (r == 0) {
+        int cnt = (int)((uint32_t)(n + 7) >> 3);
+        uint8_t *p = (uint8_t *)*out;
+        for (int i = 0; i < cnt; i++)
+            p[i] = 0;
+    }
+    return r;
+}

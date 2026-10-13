@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **153** (43.1% of funcs, 38624 B = 22.79% of bytes) |
+| **rewritten + parity-verified** | **165** (46.5% of funcs, 39840 B = 23.51% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -168,7 +168,19 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 151 | `cr_image_get_meta_dp` | `0x18004a910` | `fpc_image_data_get_payload_size_from_defs` | 64 | **done** |
 | 152 | `cr_cleanup_ptr8_clear_b` | `0x18003b920` | `fpc_bio_bep_sw23_bc5ecf1262` | 64 | **done** |
 | 153 | `cr_free_4args` | `0x18000fd40` | `fpc_bio_bep_sw23_0a647d6e5c` | 80 | **done** |
-| … | 202 more | | | | pending |
+| 154 | `cr_free_4slot_guard` | `0x180046490` | `fpc_bio_bep_sw23_f24e438404.part.2` | 32 | **done** |
+| 155 | `cr_clear_6ptr` | `0x180011890` | `fpc_bio_bep_sw23_126f4d9d64` | 80 | **done** |
+| 156 | `cr_bit_alloc` | `0x18001f080` | `fpc_bio_bep_sw23_3dfa9d10cb` | 96 | **done** |
+| 157 | `cr_image_alloc_f32` | `0x18001e8b0` | `fpc_bio_bep_sw23_3bec298cfe` | 112 | **done** |
+| 158 | `cr_image_alloc_quarter` | `0x180026d00` | `fpc_bio_bep_sw23_64bb070921` | 80 | **done** |
+| 159 | `cr_copy_image_fields` | `0x1800357a0` | `fpc_bio_bep_sw23_a549ff0d17` | 128 | **done** |
+| 160 | `cr_sqrt_q16` | `0x180038a50` | `fpc_bio_bep_sw23_b21591478d` | 112 | **done** |
+| 161 | `cr_u8_to_u16_guarded` | `0x180032530` | `fpc_bio_bep_sw23_967c7ea01c` | 80 | **done** |
+| 162 | `cr_copy_u16_shl_guarded` | `0x180024e60` | `fpc_bio_bep_sw23_5f6c1365bf` | 96 | **done** |
+| 163 | `cr_fir_reflect_guarded` | `0x1800280d0` | `fpc_bio_bep_sw23_6d0a2edcde` | 128 | **done** |
+| 164 | `cr_fir_reflect_rows_guarded` | `0x18002d960` | `fpc_bio_bep_sw23_7fead33409` | 128 | **done** |
+| 165 | `cr_palette_remap` | `0x180010e60` | `fpc_bio_bep_sw23_0fbb842e61.part.2` | 144 | **done** |
+| … | 190 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 

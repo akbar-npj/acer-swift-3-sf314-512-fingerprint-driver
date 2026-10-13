@@ -4075,6 +4075,423 @@ static void test_tree_wrappers(void)
     }
 }
 
+/* ---- batch 52: ready wrappers / allocators ----------------------------- */
+static void test_tree_batch52(void)
+{
+    v_i_ppz vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+    v_v_p   vsfree  = (v_v_p)fn_at(RVA(0x18003bf40));
+
+    /* --- cr_free_4slot_guard (0x180046490) --------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x180046490));
+        begin("cr_free_4slot_guard");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            static const int sl[4] = { 0x18, 0x00, 0x20, 0x28 };
+            u8 ov[0x30], oc[0x30];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            for (int i = 0; i < 4; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + sl[i]) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + sl[i]) = c_sized_alloc(S, sz);
+                } else {
+                    *(void **)(ov + sl[i]) = NULL; *(void **)(oc + sl[i]) = NULL;
+                }
+            }
+            if (t & 1) { v(ov); cr_free_4slot_guard(oc); }
+            else       { v(NULL); cr_free_4slot_guard(NULL); }
+            for (int i = 0; i < 4; i++)
+                if ((*(void **)(ov + sl[i]) != NULL) != (*(void **)(oc + sl[i]) != NULL))
+                    mismatch("f4g", (u32)i, *(void **)(ov + sl[i]) != NULL,
+                             *(void **)(oc + sl[i]) != NULL);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_4slot_guard\n");
+    }
+
+    /* --- cr_clear_6ptr (0x180011890) --------------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x180011890));
+        static const int off[6] = { 0xa8, 0x08, 0x28, 0x48, 0x68, 0x88 };
+        begin("cr_clear_6ptr");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            u8 ov[0xb0], oc[0xb0];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            for (int i = 0; i < 6; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + off[i]) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + off[i]) = c_sized_alloc(S, sz);
+                } else {
+                    *(void **)(ov + off[i]) = NULL; *(void **)(oc + off[i]) = NULL;
+                }
+            }
+            v(ov); cr_clear_6ptr(oc);
+            for (int i = 0; i < 6; i++)
+                if ((*(void **)(ov + off[i]) != NULL) != (*(void **)(oc + off[i]) != NULL))
+                    mismatch("c6p", (u32)i, *(void **)(ov + off[i]) != NULL,
+                             *(void **)(oc + off[i]) != NULL);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_clear_6ptr\n");
+    }
+
+    /* --- cr_bit_alloc (0x18001f080) ---------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppi)(void **, int);
+        v_i_ppi v = (v_i_ppi)fn_at(RVA(0x18001f080));
+        begin("cr_bit_alloc");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            void *vp = (void *)0x5A5A5A5A, *cp = (void *)0x5A5A5A5A;
+            int n;
+            switch (rnd() % 4u) {
+                case 0: n = 0; break;
+                case 1: n = -(int)(rnd() % 4u); break;
+                default: n = 1 + (int)(rnd() % 200u); break;
+            }
+            int rv = v(&vp, n);
+            int rc = cr_bit_alloc(&cp, n);
+            if (rv != rc) mismatch("ba-ret", (u32)n, (u32)rv, (u32)rc);
+            if ((vp != NULL) != (cp != NULL))
+                mismatch("ba-null", (u32)n, vp != NULL, cp != NULL);
+            if (rv == 0 && vp) {
+                int bytes = (n + 7) >> 3;
+                /* verify zeroed */
+                u8 *vb = (u8 *)vp, *cb = (u8 *)cp;
+                for (int i = 0; i < bytes; i++)
+                    if (vb[i] != 0 || cb[i] != 0) { mismatch("ba-zero", (u32)i, vb[i], cb[i]); break; }
+                if (((uintptr_t)vp & 0xf) || ((uintptr_t)cp & 0xf))
+                    mismatch("ba-align", (u32)n, 0, 0);
+                vsfree(&vp);
+                cr_sized_free(&cp);
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_bit_alloc\n");
+    }
+
+    /* --- cr_image_alloc_f32 (0x18001e8b0) --------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppii)(cr_image *, int, int);
+        v_i_ppii v = (v_i_ppii)fn_at(RVA(0x18001e8b0));
+        begin("cr_image_alloc_f32");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            cr_image va, ca;
+            memset(&va, 0x5A, sizeof va); memset(&ca, 0x5A, sizeof ca);
+            int w = (int)(rnd() % 32u), h = (int)(rnd() % 32u);
+            if (rnd() % 8u == 0) w = -(int)(rnd() % 4u);
+            if (rnd() % 8u == 0) h = -(int)(rnd() % 4u);
+            int rv = v(&va, w, h);
+            int rc = cr_image_alloc_f32(&ca, w, h);
+            if (rv != rc) mismatch("f32-ret", (u32)t, (u32)rv, (u32)rc);
+            if (va.a != ca.a || va.b != ca.b || va.w != ca.w || va.h != ca.h ||
+                va.offx != ca.offx || va.offy != ca.offy)
+                mismatch("f32-fields", (u32)t, 0, 0);
+            if ((va.data != NULL) != (ca.data != NULL))
+                mismatch("f32-ptr", (u32)t, va.data != NULL, ca.data != NULL);
+            if (rv == 0 && va.data) {
+                if (((uintptr_t)va.data & 0xf) || ((uintptr_t)ca.data & 0xf))
+                    mismatch("f32-align", (u32)t, 0, 0);
+                vsfree(&va.data);
+                cr_sized_free(&ca.data);
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_image_alloc_f32\n");
+    }
+
+    /* --- cr_image_alloc_quarter (0x180026d00) ------------------------------ */
+    {
+        typedef void (WINAPI *v_v_ppii)(cr_image *, int, int);
+        v_v_ppii v = (v_v_ppii)fn_at(RVA(0x180026d00));
+        begin("cr_image_alloc_quarter");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            int va[16], ca[16];
+            memset(va, 0x5A, 64); memset(ca, 0x5A, 64);
+            int w = (int)(rnd() % 32u), h = (int)(rnd() % 32u);
+            if (rnd() % 8u == 0) w = -(int)(rnd() % 4u);
+            if (rnd() % 8u == 0) h = -(int)(rnd() % 4u);
+            v((cr_image *)va, w, h);
+            cr_image_alloc_quarter((cr_image *)ca, w, h);
+            /* compare descriptor fields, excluding the data pointer at +8
+             * (its value necessarily differs between the two allocators) */
+            if (memcmp(va, ca, 8) != 0 ||
+                memcmp((u8 *)va + 16, (u8 *)ca + 16, 32) != 0)
+                mismatch("q-fields", (u32)t, 0, 0);
+            /* desc[2] is only written (NULL or real ptr) when the sub-call
+             * reaches its assignment; otherwise it stays poison. */
+            int wi = (w - 4 > -1) ? w - 4 : w - 1;
+            int hi = (h - 4 > -1) ? h - 4 : h - 1;
+            int valid = ((wi >> 2) >= 0 && (hi >> 2) >= 0);
+            void *vdp = *(void **)(va + 2), *cdp = *(void **)(ca + 2);
+            if (valid) {
+                if ((vdp != NULL) != (cdp != NULL))
+                    mismatch("q-ptr", (u32)t, vdp != NULL, cdp != NULL);
+                if (vdp) {
+                    vsfree(&vdp);
+                    cr_sized_free(&cdp);
+                }
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_image_alloc_quarter\n");
+    }
+
+    /* --- cr_copy_image_fields (0x1800357a0) -------------------------------- */
+    /* b != NULL: a+0x28 / a+0x30 hold int16 descriptors {w@0, h@2, data@0x10};
+     * b+0x58 / b+0x18 hold destination buffers.  The second copy only runs if
+     * the first source descriptor is present.  b == NULL: pure no-op (a is
+     * never dereferenced). */
+    {
+        typedef int (WINAPI *v_i_pp)(void *, void *);
+        v_i_pp v = (v_i_pp)fn_at(RVA(0x1800357a0));
+        begin("cr_copy_image_fields");
+        int bad = g_fail;
+        enum { SW = 8, SH = 4, NB = SW * SH * 2 };
+        u8 src1data[NB], src2data[NB];
+        int16_t src1desc[16], src2desc[16];
+        u8 a[0x40], bv[0x60], bc[0x60];
+        u8 dstv1[NB], dstc1[NB], dstv2[NB], dstc2[NB];
+        for (int t = 0; t < 4000; t++) {
+            for (int i = 0; i < NB; i++) { src1data[i] = (u8)rnd(); src2data[i] = (u8)rnd(); }
+            memset(src1desc, 0, sizeof src1desc);
+            memset(src2desc, 0, sizeof src2desc);
+            src1desc[0] = SW; src1desc[1] = SH;
+            src2desc[0] = SW; src2desc[1] = SH;
+            *(void **)((u8 *)src1desc + 0x10) = src1data;
+            *(void **)((u8 *)src2desc + 0x10) = src2data;
+            memset(a, 0, sizeof a);
+            memset(bv, 0, sizeof bv); memset(bc, 0, sizeof bc);
+            *(void **)(a + 0x28) = src1desc;
+            *(void **)(a + 0x30) = src2desc;
+            /* exercise the optional second source */
+            if (rnd() & 1) *(void **)(a + 0x30) = NULL;
+            *(void **)(bv + 0x58) = dstv1; *(void **)(bc + 0x58) = dstc1;
+            *(void **)(bv + 0x18) = dstv2; *(void **)(bc + 0x18) = dstc2;
+            memset(dstv1, 0x5A, sizeof dstv1); memset(dstc1, 0x5A, sizeof dstc1);
+            memset(dstv2, 0x5A, sizeof dstv2); memset(dstc2, 0x5A, sizeof dstc2);
+            int rv = v(a, bv);
+            int rc = cr_copy_image_fields(a, bc);
+            if (rv != rc) mismatch("cif-ret", (u32)t, (u32)rv, (u32)rc);
+            cmp_buf("cif1", dstv1, dstc1, sizeof dstv1, (u32)t);
+            cmp_buf("cif2", dstv2, dstc2, sizeof dstv2, (u32)t);
+        }
+        /* b == NULL: no dereference of a, returns 0 */
+        {
+            u8 a2[0x40]; memset(a2, 0, sizeof a2);
+            int rv = v(a2, NULL);
+            int rc = cr_copy_image_fields(a2, NULL);
+            if (rv != rc) mismatch("cif-null", 0, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_copy_image_fields\n");
+    }
+
+    /* --- cr_sqrt_q16 (0x180038a50) ----------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_u32)(uint32_t);
+        v_i_u32 v = (v_i_u32)fn_at(RVA(0x180038a50));
+        begin("cr_sqrt_q16");
+        int bad = g_fail;
+        for (int t = 0; t < 100000; t++) {
+            uint32_t x = rnd() | (rnd() << 16);
+            if (t % 16 == 0) x = 0;
+            if (t % 32 == 1) x = 1;
+            int rv = v(x);
+            int rc = cr_sqrt_q16(x);
+            if (rv != rc) mismatch("sqrt", x, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_sqrt_q16\n");
+    }
+
+    /* --- cr_u8_to_u16_guarded (0x180032530) ------------------------------- */
+    {
+        typedef int (WINAPI *v_i_pph)(cr_image *, const cr_image *, int16_t);
+        v_i_pph v = (v_i_pph)fn_at(RVA(0x180032530));
+        begin("cr_u8_to_u16_guarded");
+        int bad = g_fail;
+        enum { W = 32, H = 16 };
+        u8 src_buf[W * H];
+        int16_t dst_buf[W * H], dst_buf2[W * H];
+        for (int t = 0; t < 4000; t++) {
+            for (int i = 0; i < W * H; i++) src_buf[i] = (u8)rnd();
+            cr_image src, dstv, dstc;
+            cr_image_set(&src, src_buf, W, H);
+            cr_image_set(&dstv, dst_buf, W, H);
+            cr_image_set(&dstc, dst_buf2, W, H);
+            int16_t shift = (int16_t)(int)(rnd() % 8u);
+            int mode = (int)(rnd() % 4u);
+            /* mode 0: full-view both (should succeed) */
+            if (mode > 0) { dstv.offx = 1; dstc.offx = 1; }  /* break the guard */
+            memset(dst_buf, 0x5A, sizeof dst_buf);
+            memset(dst_buf2, 0x5A, sizeof dst_buf2);
+            int rv = v(&dstv, &src, shift);
+            int rc = cr_u8_to_u16_guarded(&dstc, &src, shift);
+            if (rv != rc) mismatch("u16g-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0)
+                cmp_buf("u16g", (u8 *)dst_buf, (u8 *)dst_buf2, sizeof dst_buf, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_u8_to_u16_guarded\n");
+    }
+
+    /* --- cr_copy_u16_shl_guarded (0x180024e60) ---------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppb)(cr_image *, const cr_image *, uint8_t);
+        v_i_ppb v = (v_i_ppb)fn_at(RVA(0x180024e60));
+        begin("cr_copy_u16_shl_guarded");
+        int bad = g_fail;
+        enum { W = 32, H = 16 };
+        int16_t src_buf[W * H], dst_buf[W * H], dst_buf2[W * H];
+        for (int t = 0; t < 4000; t++) {
+            for (int i = 0; i < W * H; i++) src_buf[i] = (int16_t)rnd();
+            cr_image src, dstv, dstc;
+            cr_image_set(&src, src_buf, W, H);
+            cr_image_set(&dstv, dst_buf, W, H);
+            cr_image_set(&dstc, dst_buf2, W, H);
+            uint8_t shift = (uint8_t)(rnd() % 8u);
+            int mode = (int)(rnd() % 4u);
+            /* the guard is w/h equality; break it by perturbing dst w */
+            if (mode > 0) { dstv.w = W + 1; dstc.w = W + 1; }
+            memset(dst_buf, 0x5A, sizeof dst_buf);
+            memset(dst_buf2, 0x5A, sizeof dst_buf2);
+            int rv = v(&dstv, &src, shift);
+            int rc = cr_copy_u16_shl_guarded(&dstc, &src, shift);
+            if (rv != rc) mismatch("c16g-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0)
+                cmp_buf("c16g", (u8 *)dst_buf, (u8 *)dst_buf2, sizeof dst_buf, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_copy_u16_shl_guarded\n");
+    }
+
+    /* --- cr_fir_reflect_guarded (0x1800280d0) ----------------------------- */
+    {
+        typedef int (WINAPI *v_i_pppiii)(int16_t *, const int16_t *,
+                                         const int16_t *, int, int, int);
+        v_i_pppiii v = (v_i_pppiii)fn_at(RVA(0x1800280d0));
+        begin("cr_fir_reflect_guarded");
+        int bad = g_fail;
+        enum { MAXW = 40, MAXL = 200 };
+        int16_t inv[MAXW * MAXL], coefv[MAXL], outv[MAXW * MAXL], outc[MAXW * MAXL];
+        for (int t = 0; t < 20000; t++) {
+            int W = 1 + (int)(rnd() % MAXW);
+            int L = 1 + (int)(rnd() % MAXL);
+            int p4;
+            /* exercise both fast and general paths */
+            switch (rnd() % 4u) {
+                case 0: p4 = 7; break;
+                case 1: p4 = 0xf; break;
+                default: p4 = (int)(rnd() % (L + 4)) - 2; break;
+            }
+            for (int i = 0; i < W * L; i++) inv[i] = (int16_t)rnd();
+            for (int i = 0; i < L; i++) coefv[i] = (int16_t)rnd();
+            memset(outv, 0x5A, sizeof outv);
+            memset(outc, 0x5A, sizeof outc);
+            int rv = v(outv, inv, coefv, p4, W, L);
+            int rc = cr_fir_reflect_guarded(outc, inv, coefv, p4, W, L);
+            if (rv != rc) mismatch("fg-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0)
+                cmp_buf("fg", (u8 *)outv, (u8 *)outc, sizeof(int16_t) * W * L, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_fir_reflect_guarded\n");
+    }
+
+    /* --- cr_fir_reflect_rows_guarded (0x18002d960) ------------------------ */
+    {
+        typedef int (WINAPI *v_i_pppiii)(int16_t *, const int16_t *,
+                                         const int16_t *, int, int, int);
+        v_i_pppiii v = (v_i_pppiii)fn_at(RVA(0x18002d960));
+        begin("cr_fir_reflect_rows_guarded");
+        int bad = g_fail;
+        enum { MAXW = 200, MAXR = 40 };
+        int16_t inv[MAXW * MAXR], coefv[MAXW], outv[MAXW * MAXR], outc[MAXW * MAXR];
+        for (int t = 0; t < 20000; t++) {
+            int W = 1 + (int)(rnd() % MAXW);
+            int R = 1 + (int)(rnd() % MAXR);
+            int p4;
+            switch (rnd() % 4u) {
+                case 0: p4 = 7; break;
+                case 1: p4 = 0xf; break;
+                default: p4 = (int)(rnd() % (W + 4)) - 2; break;
+            }
+            for (int i = 0; i < W * R; i++) inv[i] = (int16_t)rnd();
+            for (int i = 0; i < W; i++) coefv[i] = (int16_t)rnd();
+            memset(outv, 0x5A, sizeof outv);
+            memset(outc, 0x5A, sizeof outc);
+            int rv = v(outv, inv, coefv, p4, W, R);
+            int rc = cr_fir_reflect_rows_guarded(outc, inv, coefv, p4, W, R);
+            if (rv != rc) mismatch("fgr-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0)
+                cmp_buf("fgr", (u8 *)outv, (u8 *)outc, sizeof(int16_t) * W * R, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_fir_reflect_rows_guarded\n");
+    }
+
+    /* --- cr_palette_remap (0x180010e60) ----------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppp)(void *, cr_image *, const void *);
+        v_i_ppp v = (v_i_ppp)fn_at(RVA(0x180010e60));
+        begin("cr_palette_remap");
+        int bad = g_fail;
+        enum { NLUT = 256, MAXP = 64 };
+        int16_t lut[NLUT];
+        u8 src_bytes[MAXP * 2];
+        int16_t dst_v[MAXP], dst_c[MAXP];
+        for (int t = 0; t < 4000; t++) {
+            for (int i = 0; i < NLUT; i++) lut[i] = (int16_t)rnd();
+            int mult = 1 + (int)(rnd() % 8u);
+            int count = 1 + (int)(rnd() % MAXP);
+            for (int i = 0; i < count * 2; i++) src_bytes[i] = (u8)rnd();
+            /* Build ctx: ctx+0x48 → palette object */
+            /* palette object: +0x00=src ptr, +0x18=dst ptr(alloc), +0x20=count */
+            struct { void *src; void *pad[2]; int16_t *dst; int count; } palobj;
+            struct { u8 pad[0x48]; void *palptr; } ctx;
+            palobj.src = src_bytes;
+            palobj.pad[0] = palobj.pad[1] = NULL;
+            palobj.dst = NULL;
+            palobj.count = count;
+            ctx.palptr = &palobj;
+            /* lut_desc: cr_image with data=lut, w=mult */
+            cr_image lut_desc;
+            memset(&lut_desc, 0, sizeof lut_desc);
+            lut_desc.data = lut;
+            lut_desc.w = mult;
+            /* flag_obj: +0x3d must be non-zero */
+            u8 flag_obj[0x40];
+            memset(flag_obj, 0, sizeof flag_obj);
+            flag_obj[0x3d] = 1;
+            memset(dst_v, 0x5A, sizeof dst_v);
+            memset(dst_c, 0x5A, sizeof dst_c);
+            palobj.dst = NULL;
+            int rv = v(&ctx, &lut_desc, flag_obj);
+            /* vendor allocated dst_v through palobj.dst — copy then free */
+            if (rv == 0 && palobj.dst)
+                memcpy(dst_v, palobj.dst, count * 2);
+            void *vdp = palobj.dst;
+            if (vdp) vsfree(&vdp);
+
+            palobj.dst = NULL;
+            int rc = cr_palette_remap(&ctx, &lut_desc, flag_obj);
+            if (rc == 0 && palobj.dst)
+                memcpy(dst_c, palobj.dst, count * 2);
+            void *cdp = palobj.dst;
+            if (cdp) cr_sized_free(&cdp);
+
+            if (rv != rc) mismatch("pm-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0)
+                cmp_buf("pm", (u8 *)dst_v, (u8 *)dst_c, count * 2, (u32)t);
+        }
+        /* flag=0 early return */
+        {
+            u8 flag_obj[0x40]; memset(flag_obj, 0, sizeof flag_obj);
+            u8 ctx_buf[0x50]; memset(ctx_buf, 0, sizeof ctx_buf);
+            cr_image lut_desc; memset(&lut_desc, 0, sizeof lut_desc);
+            int rv = v(ctx_buf, &lut_desc, flag_obj);
+            int rc = cr_palette_remap(ctx_buf, &lut_desc, flag_obj);
+            if (rv != rc) mismatch("pm-zero", 0, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_palette_remap\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -4338,6 +4755,8 @@ int main(int argc, char **argv)
     test_tree_nested();
     printf("\n== small ready wrappers ==\n");
     test_tree_wrappers();
+    printf("\n== batch 52: ready wrappers / allocators ==\n");
+    test_tree_batch52();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

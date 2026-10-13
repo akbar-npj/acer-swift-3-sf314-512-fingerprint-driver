@@ -374,6 +374,23 @@ side effects, never raw pointer values.
 | `0x18003b920` | `fpc_bio_bep_sw23_bc5ecf1262` | `cr_cleanup_ptr8_clear_b` | Byte-identical twin of `cr_cleanup_ptr8_clear`: `if (obj) { if (*(void**)(obj+8)) cr_sized_free(obj+8); *(void**)(obj+8) = NULL; }`. |
 | `0x18000fd40` | `fpc_bio_bep_sw23_0a647d6e5c` | `cr_free_4args` | `void fn(void *p0, void *p1, void *p2, void *p3)`: copies each argument into a stack local and `cr_sized_free`s that local — i.e. frees exactly the four passed sized pointers. |
 
+### Batch 52 — ready wrappers / allocators
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180046490` | `fpc_bio_bep_sw23_f24e438404.part.2` | `cr_free_4slot_guard` | `void fn(void *obj)`: `if (obj) cr_free_4slot(obj);` — NULL-guarded wrapper. |
+| `0x180011890` | `fpc_bio_bep_sw23_126f4d9d64` | `cr_clear_6ptr` | Clears the sized slots at `obj + {0xa0,0x00,0x20,0x40,0x60,0x80}` via `cr_cleanup_ptr8_clear` (each frees and NULLs `slot+8`). |
+| `0x18001f080` | `fpc_bio_bep_sw23_3dfa9d10cb` | `cr_bit_alloc` | `int fn(void **out, int n)`: `n<1` → `*out=NULL`, return 0. Else allocate `((n+7)&~7)>>3` bytes via `cr_malloc_aligned16`, then zero `(n+7)>>3` bytes. Returns the allocator's code. |
+| `0x18001e8b0` | `fpc_bio_bep_sw23_3bec298cfe` | `cr_image_alloc_f32` | Descriptor init + 4-bytes-per-pixel buffer: `if(!img)1; if(w<0||h<0)0x69;` set `a=w,b=h,w=w,h=h,offx=offy=0,data=NULL`; `w*h==0` → 0; else `cr_malloc_aligned16(&data, (uint64_t)(uint32_t)(w*h) << 2)`. |
+| `0x180026d00` | `fpc_bio_bep_sw23_64bb070921` | `cr_image_alloc_quarter` | Sets `d[8]=d[9]=0x40, d[10]=d[11]=2`, then `cr_image_alloc_u8(d, wi>>2, hi>>2)` with `wi=(w-4>-1)?w-4:w-1` (same for h). |
+| `0x1800357a0` | `fpc_bio_bep_sw23_a549ff0d17` | `cr_copy_image_fields` | `if(b)`: copy `src1->w*src1->h*2` bytes from `*(src1+0x10)` to `b+0x58`; then, if `*(a+0x30)` non-NULL and `b+0x18` non-NULL, the same for the second descriptor. Returns 0. |
+| `0x180038a50` | `fpc_bio_bep_sw23_b21591478d` | `cr_sqrt_q16` | Q16 integer sqrt: normalise `v = x << ((clz(x)-1)&0x1e)`, two Newton iterations from `(v>>16)+0x4000`, then `((v/g+g)>>1) << ((0x10-((clz-1)>>1))&0x1f)`. |
+| `0x180032530` | `fpc_bio_bep_sw23_967c7ea01c` | `cr_u8_to_u16_guarded` | Guard both descriptors full-view (`a==w`, `offx==offy==0`), then `cr_u8_to_u16_shifted`; else 0x69. |
+| `0x180024e60` | `fpc_bio_bep_sw23_5f6c1365bf` | `cr_copy_u16_shl_guarded` | Guard `dst->w==src->w && dst->h==src->h`, then `cr_image_copy_u16_shl`; else 0x69. |
+| `0x1800280d0` | `fpc_bio_bep_sw23_6d0a2edcde` | `cr_fir_reflect_guarded` | Validate K/W/L (K==7 or 0xf fast paths with `W&7==0`, L≤256; else `0≤K<L≤256`), then `cr_fir_reflect`; else 0x69. |
+| `0x18002d960` | `fpc_bio_bep_sw23_7fead33409` | `cr_fir_reflect_rows_guarded` | Row twin of the above; returns 1 (not 0x69) on validation failure; else `cr_fir_reflect_rows`. |
+| `0x180010e60` | `fpc_bio_bep_sw23_0fbb842e61.part.2` | `cr_palette_remap` | If `flag[0x3d]!=0`: allocate `count*2` at `obj+0x18` (obj=`*(ctx+0x48)`, count=`*(obj+0x20)`), then for each `i` in `count` look up `lut[src[2i+1]*mult + src[2i]]` (`lut=lut_desc->data`, `mult=lut_desc->w`) into `dst[i]`. Returns the allocator code. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

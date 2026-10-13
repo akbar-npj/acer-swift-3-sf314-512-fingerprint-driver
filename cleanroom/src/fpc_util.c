@@ -267,3 +267,28 @@ int cr_hi_bit_index(uint32_t x)
         return 0x1f - (int)cr_clz(x);
     return -1;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180038a50 — Q16 integer square root: returns round(sqrt(x) * 65536).
+ *   int fn(uint32_t x):
+ *     if (x == 0) return 0;
+ *     cz = cr_clz(x);
+ *     v  = x << ((uint8_t)(cz - 1) & 0x1e);          // normalise to bit 30/31
+ *     g  = (v >> 16) + 0x4000;
+ *     g  = (g + v / g) >> 1;                         // two Newton steps
+ *     g  = (g + v / g) >> 1;
+ *     return ((v / g + g) >> 1) << ((0x10 - (char)((cz - 1) >> 1)) & 0x1f);
+ * ------------------------------------------------------------------------ */
+int cr_sqrt_q16(uint32_t x)
+{
+    if (x == 0)
+        return 0;
+    uint32_t cz = cr_clz(x);
+    uint32_t v  = x << ((uint32_t)(uint8_t)(cz - 1u) & 0x1eu);
+    uint32_t g  = (v >> 16) + 0x4000u;
+    g = (g + v / g) >> 1;
+    g = (g + v / g) >> 1;
+    uint32_t res = (v / g + g) >> 1;
+    uint32_t sh  = (0x10u - (uint32_t)(signed char)((cz - 1u) >> 1)) & 0x1fu;
+    return (int)(res << sh);
+}

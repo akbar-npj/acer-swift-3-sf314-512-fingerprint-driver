@@ -619,3 +619,255 @@ void cr_free_4args(void *p0, void *p1, void *p2, void *p3)
     cr_sized_free(&p2);
     cr_sized_free(&p3);
 }
+
+/* ======================================================================== *
+ *  Batch 52 — ready wrappers / allocators
+ * ======================================================================== */
+
+/* ------------------------------------------------------------------------ *
+ * 0x180046490 — NULL-guarded cr_free_4slot.
+ *   void fn(void *obj): if (obj) cr_free_4slot(obj);
+ * ------------------------------------------------------------------------ */
+void cr_free_4slot_guard(void *obj)
+{
+    if (obj)
+        cr_free_4slot(obj);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180011890 — clear the sized slots at obj + {0xa0, 0x00, 0x20, 0x40, 0x60,
+ * 0x80} (each via cr_cleanup_ptr8_clear).
+ *   void fn(void *obj)
+ * ------------------------------------------------------------------------ */
+void cr_clear_6ptr(void *obj)
+{
+    static const int off[6] = { 0xa0, 0x00, 0x20, 0x40, 0x60, 0x80 };
+    for (int i = 0; i < 6; i++)
+        cr_cleanup_ptr8_clear((uint8_t *)obj + off[i]);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001e8b0 — float-image allocator: canonical descriptor init with a
+ * 4-byte-per-pixel buffer.  Same shape as cr_image_alloc_u8 but the pixel
+ * buffer is `(uint32_t)(w*h) << 2` bytes.
+ *   int fn(cr_image *img, int w, int h):
+ *     if (!img) return 1;
+ *     if (w < 0 || h < 0) return 0x69;
+ *     img->a=w; img->w=w; img->b=h; img->h=h;
+ *     img->offx=0; img->offy=0; img->data=NULL;
+ *     if (w*h == 0) return 0;
+ *     return cr_malloc_aligned16(&img->data, (uint32_t)(w*h) << 2);
+ * ------------------------------------------------------------------------ */
+int cr_image_alloc_f32(cr_image *img, int w, int h)
+{
+    if (!img)
+        return 1;
+    if (w < 0 || h < 0)
+        return 0x69;
+    img->a = w;
+    img->w = w;
+    img->b = h;
+    img->h = h;
+    img->offx = 0;
+    img->offy = 0;
+    img->data = NULL;
+    if (w * h == 0)
+        return 0;
+    return cr_malloc_aligned16(&img->data, (size_t)(uint32_t)(w * h) << 2);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180026d00 — set four descriptor fields to (64, 64, 2, 2) then allocate a
+ * byte image of size ((w',h') >> 2), where w' = (w >= 4) ? w-4 : w-1 (and
+ * likewise for h).  The four fixed fields live at +0x20..+0x2c, which
+ * cr_image_alloc_u8 does not touch.
+ *   void fn(cr_image *img, int w, int h)
+ * ------------------------------------------------------------------------ */
+void cr_image_alloc_quarter(cr_image *img, int w, int h)
+{
+    int32_t *d = (int32_t *)img;
+    d[8]  = 0x40;
+    d[9]  = 0x40;
+    d[10] = 2;
+    d[11] = 2;
+    int wi = (w - 4 > -1) ? w - 4 : w - 1;
+    int hi = (h - 4 > -1) ? h - 4 : h - 1;
+    cr_image_alloc_u8(d, wi >> 2, hi >> 2);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800357a0 — copy the pixel buffers of two small int16 descriptors into the
+ * caller's buffers.  `a` holds descriptors at +0x28 and +0x30 (each
+ * {int16 w@0, int16 h@2, ..., void *data@0x10}); `b` holds destinations at
+ * +0x58 and +0x18.  The second copy runs only if the first source is present.
+ *   int fn(void *a, void *b):
+ *     if (!b) return 0;
+ *     p = *(short**)(a+0x28);
+ *     if (p && *(void**)(b+0x58)) {
+ *         cr_copy(*(void**)((uint8_t*)p+0x10), *(void**)(b+0x58), (int)*p * p[1] * 2);
+ *         p = *(short**)(a+0x30);
+ *         if (p && *(void**)(b+0x18))
+ *             cr_copy(*(void**)((uint8_t*)p+0x10), *(void**)(b+0x18),
+ *                     (int)*p * p[1] * 2);
+ *     }
+ *     return 0;
+ * ------------------------------------------------------------------------ */
+int cr_copy_image_fields(void *a, void *b)
+{
+    if (b) {
+        short *p = *(short **)((uint8_t *)a + 0x28);
+        if (p && *(void **)((uint8_t *)b + 0x58)) {
+            cr_copy(*(void **)((uint8_t *)p + 0x10), *(void **)((uint8_t *)b + 0x58),
+                    (int)*p * (int)p[1] * 2);
+            p = *(short **)((uint8_t *)a + 0x30);
+            if (p && *(void **)((uint8_t *)b + 0x18))
+                cr_copy(*(void **)((uint8_t *)p + 0x10), *(void **)((uint8_t *)b + 0x18),
+                        (int)*p * (int)p[1] * 2);
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180032530 — guarded u8→u16 widen: both descriptors must be full-view
+ *   (a==w, b==h, offx==0, offy==0) before delegating to cr_u8_to_u16_shifted.
+ *   int fn(cr_image *dst, const cr_image *src, int16_t shift):
+ *     if (dst->a==dst->w && dst->offx==0 && dst->offy==0 &&
+ *         src->a==src->w && src->offx==0 && src->offy==0)
+ *       { cr_u8_to_u16_shifted(dst, src, shift); return 0; }
+ *     return 0x69;
+ * ------------------------------------------------------------------------ */
+int cr_u8_to_u16_guarded(cr_image *dst, const cr_image *src, int16_t shift)
+{
+    if (dst->a == dst->w && dst->offx == 0 && dst->offy == 0 &&
+        src->a == src->w && src->offx == 0 && src->offy == 0) {
+        cr_u8_to_u16_shifted(dst, src, shift);
+        return 0;
+    }
+    return 0x69;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180024e60 — guarded u16 copy+shift: widths and heights must match before
+ *   delegating to cr_image_copy_u16_shl.
+ *   int fn(cr_image *dst, const cr_image *src, uint8_t shift):
+ *     if (dst->w==src->w && dst->h==src->h)
+ *       { cr_image_copy_u16_shl(dst, src, shift); return 0; }
+ *     return 0x69;
+ * ------------------------------------------------------------------------ */
+int cr_copy_u16_shl_guarded(cr_image *dst, const cr_image *src, uint8_t shift)
+{
+    if (dst->w == src->w && dst->h == src->h) {
+        cr_image_copy_u16_shl(dst, src, shift);
+        return 0;
+    }
+    return 0x69;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800280d0 — column-FIR validate-and-call wrapper.
+ *   int fn(int16_t *out, const int16_t *in, const int16_t *coef,
+ *          int K, int W, int L):
+ *     Fast paths: K==7 or K==0xf with (W & 7)==0 and L<=256.
+ *     General path: K>=0, K<L, L<=256.
+ *     On success tail-calls cr_fir_reflect(out, in, coef, K, W, L).
+ *     Returns 0x69 on validation failure.
+ * ------------------------------------------------------------------------ */
+int cr_fir_reflect_guarded(int16_t *out, const int16_t *in,
+                           const int16_t *coef, int K, int W, int L)
+{
+    if (K == 7) {
+        if ((W & 7) == 0) {
+            if ((uint32_t)(L - 8) <= 0xf8)
+                goto ok;
+            return 0x69;
+        }
+    } else if (K == 0xf) {
+        if ((W & 7) == 0) {
+            if ((uint32_t)(L - 0x10) <= 0xf0)
+                goto ok;
+            return 0x69;
+        }
+    }
+    /* general path */
+    if (K < 0 || L <= K || L > 0x100)
+        return 0x69;
+ok:
+    return cr_fir_reflect(out, in, coef, K, W, L);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002d960 — row-FIR validate-and-call wrapper (twin of the above).
+ *   int fn(int16_t *out, const int16_t *in, const int16_t *coef,
+ *          int K, int W, int R):
+ *     Same validation but returns 1 (not 0x69) on failure.
+ *     On success tail-calls cr_fir_reflect_rows.
+ * ------------------------------------------------------------------------ */
+int cr_fir_reflect_rows_guarded(int16_t *out, const int16_t *in,
+                                const int16_t *coef, int K, int W, int R)
+{
+    if (K == 7) {
+        if ((W & 7) == 0) {
+            if ((uint32_t)(W - 8) <= 0xf8)
+                goto ok;
+            return 1;
+        }
+    } else if (K == 0xf) {
+        if ((W & 7) == 0) {
+            if ((uint32_t)(W - 0x10) <= 0xf0)
+                goto ok;
+            return 1;
+        }
+    }
+    if (K < 0 || W <= K || W > 0x100)
+        return 1;
+ok:
+    return cr_fir_reflect_rows(out, in, coef, K, W, R);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180010e60 — palette LUT remap with allocation.
+ *   int fn(void *ctx, cr_image *lut_desc, void *flag_obj):
+ *     flag = *(char*)((uint8_t*)flag_obj + 0x3d);
+ *     if (flag == 0) return 0;
+ *     obj = *(void**)((uint8_t*)ctx + 0x48);   // palette object
+ *     count = *(int32_t*)((uint8_t*)obj + 0x20);
+ *     r = cr_malloc_aligned16((void**)((uint8_t*)obj + 0x18),
+ *                             (size_t)(uint32_t)count * 2);
+ *     if (r != 0) return r;
+ *     if (count > 0) {
+ *         src  = *(uint8_t**)obj;               // obj+0x00: byte-pair source
+ *         dst  = *(int16_t**)((uint8_t*)obj + 0x18); // just-allocated output
+ *         lut  = *(int16_t**)((uint8_t*)lut_desc + 0x08); // lut_desc->data
+ *         mult = *(int32_t*)((uint8_t*)lut_desc + 0x10); // lut_desc->w
+ *         for (int i = 0; i < count; i++) {
+ *             uint32_t idx = (uint32_t)src[i*2+1] * (uint32_t)mult +
+ *                            (uint32_t)src[i*2];
+ *             dst[i] = lut[idx];
+ *         }
+ *     }
+ *     return 0;
+ * ------------------------------------------------------------------------ */
+int cr_palette_remap(void *ctx, const cr_image *lut_desc, const void *flag_obj)
+{
+    if (*(const char *)((const uint8_t *)flag_obj + 0x3d) == 0)
+        return 0;
+    uint8_t *obj = *(uint8_t **)((uint8_t *)ctx + 0x48);
+    int count = *(int32_t *)((uint8_t *)obj + 0x20);
+    int r = cr_malloc_aligned16((void **)((uint8_t *)obj + 0x18),
+                                (size_t)(uint32_t)count * 2);
+    if (r != 0)
+        return r;
+    if (count > 0) {
+        const uint8_t *src = *(const uint8_t **)obj;
+        int16_t       *dst = *(int16_t **)((uint8_t *)obj + 0x18);
+        const int16_t *lut = *(const int16_t **)(&lut_desc->data);
+        int            mult = lut_desc->w;
+        for (int i = 0; i < count; i++) {
+            uint32_t idx = (uint32_t)src[i * 2 + 1] * (uint32_t)mult +
+                           (uint32_t)src[i * 2];
+            dst[i] = lut[idx];
+        }
+    }
+    return 0;
+}

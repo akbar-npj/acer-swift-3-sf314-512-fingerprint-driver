@@ -129,9 +129,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **153** (43.1% of functions, 38,624 B = 22.79% of bytes) |
+| rewritten + parity-verified | **165** (46.5% of functions, 39,840 B = 23.51% of bytes) |
 
-Fifty-one batches done so far:
+Fifty-two batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -192,6 +192,10 @@ Fifty-one batches done so far:
 51. small ready wrappers: guarded sized-free, 2-slot/4-slot/4-arg destructors, guarded
     ptr8 cleanup + its clear twin, highest-set-bit index, and the metadata-class definition
     getter (9 functions)
+52. ready wrappers / allocators: NULL-guarded 4-slot destructor, 6-pointer clear, zeroed
+    bit-vector allocator, f32/quarter image allocators, image-field copy, Q16 sqrt, guarded
+    u8→u16 / u16-shift-copy / column-FIR / row-FIR wrappers, and the palette LUT remap
+    (12 functions)
 46. 1776-byte leaf: per-pixel kernel-bank 2D correlation (K=7/15/17 fast paths + general K) (1 function)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
