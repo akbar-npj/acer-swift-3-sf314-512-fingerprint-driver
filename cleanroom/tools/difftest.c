@@ -2894,6 +2894,54 @@ static void test_sort_records(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_sort_records\n");
 }
 
+/* ---- batch 43: short-line orientation fit ------------------------------- */
+static void test_line_orient_fit(void)
+{
+    typedef void (WINAPI *v_v_pii_ff_ppp)(float *, int, int, float, float,
+                                          const void *, float *, float *);
+    v_v_pii_ff_ppp v = (v_v_pii_ff_ppp)fn_at(RVA(0x180020230));
+    begin("cr_line_orient_fit");
+    int bad = g_fail;
+    enum { MAXW = 24, MAXH = 20, PAD = 64 };
+    enum { MAXP = MAXW + 4, MAXQ = MAXH + 4 };
+    struct desc { int stride, pad; const int16_t *data; int w, h, offA, offB; } vd, cd;
+    static int16_t buf[PAD + MAXP * MAXQ + 64];
+    static float vsamp[10], csamp[10], vm[27], cm[27], vr[9], cr[9];
+    for (int t = 0; t < 20000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int stride = w + (int)(rnd() % 4);
+        int offA = (int)(rnd() % 3);
+        int offB = (int)(rnd() % 3);
+        for (int i = 0; i < PAD + MAXP * MAXQ + 64; i++)
+            buf[i] = (int16_t)(int)(rnd() % 2001) - 1000;
+        const int16_t *img = buf + PAD;   /* leading pad absorbs negative idx */
+        vd.stride = cd.stride = stride;
+        vd.pad = cd.pad = 0;
+        vd.data = cd.data = img;
+        vd.w = cd.w = w;
+        vd.h = cd.h = h;
+        vd.offA = cd.offA = offA;
+        vd.offB = cd.offB = offB;
+        int px = (int)(rnd() % (w + 4)) - 2;
+        int py = (int)(rnd() % (h + 4)) - 2;
+        float sx = (float)((int)(rnd() % 9) - 4) * 0.25f;
+        float sy = (float)((int)(rnd() % 9) - 4) * 0.25f;
+        memset(vsamp, 0x5A, sizeof vsamp); memset(csamp, 0x5A, sizeof csamp);
+        memset(vm, 0x5A, sizeof vm); memset(cm, 0x5A, sizeof cm);
+        memset(vr, 0x5A, sizeof vr); memset(cr, 0x5A, sizeof cr);
+        v(vsamp, px, py, sx, sy, &vd, vm, vr);
+        cr_line_orient_fit(csamp, px, py, sx, sy, &cd, cm, cr);
+        cmp_buf("samp", (unsigned char *)vsamp, (unsigned char *)csamp,
+                sizeof(float) * 10, (u32)t);
+        cmp_buf("m", (unsigned char *)vm, (unsigned char *)cm,
+                sizeof(float) * 27, (u32)t);
+        cmp_buf("res", (unsigned char *)vr, (unsigned char *)cr,
+                sizeof(float) * 9, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_line_orient_fit\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3108,6 +3156,8 @@ int main(int argc, char **argv)
     test_box_mean();
     printf("\n== stack-based Hoare quicksort (8-byte records) ==\n");
     test_sort_records();
+    printf("\n== short-line orientation fit (9 hypotheses) ==\n");
+    test_line_orient_fit();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
