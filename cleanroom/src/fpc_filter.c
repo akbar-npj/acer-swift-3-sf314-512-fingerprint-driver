@@ -338,6 +338,46 @@ void cr_fir7_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x1800433b0 — fixed 7-tap reflect-101 FIR down each column of a tall image.
+ *
+ *   Args (ms_abi): rcx = out (int16*), rdx = in (int16*), r8 = coef (int16*),
+ *   r9d = n (row stride AND column count), [rsp+0x20] = sel (line length).
+ *
+ *   For each column c (0..n-1) the `sel` samples buf[i] = in[c + i*n] are
+ *   gathered and correlated with the fixed 7-tap kernel (centre H=3):
+ *       out[c + j*n] = (int16)(( Σ_{k=0}^{6} coef[k]*buf[refl101(j-3+k,sel)]
+ *                                + 0x4000 ) >> 15)        for j = 0..sel-1
+ *
+ *   This is the column-wise twin of cr_fir7_reflect above (same fixed 7-tap
+ *   reflect-101 kernel) but with the line running down columns of stride n
+ *   rather than along contiguous rows.  The vendor keeps a folded/rotating
+ *   7-short sliding window and emits two outputs per iteration plus a
+ *   parity-dependent tail; because the accumulation is integer and
+ *   order-independent the closed form below is bit-identical.
+ *
+ *   NOTE: as with cr_fir7_reflect, a 7-tap window spans more than one
+ *   BORDER_REFLECT_101 period when sel < 4, where the vendor's single-fold edge
+ *   passes overlap and read the neighbouring column.  The closed form is the
+ *   well-defined reflect-101 and matches the vendor for all sel >= 4, the
+ *   domain in which a 7-tap reflected filter is meaningful.
+ * ------------------------------------------------------------------------ */
+void cr_vfir7_cols(int16_t *out, const int16_t *in, const int16_t *coef,
+                   int n, int sel)
+{
+    if (n <= 0)
+        return;
+    for (int c = 0; c < n; c++) {
+        for (int j = 0; j < sel; j++) {
+            uint32_t s = 0;
+            for (int k = 0; k < 7; k++)
+                s += (uint32_t)((int32_t)coef[k]
+                                * (int32_t)in[c + refl101(j - 3 + k, sel) * n]);
+            out[c + j * n] = (int16_t)((int32_t)(s + 0x4000u) >> 15);
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x18002c600 — in-place separable box mean over a float image.
  *
  *   Args (ms_abi): rcx = dst descriptor, rdx = src descriptor, r8d = mode.

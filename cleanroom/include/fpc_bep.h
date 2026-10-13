@@ -381,4 +381,8 @@ void     cr_line_orient_fit(float *samples, int px, int py,
                             float stepx, float stepy, const void *desc,
                             float *out_m, float *out_res);               /* 0x180020230 */
 
+/* ---- batch 44: fixed 7-tap reflect-101 FIR down each column --------------- */
+void     cr_vfir7_cols(int16_t *out, const int16_t *in, const int16_t *coef,
+                       int n, int sel);                                  /* 0x1800433b0 */
+
 #endif /* FPC_BEP_H */

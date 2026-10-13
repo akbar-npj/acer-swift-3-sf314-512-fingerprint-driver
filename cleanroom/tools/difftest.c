@@ -2942,6 +2942,31 @@ static void test_line_orient_fit(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_line_orient_fit\n");
 }
 
+/* ---- batch 44: fixed 7-tap reflect-101 FIR down each column ------------- */
+static void test_vfir7_cols(void)
+{
+    typedef void (WINAPI *v_v_pppii)(int16_t *, const int16_t *,
+                                     const int16_t *, int, int);
+    v_v_pppii v = (v_v_pppii)fn_at(RVA(0x1800433b0));
+    begin("cr_vfir7_cols");
+    int bad = g_fail;
+    enum { MAXN = 32, MAXS = 40, PAD = MAXN * (MAXS + 4) };
+    static int16_t inv[PAD], coefv[7], outv[PAD], outc[PAD];
+    for (int t = 0; t < 20000; t++) {
+        int n = 1 + (int)(rnd() % MAXN);
+        int sel = 4 + (int)(rnd() % (MAXS - 3));  /* sel >= 4: reflect-101 domain */
+        for (int i = 0; i < 7; i++) coefv[i] = (int16_t)rnd();
+        for (int i = 0; i < PAD; i++) inv[i] = (int16_t)rnd();
+        memset(outv, 0x5A, sizeof outv);
+        memset(outc, 0x5A, sizeof outc);
+        v(outv, inv, coefv, n, sel);
+        cr_vfir7_cols(outc, inv, coefv, n, sel);
+        cmp_buf("out", (unsigned char *)outv, (unsigned char *)outc,
+                sizeof(int16_t) * n * sel, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_vfir7_cols\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3013,6 +3038,37 @@ int main(int argc, char **argv)
                     }
                 }
             }
+        }
+        return 0;
+    }
+
+
+    if (argc > 2 && strcmp(argv[2], "probe_lf") == 0) {
+        /* Empirical tap geometry of 0x1800433b0 (7-tap vertical FIR).
+         * in[r*n+c] = r+1, cfg[tap] = 32767  =>  out[orow*n+c] = input_row+1
+         * (or 0 when the tap contributes nothing).  Printed as input_row
+         * (i.e. value-1) per tap per output row, first column only. */
+        int n = (argc > 3) ? atoi(argv[3]) : 8;
+        int sel = (argc > 4) ? atoi(argv[4]) : 10;
+        typedef void (WINAPI *v_v_pppii)(int16_t *, const int16_t *,
+                                         const int16_t *, int, unsigned);
+        v_v_pppii v = (v_v_pppii)fn_at(RVA(0x1800433b0));
+        enum { ROWS = 64, COLS = 64 };
+        static int16_t in[ROWS * COLS], out[ROWS * COLS];
+        int16_t cfg[7];
+        printf("probe_lf n=%d sel=%d\n", n, sel);
+        for (int tap = 0; tap < 7; tap++) {
+            for (int i = 0; i < ROWS * COLS; i++) in[i] = -12345;
+            for (int r = 0; r < ROWS; r++)
+                for (int c = 0; c < n; c++) in[r * n + c] = (int16_t)(r + 1);
+            for (int i = 0; i < 7; i++) cfg[i] = 0;
+            cfg[tap] = 32767;
+            for (int i = 0; i < ROWS * COLS; i++) out[i] = -12345;
+            v(out, in, cfg, n, (unsigned)sel);
+            printf(" tap%d:", tap);
+            for (int r = 0; r < sel + 3; r++)
+                printf(" %d", (int)out[r * n] - 1);
+            printf("\n");
         }
         return 0;
     }
@@ -3158,6 +3214,8 @@ int main(int argc, char **argv)
     test_sort_records();
     printf("\n== short-line orientation fit (9 hypotheses) ==\n");
     test_line_orient_fit();
+    printf("\n== fixed 7-tap reflect-101 column FIR ==\n");
+    test_vfir7_cols();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
