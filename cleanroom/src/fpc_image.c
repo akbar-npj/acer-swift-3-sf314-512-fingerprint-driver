@@ -92,3 +92,43 @@ void cr_image_threshold_mark(cr_image *img, const cr_image *src, int16_t thr)
                 d[i] = 0x10;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800182b0 — mark pixels where the int16 source is <= 0 with the value 1.
+ *   asm: n = img->w * img->h ; if (n>0)
+ *          for i in [0,n) if (src->data16[i] <= 0) img->data[i] = 1
+ * ------------------------------------------------------------------------ */
+void cr_image_mark_nonpos(cr_image *img, const cr_image *src)
+{
+    int n = img->w * img->h;
+    if (n > 0) {
+        const int16_t *s = (const int16_t *)src->data;
+        uint8_t *d = (uint8_t *)img->data;
+        for (int i = 0; i < n; i++)
+            if (s[i] <= 0)
+                d[i] = 1;
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180034490 — initialise an image descriptor with a 32-aligned pitch.
+ *   Same as cr_image_set but the first width word (a) is the stride rounded
+ *   up to a multiple of 32:  a = (w + 31) & ~31.  b = h.
+ *   p==NULL -> 1 ; w<0 || h<0 -> 0x69 ; else 0.
+ * ------------------------------------------------------------------------ */
+uint32_t cr_image_set_pitch(cr_image *img, void *data, int w, int h)
+{
+    if (img == NULL)
+        return 1;
+    if (w < 0 || h < 0)
+        return 0x69u;
+
+    img->w = w;
+    img->h = h;
+    img->b = h;
+    img->offx = 0;
+    img->offy = 0;
+    img->a = (int32_t)(((uint32_t)w + 31u) & ~31u);
+    img->data = data;
+    return 0;
+}

@@ -259,6 +259,11 @@ typedef uint32_t (WINAPI *v_u_ppii)(void *, void *, int, int);
 typedef void     (WINAPI *v_v_ppiiii)(void *, const void *, int, int, int, int);
 typedef void     (WINAPI *v_v_pp)(void *, const void *);
 typedef void     (WINAPI *v_v_ppi_s)(void *, const void *, int16_t);
+typedef float    (WINAPI *v_f_fi)(float, int);
+typedef int      (WINAPI *v_i_plii)(uint64_t *, int, int);
+typedef uint32_t (WINAPI *v_u_i)(uint32_t);
+typedef void     (WINAPI *v_v_ipp)(int32_t *, int32_t *, uint32_t);
+typedef float    (WINAPI *v_f_ppi)(const float *, const float *, int);
 
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
@@ -381,20 +386,151 @@ static void test_bitmap_bitmask(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmask_range\n");
 }
 
+/* ---- batch 3: more math / util leaves ---------------------------------- */
+static void test_ldexpf(void)
+{
+    v_f_fi v = (v_f_fi)fn_at(RVA(0x1800413a0));
+    begin("cr_ldexpf");
+    int bad = g_fail;
+    static const int ks[] = { 0, 1, -1, 23, -23, 127, -127, 128, 255, -128,
+                              0x7fffffff, (int)0x80000000, 5, -5, 64, -64 };
+    for (u64 i = 0; i < 0x100000000ULL; i += 0x10003ULL) {
+        u32 bits = (u32)i;
+        float x = cr_u2f(bits);
+        for (size_t j = 0; j < sizeof ks / sizeof ks[0]; j++) {
+            float rv = v(x, ks[j]);
+            float rc = cr_ldexpf(x, ks[j]);
+            if (cr_f2u(rv) != cr_f2u(rc))
+                mismatch("ldexp", ((u64)bits << 32) | (u32)ks[j], cr_f2u(rv), cr_f2u(rc));
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_ldexpf\n");
+}
+
+static void test_s16_clamp(void)
+{
+    v_v_ppi v = (v_v_ppi)fn_at(RVA(0x180012060));
+    begin("cr_s16_clamp_nonneg");
+    int bad = g_fail;
+    for (int t = 0; t < 6000; t++) {
+        int16_t sv[64], va[64], ca[64];
+        int n = (int)(rnd() % 66u) - 2;            /* include n<=0 */
+        for (int i = 0; i < 64; i++) {
+            sv[i] = (int16_t)rnd();
+            va[i] = (int16_t)(rnd() ^ 0x5A5A);
+            ca[i] = va[i];
+        }
+        v(va, sv, n);
+        cr_s16_clamp_nonneg(ca, sv, n);
+        cmp_buf("clamp", (unsigned char *)va, (unsigned char *)ca, sizeof va, (u32)n);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_s16_clamp_nonneg\n");
+}
+
+static void test_prng_range(void)
+{
+    v_i_plii v = (v_i_plii)fn_at(RVA(0x18002fd00));
+    begin("cr_prng_range");
+    int bad = g_fail;
+    for (int t = 0; t < 200000; t++) {
+        uint64_t sv = ((uint64_t)rnd() << 32) | rnd();
+        uint64_t sc = sv;
+        int lo = (int)rnd() - (int)(rnd() & 0xff);
+        int hi = (rnd() % 3u == 0) ? lo : (int)rnd() - (int)(rnd() & 0xff);
+        int rv = v(&sv, lo, hi);
+        int rc = cr_prng_range(&sc, lo, hi);
+        if (rv != rc || sv != sc)
+            mismatch("prng", ((u64)(u32)lo << 32) | (u32)hi, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_prng_range\n");
+}
+
+static void test_clz(void)
+{
+    v_u_i v = (v_u_i)fn_at(RVA(0x1800393b0));
+    begin("cr_clz");
+    int bad = g_fail;
+    /* structured: 0..0xffff, all powers of two and their neighbours */
+    for (u32 x = 0; x <= 0xffffu; x++) {
+        u32 rv = v(x), rc = cr_clz(x);
+        if (rv != rc) mismatch("clz", x, rv, rc);
+    }
+    for (int b = 0; b < 32; b++) {
+        u32 p = 1u << b;
+        u32 xs[3] = { p, p - 1u, p + 1u };
+        for (int k = 0; k < 3; k++) {
+            u32 rv = v(xs[k]), rc = cr_clz(xs[k]);
+            if (rv != rc) mismatch("clz-pow", xs[k], rv, rc);
+        }
+    }
+    /* wide deterministic sweep */
+    for (u64 i = 0; i < 0x100000000ULL; i += 0x1001ULL) {
+        u32 x = (u32)i;
+        u32 rv = v(x), rc = cr_clz(x);
+        if (rv != rc) mismatch("clz-sweep", x, rv, rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_clz\n");
+}
+
+static void test_sincos(void)
+{
+    v_v_ipp v = (v_v_ipp)fn_at(RVA(0x18001b990));
+    begin("cr_sincos");
+    int bad = g_fail;
+    for (u32 ph = 0; ph < 256; ph++) {
+        int32_t va = 0, vb = 0, ca = 0, cb = 0;
+        v(&va, &vb, ph);
+        cr_sincos(&ca, &cb, ph);
+        if (va != ca || vb != cb)
+            mismatch("sincos", ph, (u32)va ^ (u32)vb, (u32)ca ^ (u32)cb);
+    }
+    for (int t = 0; t < 100000; t++) {
+        u32 ph = rnd();
+        int32_t va = 0, vb = 0, ca = 0, cb = 0;
+        v(&va, &vb, ph);
+        cr_sincos(&ca, &cb, ph);
+        if (va != ca || vb != cb)
+            mismatch("sincos-r", ph, (u32)va ^ (u32)vb, (u32)ca ^ (u32)cb);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_sincos\n");
+}
+
+static void test_dot_f32(void)
+{
+    v_f_ppi v = (v_f_ppi)fn_at(RVA(0x18003b800));
+    begin("cr_dot_f32");
+    int bad = g_fail;
+    for (int t = 0; t < 200000; t++) {
+        float a[32], b[32];
+        int n = (int)(rnd() % 34u) - 2;            /* include n<=0 */
+        for (int i = 0; i < 32; i++) {
+            a[i] = cr_u2f(rnd());
+            b[i] = cr_u2f(rnd());
+        }
+        float rv = v(a, b, n), rc = cr_dot_f32(a, b, n);
+        if (cr_f2u(rv) != cr_f2u(rc))
+            mismatch("dot", (u32)n, cr_f2u(rv), cr_f2u(rc));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_dot_f32\n");
+}
+
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
  * the pixel buffer. */
 static void test_image_leaves(void)
 {
     v_v_p   vfill2 = (v_v_p)fn_at(RVA(0x180023a60));
-    v_u_ppii vset[2];
+    v_u_ppii vset[3];
     vset[0] = (v_u_ppii)fn_at(RVA(0x18003b250));
     vset[1] = (v_u_ppii)fn_at(RVA(0x18003fbc0));
+    vset[2] = (v_u_ppii)fn_at(RVA(0x180036460));
+    v_u_ppii vsetp = (v_u_ppii)fn_at(RVA(0x180034490));
     v_v_ppiiii vsub[2];
     vsub[0] = (v_v_ppiiii)fn_at(RVA(0x180010ef0));
     vsub[1] = (v_v_ppiiii)fn_at(RVA(0x180017a80));
     v_v_pp  vmark = (v_v_pp)fn_at(RVA(0x1800305b0));
     v_v_ppi_s vthr = (v_v_ppi_s)fn_at(RVA(0x180033ae0));
+    v_v_pp  vnonpos = (v_v_pp)fn_at(RVA(0x1800182b0));
 
     begin("cr_image_fill_const2");
     int bad = g_fail;
@@ -410,8 +546,11 @@ static void test_image_leaves(void)
     }
     if (g_fail == bad) end(); else printf("  FAIL cr_image_fill_const2\n");
 
-    for (int k = 0; k < 2; k++) {
-        begin(k ? "cr_image_set(0x18003fbc0)" : "cr_image_set(0x18003b250)");
+    for (int k = 0; k < 3; k++) {
+        const char *nm = k == 0 ? "cr_image_set(0x18003b250)"
+                       : k == 1 ? "cr_image_set(0x18003fbc0)"
+                                : "cr_image_set(0x180036460)";
+        begin(nm);
         bad = g_fail;
         for (int t = 0; t < 8000; t++) {
             unsigned char va[0x20], ca[0x20];
@@ -427,6 +566,22 @@ static void test_image_leaves(void)
         }
         if (g_fail == bad) end(); else printf("  FAIL image_set[%d]\n", k);
     }
+
+    begin("cr_image_set_pitch");
+    bad = g_fail;
+    for (int t = 0; t < 8000; t++) {
+        unsigned char va[0x20], ca[0x20];
+        memset(va, 0xAB, sizeof va); memset(ca, 0xAB, sizeof ca);
+        int w = (int)(rnd() % 300u) - 16;
+        int h = (int)(rnd() % 40u) - 8;
+        int isnull = (rnd() % 8u) == 0;
+        void *data = (void *)(uintptr_t)(0x1000 + (rnd() & 0xfff));
+        uint32_t rv = vsetp(isnull ? NULL : va, data, w, h);
+        uint32_t rc = cr_image_set_pitch(isnull ? NULL : (cr_image *)ca, data, w, h);
+        if (rv != rc) mismatch("pitch-ret", (u32)t, rv, rc);
+        if (!isnull) cmp_buf("pitch", va, ca, sizeof va, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_set_pitch\n");
 
     for (int k = 0; k < 2; k++) {
         begin(k ? "cr_image_subview(0x180017a80)" : "cr_image_subview(0x180010ef0)");
@@ -483,6 +638,24 @@ static void test_image_leaves(void)
         cmp_buf("thr", pv, pc, sizeof pv, (u32)t);
     }
     if (g_fail == bad) end(); else printf("  FAIL cr_image_threshold_mark\n");
+
+    begin("cr_image_mark_nonpos");
+    bad = g_fail;
+    for (int t = 0; t < 6000; t++) {
+        unsigned char va[0x20], ca[0x20], sa[0x20], pv[256], pc[256];
+        int16_t sv[512];          /* n = w*h can reach 14*14 = 196 samples */
+        int w = (int)(rnd() % 15u), h = (int)(rnd() % 15u);
+        for (int i = 0; i < 512; i++) sv[i] = (int16_t)rnd();
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca); memset(sa, 0, sizeof sa);
+        *(int *)(va + 0x10) = w; *(int *)(va + 0x14) = h; *(void **)(va + 8) = pv;
+        *(int *)(ca + 0x10) = w; *(int *)(ca + 0x14) = h; *(void **)(ca + 8) = pc;
+        *(void **)(sa + 8) = sv;
+        memset(pv, 0x99, sizeof pv); memset(pc, 0x99, sizeof pc);
+        vnonpos(va, sa);
+        cr_image_mark_nonpos((cr_image *)ca, (const cr_image *)sa);
+        cmp_buf("nonpos", pv, pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_mark_nonpos\n");
 }
 
 /* ---- main -------------------------------------------------------------- */
@@ -511,6 +684,8 @@ int main(int argc, char **argv)
     test_float_fn("cr_expf",          RVA(0x180002dd0), (void *)cr_expf,           0);
     test_float_fn("cr_roundf_to_int", RVA(0x180003020), (void *)cr_roundf_to_int,  1);
     test_float_fn("cr_floorf_to_int", RVA(0x180002f70), (void *)cr_floorf_to_int,  1);
+    test_float_fn("cr_lroundf",       RVA(0x180002d60), (void *)cr_lroundf,        1);
+    test_ldexpf();
 
     printf("\n== buffer predicates ==\n");
     test_type_predicates();
@@ -526,6 +701,11 @@ int main(int argc, char **argv)
     test_fill_copy();
     test_modff();
     test_bitmap_bitmask();
+    test_s16_clamp();
+    test_prng_range();
+    test_clz();
+    test_sincos();
+    test_dot_f32();
 
     printf("\n== image leaves ==\n");
     test_image_leaves();

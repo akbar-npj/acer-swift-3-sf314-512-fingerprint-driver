@@ -47,6 +47,21 @@ The image descriptor layout (established from these functions):
 | `0x1800305b0` | `fpc_bio_bep_sw23_900aab35d7` | `cr_image_mark_indices` | for each index in the list, set `data[index] = 4`. |
 | `0x180033ae0` | `fpc_bio_bep_sw23_9c60738574` | `cr_image_threshold_mark` | where `src16[i] >= thr`, set `data[i] = 0x10`. |
 
+### Batch 3 — math / util / image leaves
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x1800413a0` | `fpc_bio_bep_sw23_dc5cdd7edc` | `cr_ldexpf` | `ldexpf`: `x != 0.0 ? u2f(f2u(x) + (k<<23)) : 0.0`. **Ghidra mistypes this as returning int** — the asm returns a float in `xmm0` (`movd eax,xmm0; add eax,edx; movd xmm1,eax`). |
+| `0x180002d60` | `FpcBioTemplateSave` | `cr_lroundf` | `lroundf`: `e=trunc(x±0.5); return e + ((float)e - x < 0.0)`. First test is `ucomiss; jbe` so NaN takes the subtract branch. |
+| `0x180012060` | `fpc_bio_bep_sw23_14aab7a29c` | `cr_s16_clamp_nonneg` | copy `n` int16, mapping negatives to 0 (`cmovns`). |
+| `0x18002fd00` | `fpc_bio_bep_sw23_8bbb505c96` | `cr_prng_range` | LCG: `s = (s>>32) + (u32)s * 0xf83f630a` (64-bit); then `hi = (u32)s % (hi-lo) + lo` when `hi != lo`. |
+| `0x1800393b0` | `fpc_bio_bep_sw23_b54df0b0f5` | `cr_clz` | count-leading-zeros. Vendor spreads bits, adds 1, multiplies by the de Bruijn constant `0x76be629`, shifts `>>27` and indexes a 32-byte table; net result is `__builtin_clz(x)` for `x!=0`, `0` for `x==0`. |
+| `0x18001b990` | `fpc_bio_bep_sw23_3123fca792` | `cr_sincos` | quadrant sine/cosine from a 65-entry int16 table `round(16384*sin(k*pi/128))`. Args are `(int *a, int *b, uint phase)` — phase is the **3rd** arg. |
+| `0x18003b800` | `fpc_bio_bep_sw23_bbdc68c33d` | `cr_dot_f32` | single-precision dot product; `n<=0 -> 0.0f`. |
+| `0x1800182b0` | `fpc_bio_bep_sw23_27c8bbdf12` | `cr_image_mark_nonpos` | where `src16[i] <= 0`, set `data[i] = 1`. |
+| `0x180034490` | `fpc_bio_bep_sw23_a0bbe17d94` | `cr_image_set_pitch` | like `cr_image_set` but the first width word is a 32-aligned stride: `a = (w+31) & ~31`. |
+| `0x180036460` | `fpc_bio_bep_sw23_a8929aa58a` | `cr_image_set` | **byte-identical duplicate** of `0x18003b250` (3rd copy). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

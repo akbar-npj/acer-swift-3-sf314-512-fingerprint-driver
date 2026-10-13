@@ -33,6 +33,8 @@ float cr_sqrtf(float x);          /* vendor 0x180003080 ("FpcSin")           */
 float cr_expf(float x);           /* vendor 0x180002dd0 ("FpcCos")           */
 int   cr_roundf_to_int(float x);  /* vendor 0x180003020 ("FpcMalloc")        */
 int   cr_floorf_to_int(float x);  /* vendor 0x180002f70 ("FpcExp")           */
+float cr_ldexpf(float x, int k);  /* vendor 0x1800413a0                      */
+int   cr_lroundf(float x);        /* vendor 0x180002d60 ("FpcBioTemplateSave")*/
 
 /* ---- buffer / image helpers ------------------------------------------- */
 /*
@@ -73,6 +75,12 @@ float    cr_modff(float x, float *intpart);              /* 0x180040e20 */
 uint32_t cr_bitmap_get(const void *bm, int x, int y);    /* 0x180027380 */
 uint32_t cr_bitmask_range(int word, int start, int end); /* 0x18003c540 */
 
+void     cr_s16_clamp_nonneg(int16_t *dst, const int16_t *src, int n); /* 0x180012060 */
+int      cr_prng_range(uint64_t *state, int lo, int hi);               /* 0x18002fd00 */
+uint32_t cr_clz(uint32_t x);                                           /* 0x1800393b0 */
+void     cr_sincos(int32_t *a, int32_t *b, uint32_t phase);            /* 0x18001b990 */
+float    cr_dot_f32(const float *a, const float *b, int n);            /* 0x18003b800 */
+
 /* ---- image descriptor -------------------------------------------------- *
  * Matches the vendor layout the leaf functions touch:
  *   +0x00 w   +0x04 h   +0x08 data   +0x10 w   +0x14 h   +0x18 offx +0x1c offy
@@ -96,11 +104,12 @@ typedef struct {
 } cr_index_list;
 
 void     cr_image_fill_const2(cr_image *img);                        /* 0x180023a60 */
-uint32_t cr_image_set(cr_image *img, void *data, int w, int h);      /* 0x18003b250 / 0x18003fbc0 */
-void     cr_image_subview(cr_image *dst, const cr_image *src,
+uint32_t cr_image_set(cr_image *img, void *data, int w, int h);      /* 0x18003b250 / 0x18003fbc0 / 0x180036460 */
+uint32_t cr_image_set_pitch(cr_image *img, void *data, int w, int h);/* 0x180034490 */void     cr_image_subview(cr_image *dst, const cr_image *src,
                           int dx, int dy, int w, int h);             /* 0x180010ef0 / 0x180017a80 */
 void     cr_image_mark_indices(cr_image *img, const cr_index_list *l); /* 0x1800305b0 */
 void     cr_image_threshold_mark(cr_image *img, const cr_image *src,
                                  int16_t thr);                       /* 0x180033ae0 */
+void     cr_image_mark_nonpos(cr_image *img, const cr_image *src);   /* 0x1800182b0 */
 
 #endif /* FPC_BEP_H */

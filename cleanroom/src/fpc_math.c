@@ -140,3 +140,33 @@ int cr_floorf_to_int(float x)
         e -= 1;
     return e;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800413a0 — ldexpf by exponent-bit manipulation.
+ *   asm: if (x != 0.0) bits(x) + (k << 23)  (32-bit add), else 0.0
+ *   The jp/je pair means NaN (unordered) takes the "!= 0.0" path, matching
+ *   the C test x != 0.0f.  This is the same scaling step cr_expf uses.
+ * ------------------------------------------------------------------------ */
+float cr_ldexpf(float x, int k)
+{
+    if (x != 0.0f)
+        return cr_u2f(cr_f2u(x) + ((uint32_t)k << 23));
+    return 0.0f;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180002d60  (vendor name "FpcBioTemplateSave")  ->  lroundf
+ *   e = trunc(x +/- 0.5);  return e + ((float)e - x < 0.0);
+ *   The first test is `ucomiss x,0.0 ; jbe` (taken when unordered), so NaN
+ *   takes the subtract branch -> faithful C is !(x > 0.0f).
+ * ------------------------------------------------------------------------ */
+int cr_lroundf(float x)
+{
+    int e;
+    if (!(x > 0.0f))            /* also catches NaN -> subtract branch */
+        e = (int)(x - 0.5f);
+    else
+        e = (int)(x + 0.5f);
+
+    return e + ((float)e - x < 0.0f ? 1 : 0);
+}
