@@ -490,7 +490,30 @@ void     cr_affine_sample_s16_nn(cr_image *dst, const cr_image *src,
 void     cr_weighted_running_avg(int16_t *state, int16_t **dstp,
                                  const cr_image *img, const uint8_t **srcp,
                                  float k, const int16_t *limit); /* 0x180040ea0 */
-void     cr_pool_builder(void **hdr, void **ptrs, uint8_t n,
+int      cr_pool_builder(void **hdr, void **ptrs, uint8_t n,
                          const uint32_t *sizes);             /* 0x18003b690 */
+
+/* ---- batch 55: pool users + ready wrappers ----------------------------- */
+void     cr_affine_sample_u8_nn(cr_image *dst, const cr_image *src,
+                                const float *m, uint8_t fill); /* 0x180014110 */
+int      cr_mirror_extend_fir(uint8_t *out, uint8_t *dst, const uint8_t *src,
+                              const int16_t *coef, int n, int ncoef); /* 0x18001a510 */
+void     cr_inpaint_masked_box(cr_image *mask, cr_image *img,
+                               uint8_t and_mask, int apply);   /* 0x180041140 */
+int      cr_pool_alloc1(void **hdr, void **out0, uint32_t s0); /* 0x180044230 */
+int      cr_pool_alloc2(void **hdr, void **out0, uint32_t s0,
+                        void **out1, uint32_t s1);             /* 0x180047e30 */
+int      cr_pool_alloc3(void **hdr, void **out0, uint32_t s0,
+                        void **out1, uint32_t s1,
+                        void **out2, uint32_t s2);             /* 0x180010f40 */
+int      cr_pool_alloc4(void **hdr, void **out0, uint32_t s0,
+                        void **out1, uint32_t s1,
+                        void **out2, uint32_t s2,
+                        void **out3, uint32_t s3);             /* 0x18001b9e0 */
+int      cr_pool_alloc5(void **hdr, void **out0, uint32_t s0,
+                        void **out1, uint32_t s1,
+                        void **out2, uint32_t s2,
+                        void **out3, uint32_t s3,
+                        void **out4, uint32_t s4);             /* 0x18001d480 */
 
 #endif /* FPC_BEP_H */

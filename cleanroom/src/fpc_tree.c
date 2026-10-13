@@ -920,7 +920,7 @@ int cr_centroid_affine(int *out, const void *bm, float scale,
  *   {u8 i, u8 0, u8 0x30, u8 0x27}.  `ptrs[i]` receives block i's start.  On
  *   allocation failure nothing else is written (base stays NULL).
  * ------------------------------------------------------------------------ */
-void cr_pool_builder(void **hdr, void **ptrs, uint8_t n, const uint32_t *sizes)
+int cr_pool_builder(void **hdr, void **ptrs, uint8_t n, const uint32_t *sizes)
 {
     uint32_t N = n;
     int total = (int)(N * 4u + 0xfu);
@@ -930,8 +930,9 @@ void cr_pool_builder(void **hdr, void **ptrs, uint8_t n, const uint32_t *sizes)
     for (uint32_t i = 0; i < N; i++)
         total += (int)((sizes[i] + 0x13u) & 0xfffffff0u);
     void *base = NULL;
-    if (cr_malloc_aligned16(&base, (size_t)total) != 0)
-        return;
+    int rc = cr_malloc_aligned16(&base, (size_t)total);
+    if (rc != 0)
+        return rc;               /* returns the allocator's failure code (2) */
     hdr[0] = base;
     uint8_t *p = (uint8_t *)base;
     for (uint32_t i = 0; i < N; i++) {
@@ -955,4 +956,5 @@ void cr_pool_builder(void **hdr, void **ptrs, uint8_t n, const uint32_t *sizes)
             cur += bs;
         }
     }
+    return 0;
 }

@@ -842,3 +842,91 @@ void cr_weighted_running_avg(int16_t *state, int16_t **dstp,
         }
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001a510 — mirror-extend a source row, then run a 4-phase polyphase FIR.
+ *   int fn(uint8_t *out, uint8_t *dst, const uint8_t *src,
+ *          const int16_t *coef, int n, int ncoef):
+ *   `h = ncoef >> 1` is the border width.  The source row (n bytes) is placed
+ *   at dst[h .. h+n), the h bytes on each side are mirror-filled:
+ *       dst[j]        = src[h - j]          for j in [0, h)
+ *       dst[n+h+j]    = src[n - 2 - j]      for j in [0, h)
+ *   and finally cr_polyphase_fir4(out, dst, coef, n, ncoef) is applied.  The
+ *   vendor has fast 4-at-a-time paths when ncoef is 9 or 15 and n % 4 == 0,
+ *   but they produce exactly the same bytes as the generic loops.  Returns 0.
+ * ------------------------------------------------------------------------ */
+int cr_mirror_extend_fir(uint8_t *out, uint8_t *dst, const uint8_t *src,
+                         const int16_t *coef, int n, int ncoef)
+{
+    int h = ncoef >> 1;
+    if (n > 0)
+        for (int i = 0; i < n; i++)
+            dst[h + i] = src[i];
+    if (h > 0)
+        for (int j = 0; j < h; j++) {
+            dst[j] = src[h - j];
+            dst[n + h + j] = src[n - 2 - j];
+        }
+    cr_polyphase_fir4(out, dst, coef, n, ncoef);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180041140 — masked inpainting from box means, then mask -> image apply.
+ *   void fn(cr_image *mask, cr_image *img, uint8_t and_mask, int apply):
+ *   Pass 1 (only when h > 0): for every pixel whose mask byte has bit0 or bit4
+ *   set, try to fill img->data[idx] with the mean of the surrounding masked
+ *   box: first with a 3x3 box (win 3, any positive count), and if that fails
+ *   with a 5x5 box (win 5, count > 5).  On success the mask byte becomes 8.
+ *   Pass 2: any mask byte with bit3 set is rewritten to 2; then, when `apply`,
+ *   a pixel whose (updated) mask has bit0 set gets img 0.0f and one whose mask
+ *   has bit4 set gets img 255.0f.
+ * ------------------------------------------------------------------------ */
+void cr_inpaint_masked_box(cr_image *mask, cr_image *img,
+                           uint8_t and_mask, int apply)
+{
+    int w = mask->w, h = mask->h;
+    uint8_t *m = (uint8_t *)mask->data;
+    float   *d = (float *)img->data;
+
+    if (h > 0) {
+        for (int r = 0; r < h; r++) {
+            int rowbase = r * w;
+            for (int c = 0; c < w; c++) {
+                int idx = rowbase + c;
+                uint8_t b = m[idx];
+                if ((b & 0x11) == 0)
+                    continue;
+                int cnt;
+                float sum;
+                cr_masked_box_sum(&cnt, &sum, img, mask, and_mask, 3, idx);
+                if (cnt > 0) {
+                    d[idx] = sum / (float)cnt;
+                    m[idx] = 8;
+                }
+                if (m[idx] != 8) {
+                    cr_masked_box_sum(&cnt, &sum, img, mask, and_mask, 5, idx);
+                    if (cnt > 0 && cnt > 5) {
+                        d[idx] = sum / (float)cnt;
+                        m[idx] = 8;
+                    }
+                }
+            }
+        }
+        for (int r = 0; r < h; r++) {
+            int rowbase = r * w;
+            for (int c = 0; c < w; c++) {
+                int idx = rowbase + c;
+                if (m[idx] & 8)
+                    m[idx] = 2;
+                if (apply) {
+                    uint8_t b = m[idx];
+                    if (b & 1)
+                        d[idx] = 0.0f;
+                    else if (b & 0x10)
+                        d[idx] = 255.0f;
+                }
+            }
+        }
+    }
+}

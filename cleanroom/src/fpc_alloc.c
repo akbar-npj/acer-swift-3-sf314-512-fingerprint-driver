@@ -82,3 +82,84 @@ int cr_bit_alloc(void **out, int n)
     }
     return r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * batch 55 — pool wrappers (0x180044230/0x180047e30/0x180010f40/0x18001b9e0/
+ * 0x18001d480).  Each builds a contiguous pool of N 16-aligned sub-blocks via
+ * cr_pool_builder and, only on success (return 0), copies the N block pointers
+ * out to the caller's out-parameters.  The sizes are passed as separate u32
+ * arguments, collected into an array in argument order.
+ * ------------------------------------------------------------------------ */
+int cr_pool_alloc1(void **hdr, void **out0, uint32_t s0)
+{
+    uint32_t sizes[1] = { s0 };
+    void *ptrs[1];
+    int rc = cr_pool_builder(hdr, ptrs, 1, sizes);
+    if (rc == 0)
+        *out0 = ptrs[0];
+    return rc;
+}
+
+int cr_pool_alloc2(void **hdr, void **out0, uint32_t s0,
+                   void **out1, uint32_t s1)
+{
+    uint32_t sizes[2] = { s0, s1 };
+    void *ptrs[2];
+    int rc = cr_pool_builder(hdr, ptrs, 2, sizes);
+    if (rc == 0) {
+        *out0 = ptrs[0];
+        *out1 = ptrs[1];
+    }
+    return rc;
+}
+
+int cr_pool_alloc3(void **hdr, void **out0, uint32_t s0,
+                   void **out1, uint32_t s1,
+                   void **out2, uint32_t s2)
+{
+    uint32_t sizes[3] = { s0, s1, s2 };
+    void *ptrs[3];
+    int rc = cr_pool_builder(hdr, ptrs, 3, sizes);
+    if (rc == 0) {
+        *out0 = ptrs[0];
+        *out1 = ptrs[1];
+        *out2 = ptrs[2];
+    }
+    return rc;
+}
+
+int cr_pool_alloc4(void **hdr, void **out0, uint32_t s0,
+                   void **out1, uint32_t s1,
+                   void **out2, uint32_t s2,
+                   void **out3, uint32_t s3)
+{
+    uint32_t sizes[4] = { s0, s1, s2, s3 };
+    void *ptrs[4];
+    int rc = cr_pool_builder(hdr, ptrs, 4, sizes);
+    if (rc == 0) {
+        *out0 = ptrs[0];
+        *out1 = ptrs[1];
+        *out2 = ptrs[2];
+        *out3 = ptrs[3];
+    }
+    return rc;
+}
+
+int cr_pool_alloc5(void **hdr, void **out0, uint32_t s0,
+                   void **out1, uint32_t s1,
+                   void **out2, uint32_t s2,
+                   void **out3, uint32_t s3,
+                   void **out4, uint32_t s4)
+{
+    uint32_t sizes[5] = { s0, s1, s2, s3, s4 };
+    void *ptrs[5];
+    int rc = cr_pool_builder(hdr, ptrs, 5, sizes);
+    if (rc == 0) {
+        *out0 = ptrs[0];
+        *out1 = ptrs[1];
+        *out2 = ptrs[2];
+        *out3 = ptrs[3];
+        *out4 = ptrs[4];
+    }
+    return rc;
+}

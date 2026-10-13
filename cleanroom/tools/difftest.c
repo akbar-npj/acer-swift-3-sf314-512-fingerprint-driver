@@ -4830,9 +4830,9 @@ static void test_tree_batch54(void)
 
     /* --- cr_pool_builder (0x18003b690) ------------------------------------ */
     {
-        typedef void (WINAPI *v_v_ppbp)(void **, void **, uint8_t, const uint32_t *);
+        typedef int (WINAPI *v_i_ppbp)(void **, void **, uint8_t, const uint32_t *);
         typedef void (WINAPI *v_v_p)(void *);
-        v_v_ppbp v = (v_v_ppbp)fn_at(RVA(0x18003b690));
+        v_i_ppbp v = (v_i_ppbp)fn_at(RVA(0x18003b690));
         v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
         begin("cr_pool_builder");
         int bad = g_fail;
@@ -4847,8 +4847,9 @@ static void test_tree_batch54(void)
             memset(cbuf, 0x5A, sizeof cbuf);
             memset(pv, 0x5A, sizeof pv);
             memset(pc, 0x5A, sizeof pc);
-            v((void **)hbuf, pv, (uint8_t)n, sizes);
-            cr_pool_builder((void **)cbuf, pc, (uint8_t)n, sizes);
+            int rv = v((void **)hbuf, pv, (uint8_t)n, sizes);
+            int rc = cr_pool_builder((void **)cbuf, pc, (uint8_t)n, sizes);
+            if (rv != rc) mismatch("pb-ret", (u32)t, (u32)rv, (u32)rc);
             u8 *hb = *(u8 **)hbuf, *cb = *(u8 **)cbuf;
             if ((hb == NULL) != (cb == NULL)) {
                 mismatch("pb-null", (u32)t, hb ? 1 : 0, cb ? 1 : 0);
@@ -4874,6 +4875,268 @@ static void test_tree_batch54(void)
             cr_sized_free(&cp);
         }
         if (g_fail == bad) end(); else printf("  FAIL cr_pool_builder\n");
+    }
+}
+
+/* ---- batch 55: pool users + ready wrappers ----------------------------- */
+/* shared checker for the cr_pool_allocN wrappers (see cr_pool_builder test) */
+static void pool_check(const char *what, int t,
+                       void *hv, void *hc, void **pv, void **pc,
+                       int n, const uint32_t *sizes, int rv, int rc)
+{
+    if (rv != rc) { mismatch("p-ret", (u32)t, (u32)rv, (u32)rc); return; }
+    u8 *hb = *(u8 **)hv, *cb = *(u8 **)hc;
+    if ((hb == NULL) != (cb == NULL)) {
+        mismatch("p-null", (u32)t, hb ? 1 : 0, cb ? 1 : 0);
+        return;
+    }
+    if (((u8 *)hv)[8] != ((u8 *)hc)[8] || ((u8 *)hv)[9] != ((u8 *)hc)[9])
+        mismatch("p-hdr", (u32)t, ((u8 *)hv)[8] * 256u + ((u8 *)hv)[9],
+                 ((u8 *)hc)[8] * 256u + ((u8 *)hc)[9]);
+    if (!hb) return;
+    cmp_buf(what, hb, cb, 4u * (size_t)n, (u32)t);
+    for (int i = 0; i < n; i++) {
+        long dv = (long)((u8 *)pv[i] - hb);
+        long dc = (long)((u8 *)pc[i] - cb);
+        if (dv != dc) mismatch("p-off", (u32)(t * 8 + i), (u32)dv, (u32)dc);
+        uint32_t bs = (sizes[i] + 0x13u) & 0xfffffff0u;
+        if (memcmp((u8 *)pv[i] + bs - 4, (u8 *)pc[i] + bs - 4, 4) != 0)
+            mismatch("p-tr", (u32)(t * 8 + i), ((u8 *)pv[i])[bs - 4],
+                     ((u8 *)pc[i])[bs - 4]);
+    }
+}
+
+static void test_tree_batch55(void)
+{
+    /* --- cr_affine_sample_u8_nn (0x180014110) ----------------------------- */
+    {
+        typedef void (WINAPI *v_v_ppph)(void *, const void *, const float *, uint8_t);
+        v_v_ppph v = (v_v_ppph)fn_at(RVA(0x180014110));
+        begin("cr_affine_sample_u8_nn");
+        int bad = g_fail;
+        enum { MAXW = 40, MAXH = 24 };
+        u8 sbuf[MAXW * MAXH], dv[MAXW * MAXH], dc[MAXW * MAXH];
+        for (int t = 0; t < 4000; t++) {
+            int w = 1 + (int)(rnd() % MAXW);
+            int h = 1 + (int)(rnd() % MAXH);
+            for (int i = 0; i < w * h; i++) sbuf[i] = (u8)rnd();
+            float m[6];
+            m[0] = (float)((int)(rnd() % 9) - 4);
+            m[1] = (float)((int)(rnd() % 5) - 2);
+            m[2] = (float)((int)(rnd() % (2 * w + 4)) - w);
+            m[3] = (float)((int)(rnd() % 9) - 4);
+            m[4] = (float)((int)(rnd() % 5) - 2);
+            m[5] = (float)((int)(rnd() % (2 * h + 4)) - h);
+            u8 fill = (u8)rnd();
+            cr_image ds, ddv, ddc;
+            cr_image_set(&ds, sbuf, w, h);
+            cr_image_set(&ddv, dv, w, h);
+            cr_image_set(&ddc, dc, w, h);
+            memset(dv, 0x5A, sizeof dv);
+            memset(dc, 0x5A, sizeof dc);
+            v(&ddv, &ds, m, fill);
+            cr_affine_sample_u8_nn(&ddc, &ds, m, fill);
+            cmp_buf("affu8", dv, dc, (size_t)w * h, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_affine_sample_u8_nn\n");
+    }
+
+    /* --- cr_mirror_extend_fir (0x18001a510) ------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppppii)(uint8_t *, uint8_t *, const uint8_t *,
+                                         const int16_t *, int, int);
+        v_i_ppppii v = (v_i_ppppii)fn_at(RVA(0x18001a510));
+        begin("cr_mirror_extend_fir");
+        int bad = g_fail;
+        enum { CAP = 512, OFF = 64 };
+        static const int kerns[] = { 9, 15, 3, 5, 7, 11, 13, 1 };
+        u8 outv[CAP], outc[CAP], dstv[CAP], dstc[CAP], sbuf[CAP];
+        int16_t coef[32];
+        for (int t = 0; t < 4000; t++) {
+            int n = 1 + (int)(rnd() % 120);
+            int ncoef = kerns[rnd() % (sizeof kerns / sizeof kerns[0])];
+            for (int i = 0; i < CAP; i++) sbuf[i] = (u8)rnd();
+            for (int i = 0; i < 32; i++) coef[i] = (int16_t)rnd();
+            memset(dstv, 0x5A, sizeof dstv);
+            memset(dstc, 0x5A, sizeof dstc);
+            memset(outv, 0x5A, sizeof outv);
+            memset(outc, 0x5A, sizeof outc);
+            const u8 *src = sbuf + OFF;
+            int rv = v(outv, dstv, src, coef, n, ncoef);
+            int rc = cr_mirror_extend_fir(outc, dstc, src, coef, n, ncoef);
+            if (rv != rc) mismatch("mfir-ret", (u32)t, (u32)rv, (u32)rc);
+            cmp_buf("mfir-dst", dstv, dstc, (size_t)n + ncoef, (u32)t);
+            cmp_buf("mfir-out", outv, outc, (size_t)n + 32, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_mirror_extend_fir\n");
+    }
+
+    /* --- cr_inpaint_masked_box (0x180041140) ------------------------------ */
+    {
+        typedef void (WINAPI *v_v_ppbi)(void *, void *, uint8_t, int);
+        v_v_ppbi v = (v_v_ppbi)fn_at(RVA(0x180041140));
+        begin("cr_inpaint_masked_box");
+        int bad = g_fail;
+        enum { MAXW = 24, MAXH = 16 };
+        u8 mv[MAXW * MAXH], mc[MAXW * MAXH];
+        float fv[MAXW * MAXH], fc[MAXW * MAXH];
+        for (int t = 0; t < 4000; t++) {
+            int w = 1 + (int)(rnd() % MAXW);
+            int h = 1 + (int)(rnd() % MAXH);
+            for (int i = 0; i < w * h; i++) {
+                mv[i] = mc[i] = (u8)rnd();
+                fv[i] = fc[i] = (float)((int)(rnd() % 2001) - 1000) * 0.25f;
+            }
+            uint8_t am = (uint8_t)rnd();
+            int ap = (int)(rnd() & 1);
+            cr_image dvm, dcm, dvf, dcf;
+            cr_image_set(&dvm, mv, w, h);
+            cr_image_set(&dcm, mc, w, h);
+            cr_image_set(&dvf, fv, w, h);
+            cr_image_set(&dcf, fc, w, h);
+            v(&dvm, &dvf, am, ap);
+            cr_inpaint_masked_box(&dcm, &dcf, am, ap);
+            cmp_buf("inp-mask", mv, mc, (size_t)w * h, (u32)t);
+            cmp_buf("inp-img", (u8 *)fv, (u8 *)fc, sizeof(float) * (size_t)w * h, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_inpaint_masked_box\n");
+    }
+
+    /* --- cr_pool_alloc1 (0x180044230) ------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppz)(void **, void **, uint32_t);
+        typedef void (WINAPI *v_v_p)(void *);
+        v_i_ppz v = (v_i_ppz)fn_at(RVA(0x180044230));
+        v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+        begin("cr_pool_alloc1");
+        int bad = g_fail;
+        enum { MAXSZ = 200 };
+        for (int t = 0; t < 3000; t++) {
+            uint32_t sizes[1] = { rnd() % MAXSZ };
+            u8 hv[16], hc[16];
+            void *ov = (void *)0x5A5A, *oc = (void *)0x5A5A;
+            memset(hv, 0x5A, sizeof hv);
+            memset(hc, 0x5A, sizeof hc);
+            int rv = v((void **)hv, &ov, sizes[0]);
+            int rc = cr_pool_alloc1((void **)hc, &oc, sizes[0]);
+            void *pv[1] = { ov }, *pc[1] = { oc };
+            pool_check("pa1", t, hv, hc, pv, pc, 1, sizes, rv, rc);
+            if (*(u8 **)hv) { void *p = *(u8 **)hv; vsfree(&p); }
+            if (*(u8 **)hc) { void *p = *(u8 **)hc; cr_sized_free(&p); }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_pool_alloc1\n");
+    }
+
+    /* --- cr_pool_alloc2 (0x180047e30) ------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppzpz)(void **, void **, uint32_t, void **, uint32_t);
+        typedef void (WINAPI *v_v_p)(void *);
+        v_i_ppzpz v = (v_i_ppzpz)fn_at(RVA(0x180047e30));
+        v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+        begin("cr_pool_alloc2");
+        int bad = g_fail;
+        enum { MAXSZ = 200 };
+        for (int t = 0; t < 3000; t++) {
+            uint32_t sizes[2] = { rnd() % MAXSZ, rnd() % MAXSZ };
+            u8 hv[16], hc[16];
+            void *ov0 = (void *)0x5A5A, *ov1 = (void *)0x5A5A;
+            void *oc0 = (void *)0x5A5A, *oc1 = (void *)0x5A5A;
+            memset(hv, 0x5A, sizeof hv);
+            memset(hc, 0x5A, sizeof hc);
+            int rv = v((void **)hv, &ov0, sizes[0], &ov1, sizes[1]);
+            int rc = cr_pool_alloc2((void **)hc, &oc0, sizes[0], &oc1, sizes[1]);
+            void *pv[2] = { ov0, ov1 }, *pc[2] = { oc0, oc1 };
+            pool_check("pa2", t, hv, hc, pv, pc, 2, sizes, rv, rc);
+            if (*(u8 **)hv) { void *p = *(u8 **)hv; vsfree(&p); }
+            if (*(u8 **)hc) { void *p = *(u8 **)hc; cr_sized_free(&p); }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_pool_alloc2\n");
+    }
+
+    /* --- cr_pool_alloc3 (0x180010f40) ------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppzpzpz)(void **, void **, uint32_t, void **,
+                                          uint32_t, void **, uint32_t);
+        typedef void (WINAPI *v_v_p)(void *);
+        v_i_ppzpzpz v = (v_i_ppzpzpz)fn_at(RVA(0x180010f40));
+        v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+        begin("cr_pool_alloc3");
+        int bad = g_fail;
+        enum { MAXSZ = 200 };
+        for (int t = 0; t < 3000; t++) {
+            uint32_t sizes[3] = { rnd() % MAXSZ, rnd() % MAXSZ, rnd() % MAXSZ };
+            u8 hv[16], hc[16];
+            void *ov[3], *oc[3];
+            for (int i = 0; i < 3; i++) ov[i] = oc[i] = (void *)0x5A5A;
+            memset(hv, 0x5A, sizeof hv);
+            memset(hc, 0x5A, sizeof hc);
+            int rv = v((void **)hv, &ov[0], sizes[0], &ov[1], sizes[1], &ov[2], sizes[2]);
+            int rc = cr_pool_alloc3((void **)hc, &oc[0], sizes[0], &oc[1], sizes[1],
+                                    &oc[2], sizes[2]);
+            pool_check("pa3", t, hv, hc, ov, oc, 3, sizes, rv, rc);
+            if (*(u8 **)hv) { void *p = *(u8 **)hv; vsfree(&p); }
+            if (*(u8 **)hc) { void *p = *(u8 **)hc; cr_sized_free(&p); }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_pool_alloc3\n");
+    }
+
+    /* --- cr_pool_alloc4 (0x18001b9e0) ------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_p8)(void **, void **, uint32_t, void **, uint32_t,
+                                     void **, uint32_t, void **, uint32_t);
+        typedef void (WINAPI *v_v_p)(void *);
+        v_i_p8 v = (v_i_p8)fn_at(RVA(0x18001b9e0));
+        v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+        begin("cr_pool_alloc4");
+        int bad = g_fail;
+        enum { MAXSZ = 200 };
+        for (int t = 0; t < 3000; t++) {
+            uint32_t sizes[4] = { rnd() % MAXSZ, rnd() % MAXSZ,
+                                  rnd() % MAXSZ, rnd() % MAXSZ };
+            u8 hv[16], hc[16];
+            void *ov[4], *oc[4];
+            for (int i = 0; i < 4; i++) ov[i] = oc[i] = (void *)0x5A5A;
+            memset(hv, 0x5A, sizeof hv);
+            memset(hc, 0x5A, sizeof hc);
+            int rv = v((void **)hv, &ov[0], sizes[0], &ov[1], sizes[1],
+                       &ov[2], sizes[2], &ov[3], sizes[3]);
+            int rc = cr_pool_alloc4((void **)hc, &oc[0], sizes[0], &oc[1], sizes[1],
+                                    &oc[2], sizes[2], &oc[3], sizes[3]);
+            pool_check("pa4", t, hv, hc, ov, oc, 4, sizes, rv, rc);
+            if (*(u8 **)hv) { void *p = *(u8 **)hv; vsfree(&p); }
+            if (*(u8 **)hc) { void *p = *(u8 **)hc; cr_sized_free(&p); }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_pool_alloc4\n");
+    }
+
+    /* --- cr_pool_alloc5 (0x18001d480) ------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_p10)(void **, void **, uint32_t, void **, uint32_t,
+                                      void **, uint32_t, void **, uint32_t,
+                                      void **, uint32_t);
+        typedef void (WINAPI *v_v_p)(void *);
+        v_i_p10 v = (v_i_p10)fn_at(RVA(0x18001d480));
+        v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+        begin("cr_pool_alloc5");
+        int bad = g_fail;
+        enum { MAXSZ = 200 };
+        for (int t = 0; t < 3000; t++) {
+            uint32_t sizes[5] = { rnd() % MAXSZ, rnd() % MAXSZ, rnd() % MAXSZ,
+                                  rnd() % MAXSZ, rnd() % MAXSZ };
+            u8 hv[16], hc[16];
+            void *ov[5], *oc[5];
+            for (int i = 0; i < 5; i++) ov[i] = oc[i] = (void *)0x5A5A;
+            memset(hv, 0x5A, sizeof hv);
+            memset(hc, 0x5A, sizeof hc);
+            int rv = v((void **)hv, &ov[0], sizes[0], &ov[1], sizes[1], &ov[2], sizes[2],
+                       &ov[3], sizes[3], &ov[4], sizes[4]);
+            int rc = cr_pool_alloc5((void **)hc, &oc[0], sizes[0], &oc[1], sizes[1],
+                                    &oc[2], sizes[2], &oc[3], sizes[3], &oc[4], sizes[4]);
+            pool_check("pa5", t, hv, hc, ov, oc, 5, sizes, rv, rc);
+            if (*(u8 **)hv) { void *p = *(u8 **)hv; vsfree(&p); }
+            if (*(u8 **)hc) { void *p = *(u8 **)hc; cr_sized_free(&p); }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_pool_alloc5\n");
     }
 }
 
@@ -5146,6 +5409,8 @@ int main(int argc, char **argv)
     test_tree_batch53();
     printf("\n== batch 54: ready wrappers (size 192-512) ==\n");
     test_tree_batch54();
+    printf("\n== batch 55: pool users + ready wrappers ==\n");
+    test_tree_batch55();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

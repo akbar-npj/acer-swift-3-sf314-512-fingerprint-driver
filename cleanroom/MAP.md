@@ -411,7 +411,20 @@ side effects, never raw pointer values.
 | `0x1800175b0` | `fpc_bio_bep_sw23_2464d11c20` | `cr_gain_normalize_s16` | int16 twin: base 0x3fc0, shift 12, default gain 0x1000, `u4 = Σacc[1..6]/3` (signed); phase 2 `v=((0x3fc0-p)*gain)>>12; p=(int16)(0x3fc0-v)` (0 if `v>=0x3fc0`). |
 | `0x180044040` | `fpc_bio_bep_sw23_e8ff948c05.isra.1` | `cr_affine_sample_s16_nn` | Nearest-neighbour int16 affine resample: Q20 map `{x_col,x_row,x_org,y_col,y_row,y_org}`, accumulators start at `(int)(org*2^20)+0x80000`, out-of-bounds dst pixels take `fill`. |
 | `0x180040ea0` | `fpc_bio_bep_sw23_dbf0b0038b` | `cr_weighted_running_avg` | `fs=src[i]/255; f5=state[i]*2^-4+fs; f4=min(limit,f5)`; if `f4>0`: `state[i]=roundf(f4*16)`, `dst[i]=roundf(((dst[i]*2^-6*(f4-fs))+fs*(img[i]*k))/f4*64)` clamped 0x7fff. |
-| `0x18003b690` | `fpc_bio_bep_sw23_bb6f7bbe81` | `cr_pool_builder` | Build a descriptor pool: alloc `4n+0xf+Σ((sizes[i]+0x13)&~0xf)`, store the n u32 sizes at the front, then n 16-aligned sub-blocks each ending in a trailer `{u8 i, 0, 0x30, 0x27}`; `ptrs[i]` = block start; `hdr = {base, u8 n, u8 4}`. |
+| `0x18003b690` | `fpc_bio_bep_sw23_bb6f7bbe81` | `cr_pool_builder` | Build a descriptor pool: alloc `4n+0xf+Σ((sizes[i]+0x13)&~0xf)`, store the n u32 sizes at the front, then n 16-aligned sub-blocks each ending in a trailer `{u8 i, 0, 0x30, 0x27}`; `ptrs[i]` = block start; `hdr = {base, u8 n, u8 4}`. Returns the allocator status (0 ok, 2 on failure). |
+
+### Batch 55 — pool users + ready wrappers
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180014110` | `fpc_bio_bep_sw23_1a1610649e` | `cr_affine_sample_u8_nn` | Byte twin of `cr_affine_sample_s16_nn`: same Q20 map/accumulators, in-bounds test folded to `0<=x<src->w && 0<=y<src->h`; OOB dst pixels take `fill`. |
+| `0x18001a510` | `fpc_bio_bep_sw23_30be67b43f` | `cr_mirror_extend_fir` | `int fn(u8 *out, u8 *dst, const u8 *src, const i16 *coef, int n, int ncoef)`: `h=ncoef>>1`; place the n-byte row at `dst[h..h+n)`, mirror-fill `dst[j]=src[h-j]` and `dst[n+h+j]=src[n-2-j]`, then `cr_polyphase_fir4(out,dst,coef,n,ncoef)`. Vendor has 4-at-a-time fast paths for ncoef∈{9,15} & n%4==0 (byte-identical). |
+| `0x180041140` | `fpc_bio_bep_sw23_dc3eb5f865` | `cr_inpaint_masked_box` | Masked inpaint: for each pixel with mask bit0/bit4 set, fill `img[idx]` with the mean of a 3×3 masked box (any positive count), else a 5×5 box (count>5), marking the mask byte 8 on success; then any mask bit3 becomes 2 and, when `apply`, mask bit0→`img=0.0f`, bit4→`img=255.0f`. |
+| `0x180044230` | `fpc_bio_bep_sw23_e9b23176cd` | `cr_pool_alloc1` | `cr_pool_builder(hdr,ptrs,1,{s0})`; on success `*out0=ptrs[0]`; returns the status. |
+| `0x180047e30` | `fpc_bio_bep_sw23_fbdfd5dc28` | `cr_pool_alloc2` | 2-block pool; on success writes both block pointers out. |
+| `0x180010f40` | `fpc_bio_bep_sw23_10993dfb1a` | `cr_pool_alloc3` | 3-block pool; on success writes the three block pointers out. |
+| `0x18001b9e0` | `fpc_bio_bep_sw23_316605bf10` | `cr_pool_alloc4` | 4-block pool; on success writes the four block pointers out. |
+| `0x18001d480` | `fpc_bio_bep_sw23_361a5cb939.part.1` | `cr_pool_alloc5` | 5-block pool; on success writes the five block pointers out. |
 
 ## Deferred (identified, not yet rewritten)
 

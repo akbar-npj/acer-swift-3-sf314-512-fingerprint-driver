@@ -90,3 +90,47 @@ void cr_affine_sample_s16_nn(cr_image *dst, const cr_image *src,
         rowoff += ds;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180014110 — nearest-neighbour uint8 affine resample with OOB fill.
+ *   void fn(cr_image *dst, const cr_image *src, const float *m, uint8_t fill):
+ *   the byte twin of cr_affine_sample_s16_nn.  Same Q20 map, same accumulators
+ *   and same in-bounds test (the vendor folds it into a single sign test:
+ *   0 <= x < src->w && 0 <= y < src->h).  Out-of-range dst pixels take `fill`;
+ *   in-range pixels copy src[y*src->a + x + src->offx + src->a*src->offy].
+ * ------------------------------------------------------------------------ */
+void cr_affine_sample_u8_nn(cr_image *dst, const cr_image *src,
+                            const float *m, uint8_t fill)
+{
+    const uint8_t *sdata = (const uint8_t *)src->data;
+    uint8_t *ddata = (uint8_t *)dst->data;
+    int sw = src->w, sh = src->h, ss = src->a;
+    int dw = dst->w, dh = dst->h, ds = dst->a;
+    long soff = src->offx + ss * src->offy;
+    uint8_t *drowbase = ddata + dst->offy * ds + dst->offx;
+    const float sc = 0x1p-20f;
+    uint32_t xstep = (uint32_t)(int)(m[0] / sc);   /* per column */
+    uint32_t ystep = (uint32_t)(int)(m[3] / sc);   /* per column */
+    uint32_t xrow = (uint32_t)(int)(m[1] / sc);    /* per row    */
+    uint32_t yrow = (uint32_t)(int)(m[4] / sc);    /* per row    */
+    uint32_t xacc_row = (uint32_t)((int)(m[2] / sc) + 0x80000);
+    uint32_t yacc_row = (uint32_t)((int)(m[5] / sc) + 0x80000);
+    int rowoff = 0;
+    for (int r = 0; r < dh; r++) {
+        uint8_t *drow = drowbase + rowoff;
+        uint32_t xacc = xacc_row, yacc = yacc_row;
+        for (int c = 0; c < dw; c++) {
+            int x = ((int)xacc) >> 20;
+            int y = ((int)yacc) >> 20;
+            if (x >= 0 && x < sw && y >= 0 && y < sh)
+                drow[c] = sdata[(long)y * ss + x + soff];
+            else
+                drow[c] = fill;
+            xacc += xstep;
+            yacc += ystep;
+        }
+        xacc_row += xrow;
+        yacc_row += yrow;
+        rowoff += ds;
+    }
+}
