@@ -328,4 +328,16 @@ typedef struct {
 int      cr_grid_insert(cr_grid *g, uint8_t x, uint8_t y, float v,
                         cr_grid_cfg *cfg);                               /* 0x18002f070 */
 
+/* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
+typedef struct {
+    int32_t         a;      /* +0x00  row stride in bits       */
+    int32_t         b;      /* +0x04                           */
+    const uint32_t *data;   /* +0x08  packed 32-bit words      */
+    int32_t         w;      /* +0x10  width in bits            */
+    int32_t         h;      /* +0x14  height in rows           */
+} cr_bitmap_desc;
+
+int      cr_bitmap_centroid(const cr_bitmap_desc *bm, int win_h, int win_w,
+                            int *out_y, int *out_x, int margin);         /* 0x18002ddd0 */
+
 #endif /* FPC_BEP_H */

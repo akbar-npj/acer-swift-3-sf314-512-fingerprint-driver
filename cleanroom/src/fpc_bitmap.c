@@ -419,3 +419,74 @@ void cr_bitmap_erode(cr_image *dst, const cr_image *src, int count)
         s = base;
     } while (count != it);
 }
+
+/*
+ * 0x18002ddd0 — centroid of the set bits in a bitmap, clamped to a window.
+ *
+ * Scans every bit of the (masked) bitmap, accumulating the count, the sum of
+ * row indices and the sum of column indices, then returns the centroid minus
+ * half the window, clamped into [margin, dim - win - margin] per axis.  The
+ * vendor masks only the last word of each row (the first loop iteration) and
+ * uses 32-bit accumulators; the fast paths for all-zero / all-one words and
+ * bytes are just closed forms of the same sums, so a plain bit scan reproduces
+ * them exactly (32-bit wrapping addition is order-independent).
+ *
+ * Returns 0, or 0x82 when the window does not fit inside the bitmap.
+ */
+int cr_bitmap_centroid(const cr_bitmap_desc *bm, int win_h, int win_w,
+                       int *out_y, int *out_x, int margin)
+{
+    int32_t h = bm->h;
+    int32_t w = bm->w;
+    if (h - 2 * margin < win_h)
+        return 0x82;
+    if (w - 2 * margin < win_w)
+        return 0x82;
+
+    int32_t stride = bm->a >> 5;             /* words per row */
+    int wlast = ((w + 31) >> 5) - 1;         /* last word index (-1 when w<=0) */
+
+    int32_t count = 0, rowsum = 0, colsum = 0;
+    for (int wc = wlast; wc >= 0; wc--) {
+        uint32_t mask = 0xffffffffu;
+        if (wc == wlast)
+            mask = 0xffffffffu >> ((~(uint32_t)(w + 31)) & 31u);
+        for (int row = 0; row < h; row++) {
+            uint32_t word = bm->data[(int64_t)row * stride + wc] & mask;
+            if (word == 0)
+                continue;
+            for (int j = 0; j < 4; j++) {
+                uint32_t b = (word >> (8 * j)) & 0xffu;
+                for (int k = 0; k < 8; k++) {
+                    if (b & (1u << k)) {
+                        count++;
+                        rowsum += row;
+                        colsum += wc * 32 + j * 8 + k;
+                    }
+                }
+            }
+        }
+    }
+
+    int32_t xc = count ? rowsum / count : 0;
+    int32_t yc = count ? colsum / count : 0;
+
+    /* half() == the vendor's (v + (uint32)v>>31) >> 1 */
+    int32_t oh = (win_h + (int32_t)((uint32_t)win_h >> 31)) >> 1;
+    int32_t ow = (win_w + (int32_t)((uint32_t)win_w >> 31)) >> 1;
+
+    int32_t oy = xc - oh;
+    if (oy < margin) oy = margin;
+    int32_t ox = yc - ow;
+    if (ox < margin) ox = margin;
+
+    int32_t ty = h - win_h - margin;
+    if (ty > oy) ty = oy;
+    *out_y = ty;
+
+    int32_t tx = w - win_w - margin;
+    if (tx <= ox) ox = tx;
+    *out_x = ox;
+
+    return 0;
+}

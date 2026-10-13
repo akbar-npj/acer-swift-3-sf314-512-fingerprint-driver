@@ -2493,6 +2493,37 @@ static void test_grid_insert(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_grid_insert\n");
 }
 
+/* 0x18002ddd0 — centroid of set bits in a bitmap, clamped to a window. */
+static void test_bitmap_centroid(void)
+{
+    typedef int (WINAPI *v_i_pppiip)(const void *, int, int, int *, int *, int);
+    v_i_pppiip v = (v_i_pppiip)fn_at(RVA(0x18002ddd0));
+    begin("cr_bitmap_centroid");
+    int bad = g_fail;
+    enum { MAXW = 64, MAXH = 24, MAXWORDS = 8 };
+    uint32_t bits[MAXH * MAXWORDS];
+    for (int t = 0; t < 20000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int stride_words = (w + 31) / 32 + (int)(rnd() % 3);
+        int win_h = (int)(rnd() % (h + 4));
+        int win_w = (int)(rnd() % (w + 4));
+        int margin = (int)(rnd() % 8);
+        for (int i = 0; i < h * stride_words; i++) bits[i] = rnd();
+        cr_bitmap_desc bm;
+        memset(&bm, 0, sizeof bm);
+        bm.a = stride_words * 32; bm.data = bits; bm.w = w; bm.h = h;
+        int vy = 0x11111111, vx = 0x22222222;
+        int cy = vy, cx = vx;
+        int rv = v(&bm, win_h, win_w, &vy, &vx, margin);
+        int rc = cr_bitmap_centroid(&bm, win_h, win_w, &cy, &cx, margin);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (vy != cy) mismatch("y", (u32)t, (u32)vy, (u32)cy);
+        if (vx != cx) mismatch("x", (u32)t, (u32)vx, (u32)cx);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_centroid\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2637,6 +2668,8 @@ int main(int argc, char **argv)
     test_u8_expand_convolve();
     printf("\n== spatial top-K accumulator ==\n");
     test_grid_insert();
+    printf("\n== bitmap set-bit centroid ==\n");
+    test_bitmap_centroid();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

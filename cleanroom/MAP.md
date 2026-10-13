@@ -273,6 +273,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x18002f070` | `fpc_bio_bep_sw23_861d4887f0` | `cr_grid_insert` | `int fn(cr_grid *g, uint8_t x, uint8_t y, float v, cr_grid_cfg *cfg)`. Map `(x,y)` to a `W*H` cell (`px = x*W/divx`, `py = y*H/divy`, both clamped), then push the sample onto that cell's singly-linked list of `cap` pooled slots, kept in **ascending** value order (head = smallest). When the pool is full, pick the cell with the largest `key*val` score (the target cell is seeded with `(key+1)*val` — a quirk; all other cells use `key*val`), evict its list head and reuse the freed slot. `cfg->mode==2` instead appends to flat `coords2`/`values2` arrays (bounded by `cfg->cap2`); any other mode returns `0x69`. `node.val` is read but never written by this leaf (a caller accumulates it). |
 
+### Batch 35 — bitmap set-bit centroid
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18002ddd0` | `fpc_bio_bep_sw23_82f9a9e315.part.9` | `cr_bitmap_centroid` | `int fn(const cr_bitmap_desc *bm, int win_h, int win_w, int *out_y, int *out_x, int margin)`. Scans the masked bitmap accumulating count, Σ row and Σ column of the set bits, then returns the centroid shifted by half the window and clamped: `out_y = min(h-win_h-margin, max(rowsum/count - win_h/2, margin))`, likewise `out_x`. Guards `win_h <= h-2*margin && win_w <= w-2*margin`, else `0x82` **without writing the outputs**. Only the last word of each row is masked (first loop pass); 32-bit accumulators; the all-zero/all-one word/byte fast paths are closed forms of the same sums. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
