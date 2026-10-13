@@ -20,6 +20,49 @@ disassembly, not the symbol.
 | `0x18004aa70` | `fpc_image_data_get_size_from_defs` | `cr_image_slot_defined` | `defs && idx<=0x15 && defs->slot[idx] != NULL`. |
 | `0x18004a250` | `fpc_image_create` | `cr_image_slot_empty` | `!(defs && idx<=0x15 && slot && *(int*)(slot+8)==0)`. |
 
+### Batch 2 — util kernel
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180016720` | `fpc_bio_bep_sw23_1dbe7da717` | `cr_status_from_flag` | `flag == 0 ? 0 : 0x69` (asm `cmp dl,1; sbb; not; and 0x69`). |
+| `0x1800216d0` | `fpc_bio_bep_sw23_4d4be3ba3b` | `cr_status_from_ctx` | `(*(u8*)(*(void**)(ctx+0x78) + 0x3c) == 0) ? 0 : 0x69`. |
+| `0x180011000` | `fpc_bio_bep_sw23_110d16790e` | `cr_fill` | `memset(dst,val,n)` **only for n>0** (n<=0 is a no-op, unlike libc). |
+| `0x180040de0` | `fpc_bio_bep_sw23_db3e766540` | `cr_copy` | `memcpy(dst,src,n)` only for n>0. |
+| `0x180040e20` | `fpc_bio_bep_sw23_db476a7e1b` | `cr_modff` | `modff`: `i=(int)x; *intpart=(float)i; return x-(float)i`. |
+| `0x180027380` | `fpc_bio_bep_sw23_688cc93710` | `cr_bitmap_get` | bitmap bit test; bit index `y*width+x`, word `>>5`, bit `x&31`. |
+| `0x18003c540` | `fpc_bio_bep_sw23_c31521ad32` | `cr_bitmask_range` | mask for bits `[start,end]` within 32-bit `word`; all-ones if the range leaves the word. |
+
+### Batch 2 — image leaves
+
+The image descriptor layout (established from these functions):
+`+0x00 w`, `+0x04 h`, `+0x08 data`, `+0x10 w`, `+0x14 h`, `+0x18 offx`, `+0x1c offy`.
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180023a60` | `fpc_bio_bep_sw23_53297280e7` | `cr_image_fill_const2` | fill `data[0..w*h)` with the constant `2`. |
+| `0x18003b250` | `fpc_bio_bep_sw23_b9f68de6cb` | `cr_image_set` | init descriptor; `NULL->1`, `w<0||h<0 -> 0x69`, else 0. |
+| `0x18003fbc0` | `fpc_bio_bep_sw23_d5d1681a28` | `cr_image_set` | **byte-identical duplicate** of `0x18003b250`. |
+| `0x180010ef0` | `fpc_bio_bep_sw23_0fdf5f04f4` | `cr_image_subview` | sub-view: copy a/b/data from src; set w,h from args; `off += (dx,dy)`. |
+| `0x180017a80` | `fpc_bio_bep_sw23_265153bede` | `cr_image_subview` | **byte-identical duplicate** of `0x180010ef0`. |
+| `0x1800305b0` | `fpc_bio_bep_sw23_900aab35d7` | `cr_image_mark_indices` | for each index in the list, set `data[index] = 4`. |
+| `0x180033ae0` | `fpc_bio_bep_sw23_9c60738574` | `cr_image_threshold_mark` | where `src16[i] >= thr`, set `data[i] = 0x10`. |
+
+## Deferred (identified, not yet rewritten)
+
+| vendor RVA | vendor symbol | why deferred |
+|---|---|---|
+| `0x18002aeb0` | `fpc_bio_bep_sw23_769acc1eef` | returns a pointer to the static table `DAT_180159ea0` (type 4) — needs the table contents. |
+| `0x180020860` | `fpc_bio_bep_sw23_46f04b866a` | static tables `DAT_180122980` (type 0xc), `DAT_1801598e0` (0xd). |
+| `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | static table `DAT_1801174e0` (type 6) + writes `0x100`. |
+| `0x1800448f0` | `fpc_bio_bep_sw23_eb7a7b573f` | static tables `DAT_180120480` (0), `DAT_18011dd40` (1). |
+| `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued). |
+| `0x180002fb0` | `FpcFloor` | free-wrapper around `0x180069b60`. |
+| `0x180002fe0` | `FpcFree` | malloc-wrapper around `0x18006afa0`. |
+
+These are pointer/table/allocator-valued, so bit-exact comparison needs a
+structural (not address) check; they will be handled once the referenced tables
+and the allocator semantics are established.
+
 ## Notes on the naming
 
 The DLL is unstripped (a `.text$<name>` symbol table), but the names are

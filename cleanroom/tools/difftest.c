@@ -246,6 +246,245 @@ static void test_image_slots(void)
     if (g_fail == bad) end(); else printf("  FAIL image slots\n");
 }
 
+/* ---- util / image leaf battery ---------------------------------------- */
+typedef uint32_t (WINAPI *v_u_pc)(void *, char);
+typedef uint32_t (WINAPI *v_u_p)(const void *);
+typedef void     (WINAPI *v_v_pui)(void *, uint8_t, int);
+typedef void     (WINAPI *v_v_ppi)(void *, const void *, int);
+typedef float    (WINAPI *v_f_ffp)(float, float *);
+typedef uint32_t (WINAPI *v_u_pii)(const void *, int, int);
+typedef uint32_t (WINAPI *v_u_iii)(int, int, int);
+typedef void     (WINAPI *v_v_p)(void *);
+typedef uint32_t (WINAPI *v_u_ppii)(void *, void *, int, int);
+typedef void     (WINAPI *v_v_ppiiii)(void *, const void *, int, int, int, int);
+typedef void     (WINAPI *v_v_pp)(void *, const void *);
+typedef void     (WINAPI *v_v_ppi_s)(void *, const void *, int16_t);
+
+/* compare a whole buffer; report the first differing byte */
+static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
+{
+    if (memcmp(a, b, n) != 0) {
+        size_t i = 0;
+        while (i < n && a[i] == b[i]) i++;
+        mismatch(what, seed, a[i], b[i]);
+    }
+}
+
+static void test_status_helpers(void)
+{
+    v_u_pc vflag = (v_u_pc)fn_at(RVA(0x180016720));
+    begin("cr_status_from_flag");
+    int bad = g_fail;
+    for (int f = -128; f < 256; f++) {
+        /* vendor signature is (unused, char flag): flag lives in dl */
+        uint32_t v = vflag(NULL, (char)f), c = cr_status_from_flag((char)f);
+        if (v != c) mismatch("flag", (u32)f, v, c);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_status_from_flag\n");
+
+    v_u_p vctx = (v_u_p)fn_at(RVA(0x1800216d0));
+    begin("cr_status_from_ctx");
+    bad = g_fail;
+    for (int t = 0; t < 3000; t++) {
+        unsigned char blk[0x100];
+        memset(blk, 0, sizeof blk);
+        blk[0x3c] = (unsigned char)(rnd() & 0xff);
+        void *inner = blk;
+        unsigned char ctx[0x100];
+        memset(ctx, 0, sizeof ctx);
+        *(void **)(ctx + 0x78) = inner;
+        uint32_t v = vctx(ctx), c = cr_status_from_ctx(ctx);
+        if (v != c) mismatch("ctx", blk[0x3c], v, c);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_status_from_ctx\n");
+}
+
+static void test_fill_copy(void)
+{
+    v_v_pui vfill = (v_v_pui)fn_at(RVA(0x180011000));
+    v_v_ppi vcopy = (v_v_ppi)fn_at(RVA(0x180040de0));
+
+    begin("cr_fill");
+    int bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        unsigned char a[256], b[256];
+        memset(a, 0x5A, sizeof a); memset(b, 0x5A, sizeof b);
+        int n = (int)(rnd() % 200u) - 60;          /* include n<=0 */
+        uint8_t val = (uint8_t)rnd();
+        vfill(a, val, n);
+        cr_fill(b, val, n);
+        cmp_buf("fill", a, b, sizeof a, (u32)n);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fill\n");
+
+    begin("cr_copy");
+    bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        unsigned char src[256], a[256], b[256];
+        for (size_t i = 0; i < sizeof src; i++) src[i] = (unsigned char)rnd();
+        memset(a, 0x33, sizeof a); memset(b, 0x33, sizeof b);
+        int n = (int)(rnd() % 200u) - 60;
+        vcopy(a, src, n);
+        cr_copy(b, src, n);
+        cmp_buf("copy", a, b, sizeof a, (u32)n);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_copy\n");
+}
+
+static void test_modff(void)
+{
+    v_f_ffp v = (v_f_ffp)fn_at(RVA(0x180040e20));
+    begin("cr_modff");
+    int bad = g_fail;
+    for (u64 i = 0; i < 0x100000000ULL; i += 0x10001ULL) {
+        u32 bits = (u32)i;
+        float x = cr_u2f(bits), iv, ic;
+        float rv = v(x, &iv);
+        float rc = cr_modff(x, &ic);
+        if (cr_f2u(rv) != cr_f2u(rc) || cr_f2u(iv) != cr_f2u(ic))
+            mismatch("modff", bits, cr_f2u(rv), cr_f2u(rc));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_modff\n");
+}
+
+static void test_bitmap_bitmask(void)
+{
+    v_u_pii vget = (v_u_pii)fn_at(RVA(0x180027380));
+    v_u_iii vmask = (v_u_iii)fn_at(RVA(0x18003c540));
+
+    begin("cr_bitmap_get");
+    int bad = g_fail;
+    for (int t = 0; t < 6000; t++) {
+        unsigned char bm[0x40];
+        memset(bm, 0, sizeof bm);
+        int width = (int)(rnd() % 200u) + 1;
+        *(int *)bm = width;
+        uint32_t words[512];      /* idx can reach (63*200+63)>>5 = 395 */
+        for (int i = 0; i < 512; i++) words[i] = rnd();
+        *(void **)(bm + 8) = words;
+        int x = (int)(rnd() % 64u);
+        int y = (int)(rnd() % 64u);
+        uint32_t v = vget(bm, x, y), c = cr_bitmap_get(bm, x, y);
+        if (v != c) mismatch("bitmap", ((u64)(u32)x << 32) | (u32)y, v, c);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_get\n");
+
+    begin("cr_bitmask_range");
+    bad = g_fail;
+    for (int t = 0; t < 200000; t++) {
+        int word  = (int)(rnd() % 6u) - 1;
+        int start = (int)(rnd() % 130u) - 32;
+        int end   = (int)(rnd() % 130u) - 32;
+        uint32_t v = vmask(word, start, end), c = cr_bitmask_range(word, start, end);
+        if (v != c) mismatch("mask", ((u64)(u32)start << 32) | (u32)end, v, c);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmask_range\n");
+}
+
+/* Build a random image descriptor + pixel buffer, run one function on the
+ * vendor copy and the clean-room copy, and compare the whole descriptor and
+ * the pixel buffer. */
+static void test_image_leaves(void)
+{
+    v_v_p   vfill2 = (v_v_p)fn_at(RVA(0x180023a60));
+    v_u_ppii vset[2];
+    vset[0] = (v_u_ppii)fn_at(RVA(0x18003b250));
+    vset[1] = (v_u_ppii)fn_at(RVA(0x18003fbc0));
+    v_v_ppiiii vsub[2];
+    vsub[0] = (v_v_ppiiii)fn_at(RVA(0x180010ef0));
+    vsub[1] = (v_v_ppiiii)fn_at(RVA(0x180017a80));
+    v_v_pp  vmark = (v_v_pp)fn_at(RVA(0x1800305b0));
+    v_v_ppi_s vthr = (v_v_ppi_s)fn_at(RVA(0x180033ae0));
+
+    begin("cr_image_fill_const2");
+    int bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        unsigned char va[0x20], ca[0x20], pv[256], pc[256];
+        int w = (int)(rnd() % 15u), h = (int)(rnd() % 15u);
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca);
+        memset(pv, 0xEE, sizeof pv); memset(pc, 0xEE, sizeof pc);
+        *(int *)(va + 0x10) = w; *(int *)(va + 0x14) = h; *(void **)(va + 8) = pv;
+        *(int *)(ca + 0x10) = w; *(int *)(ca + 0x14) = h; *(void **)(ca + 8) = pc;
+        vfill2(va); cr_image_fill_const2((cr_image *)ca);
+        cmp_buf("fill2", pv, pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_fill_const2\n");
+
+    for (int k = 0; k < 2; k++) {
+        begin(k ? "cr_image_set(0x18003fbc0)" : "cr_image_set(0x18003b250)");
+        bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            unsigned char va[0x20], ca[0x20];
+            memset(va, 0xAB, sizeof va); memset(ca, 0xAB, sizeof ca);
+            int w = (int)(rnd() % 40u) - 8;
+            int h = (int)(rnd() % 40u) - 8;
+            int isnull = (rnd() % 8u) == 0;
+            void *data = (void *)(uintptr_t)(0x1000 + (rnd() & 0xfff));
+            uint32_t rv = vset[k](isnull ? NULL : va, data, w, h);
+            uint32_t rc = cr_image_set(isnull ? NULL : (cr_image *)ca, data, w, h);
+            if (rv != rc) mismatch("set-ret", (u32)t, rv, rc);
+            if (!isnull) cmp_buf("set", va, ca, sizeof va, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL image_set[%d]\n", k);
+    }
+
+    for (int k = 0; k < 2; k++) {
+        begin(k ? "cr_image_subview(0x180017a80)" : "cr_image_subview(0x180010ef0)");
+        bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            unsigned char sv[0x20], va[0x20], ca[0x20];
+            for (size_t i = 0; i < sizeof sv; i++) sv[i] = (unsigned char)rnd();
+            memset(va, 0x77, sizeof va); memset(ca, 0x77, sizeof ca);
+            int dx = (int)(rnd() % 200u) - 100;
+            int dy = (int)(rnd() % 200u) - 100;
+            int w  = (int)(rnd() % 200u) - 100;
+            int h  = (int)(rnd() % 200u) - 100;
+            vsub[k](va, sv, dx, dy, w, h);
+            cr_image_subview((cr_image *)ca, (const cr_image *)sv, dx, dy, w, h);
+            cmp_buf("subview", va, ca, sizeof va, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL image_subview[%d]\n", k);
+    }
+
+    begin("cr_image_mark_indices");
+    bad = g_fail;
+    for (int t = 0; t < 6000; t++) {
+        unsigned char iv[0x20], va[0x20], ca[0x20], pv[256], pc[256];
+        uint16_t idx[32];
+        memset(iv, 0, sizeof iv);
+        int count = (int)(rnd() % 32u);
+        *(uint16_t *)iv = (uint16_t)count;
+        for (int i = 0; i < 32; i++) idx[i] = (uint16_t)(rnd() % 250u);
+        *(void **)(iv + 8) = idx;
+        memset(pv, 0xCC, sizeof pv); memset(pc, 0xCC, sizeof pc);
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca);
+        *(void **)(va + 8) = pv; *(void **)(ca + 8) = pc;
+        vmark(va, iv);
+        cr_image_mark_indices((cr_image *)ca, (const cr_index_list *)iv);
+        cmp_buf("mark", pv, pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_mark_indices\n");
+
+    begin("cr_image_threshold_mark");
+    bad = g_fail;
+    for (int t = 0; t < 6000; t++) {
+        unsigned char va[0x20], ca[0x20], sa[0x20], pv[256], pc[256];
+        int16_t sv[512];          /* n = w*h can reach 14*14 = 196 samples */
+        int w = (int)(rnd() % 15u), h = (int)(rnd() % 15u);
+        for (int i = 0; i < 512; i++) sv[i] = (int16_t)rnd();
+        int16_t thr = (int16_t)rnd();
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca); memset(sa, 0, sizeof sa);
+        *(int *)(va + 0x10) = w; *(int *)(va + 0x14) = h; *(void **)(va + 8) = pv;
+        *(int *)(ca + 0x10) = w; *(int *)(ca + 0x14) = h; *(void **)(ca + 8) = pc;
+        *(void **)(sa + 8) = sv;
+        memset(pv, 0x99, sizeof pv); memset(pc, 0x99, sizeof pc);
+        vthr(va, sa, thr);
+        cr_image_threshold_mark((cr_image *)ca, (const cr_image *)sa, thr);
+        cmp_buf("thr", pv, pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_threshold_mark\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -281,6 +520,15 @@ int main(int argc, char **argv)
 
     printf("\n== image slots ==\n");
     test_image_slots();
+
+    printf("\n== util kernel ==\n");
+    test_status_helpers();
+    test_fill_copy();
+    test_modff();
+    test_bitmap_bitmask();
+
+    printf("\n== image leaves ==\n");
+    test_image_leaves();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

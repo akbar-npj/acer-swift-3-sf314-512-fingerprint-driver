@@ -64,4 +64,43 @@ int  cr_meta_get_u32(void *store, uint32_t key, uint32_t *out);
 bool cr_image_slot_defined(const void *defs, uint32_t idx);  /* 0x18004aa70 */
 bool cr_image_slot_empty(const void *defs, uint32_t idx);    /* 0x18004a250 */
 
+/* ---- util kernel (leaf functions) -------------------------------------- */
+uint32_t cr_status_from_flag(char flag);                 /* 0x180016720 */
+uint32_t cr_status_from_ctx(const void *ctx);            /* 0x1800216d0 */
+void     cr_fill(void *dst, uint8_t val, int n);         /* 0x180011000 */
+void     cr_copy(void *dst, const void *src, int n);     /* 0x180040de0 */
+float    cr_modff(float x, float *intpart);              /* 0x180040e20 */
+uint32_t cr_bitmap_get(const void *bm, int x, int y);    /* 0x180027380 */
+uint32_t cr_bitmask_range(int word, int start, int end); /* 0x18003c540 */
+
+/* ---- image descriptor -------------------------------------------------- *
+ * Matches the vendor layout the leaf functions touch:
+ *   +0x00 w   +0x04 h   +0x08 data   +0x10 w   +0x14 h   +0x18 offx +0x1c offy
+ */
+typedef struct {
+    int32_t  a;       /* +0x00  width  (duplicate)   */
+    int32_t  b;       /* +0x04  height (duplicate)   */
+    void    *data;    /* +0x08  pixel buffer         */
+    int32_t  w;       /* +0x10  width                */
+    int32_t  h;       /* +0x14  height               */
+    int32_t  offx;    /* +0x18                       */
+    int32_t  offy;    /* +0x1c                       */
+} cr_image;
+
+/* index list used by cr_image_mark_indices: count at +0, u16 array ptr at +8 */
+typedef struct {
+    uint16_t        count;    /* +0x00 */
+    uint16_t        _pad;
+    uint32_t        _pad2;
+    const uint16_t *indices;  /* +0x08 */
+} cr_index_list;
+
+void     cr_image_fill_const2(cr_image *img);                        /* 0x180023a60 */
+uint32_t cr_image_set(cr_image *img, void *data, int w, int h);      /* 0x18003b250 / 0x18003fbc0 */
+void     cr_image_subview(cr_image *dst, const cr_image *src,
+                          int dx, int dy, int w, int h);             /* 0x180010ef0 / 0x180017a80 */
+void     cr_image_mark_indices(cr_image *img, const cr_index_list *l); /* 0x1800305b0 */
+void     cr_image_threshold_mark(cr_image *img, const cr_image *src,
+                                 int16_t thr);                       /* 0x180033ae0 */
+
 #endif /* FPC_BEP_H */

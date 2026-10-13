@@ -16,7 +16,7 @@ INCS    := -Iinclude -I$(NATIVE)
 CFLAGS  ?= -O2 -g -Wall -Wextra -ffp-contract=off -fno-strict-aliasing
 LDFLAGS ?= -lpthread
 
-SRC     := src/fpc_math.c src/fpc_buffer.c
+SRC     := src/fpc_math.c src/fpc_buffer.c src/fpc_util.c src/fpc_image.c
 OBJ     := $(SRC:.c=.o)
 
 DLL     := ../FingerPrint_Carewe_20.26.23.27_W11x64/12b431fd-7d7e-4dd7-b87c-9ab3f9a3d01b/x64/fpc_enclave.dll
