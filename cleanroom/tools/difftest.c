@@ -1547,6 +1547,53 @@ static void test_laplacian_3x3(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_laplacian_3x3\n");
 }
 
+/* ---- batch 22: 7-tap edge-clamped int16 FIR ---------------------------- */
+
+/* 0x180020d80 — 7-tap FIR over int16 rows.  Descriptor must be canonical
+ * (a==w, b==h, offx==offy==0) for both images and share (a,b); occasionally we
+ * corrupt one field to exercise the 0x69 guard. */
+static void test_fir7_s16(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x180020d80));
+    begin("cr_fir7_s16");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char dv[0x20], dc[0x20], sv[0x20], sc[0x20];
+        int16_t sbv[512], sbc[512], dbv[512], dbc[512], coef[7];
+        int w = 1 + (int)(rnd() % 40u);       /* 1..40 (incl. w<5) */
+        int h = 1 + (int)(rnd() % 6u);        /* 1..6 (incl. 0-height guard) */
+        for (int i = 0; i < 512; i++) {
+            int16_t x = (int16_t)rnd();
+            sbv[i] = x; sbc[i] = x;
+            int16_t y = (int16_t)rnd();
+            dbv[i] = y; dbc[i] = y;
+        }
+        for (int k = 0; k < 7; k++) coef[k] = (int16_t)rnd();
+        memset(dv, 0, sizeof dv); memset(dc, 0, sizeof dc);
+        memset(sv, 0, sizeof sv); memset(sc, 0, sizeof sc);
+        mk_image(dv, dbv, w, w, h, 0, 0);
+        mk_image(dc, dbc, w, w, h, 0, 0);
+        mk_image(sv, sbv, w, w, h, 0, 0);
+        mk_image(sc, sbc, w, w, h, 0, 0);
+        *(int *)(dv + 4) = h; *(int *)(dc + 4) = h;   /* b == h */
+        *(int *)(sv + 4) = h; *(int *)(sc + 4) = h;
+        /* corrupt one guard field on ~1/8 of runs */
+        switch (t & 7) {
+        case 1: *(int *)(sv + 4) = h + 1; *(int *)(sc + 4) = h + 1; break;
+        case 2: *(int *)(dv + 0x18) = 1;  *(int *)(dc + 0x18) = 1;  break;
+        case 3: *(int *)(sc + 0x00) = w + 1; *(int *)(sv + 0x00) = w + 1; break;
+        default: break;
+        }
+        int rv = v(dv, sv, coef);
+        int rc = cr_fir7_s16((cr_image *)dc, (const cr_image *)sc, coef);
+        if (rv != rc) mismatch("fir7_ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("fir7", (unsigned char *)dbv, (unsigned char *)dbc,
+                sizeof dbv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fir7_s16\n");
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -2049,6 +2096,8 @@ int main(int argc, char **argv)
     test_bitmap_border_set();
     printf("\n== 3x3 Laplacian ==\n");
     test_laplacian_3x3();
+    printf("\n== 7-tap clamped FIR ==\n");
+    test_fir7_s16();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

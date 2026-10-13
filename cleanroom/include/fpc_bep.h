@@ -249,4 +249,8 @@ int      cr_bitmap_border_set(cr_image *d, int left, int top, int right,
 void     cr_laplacian_3x3(int16_t *out, const int16_t *A, const int16_t *C,
                           const int16_t *B, int w);                      /* 0x1800169b0 */
 
+/* ---- batch 22: 7-tap edge-clamped int16 FIR ------------------------------ */
+int      cr_fir7_s16(cr_image *dst, const cr_image *src,
+                     const int16_t *coef);                               /* 0x180020d80 */
+
 #endif /* FPC_BEP_H */

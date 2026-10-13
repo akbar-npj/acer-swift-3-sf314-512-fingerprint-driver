@@ -166,6 +166,85 @@ void cr_splat_bilinear(const float *w, float *bufA, float *bufB,
     }
 }
 
+/* 0x180020d80 — 7-tap int16 FIR applied to every row of `src`, writing `dst`.
+ * Both descriptors must be canonical (a==w, b==h, offx==offy==0) and share the
+ * same (a,b) pair, else the function returns 0x69.  For each row:
+ *     out[j] = (int16_t)((sum_{k=0..6} coef[k] * x[j-3+k]) >> 15)
+ * with the taps clamped to the row: the left edge repeats x[0] and the right
+ * edge repeats x[w-1].  The vendor splits each row into a rolling-history loop
+ * for columns 0..w-5 and a second loop for the last four columns whose newest
+ * tap is pinned at x[w-1]; widths < 5 take only the second loop (reading x[3]
+ * as the pinned tap).  Both loops are reproduced verbatim.  32-bit arithmetic. */
+int cr_fir7_s16(cr_image *dst, const cr_image *src, const int16_t *coef)
+{
+    if (!(src->a == src->w && src->b == src->h && src->offx == 0 && src->offy == 0 &&
+          dst->a == src->a && dst->b == src->b &&
+          dst->a == dst->w && dst->b == dst->h && dst->offx == 0 && dst->offy == 0))
+        return 0x69;
+
+    int w = src->w;
+    int h = src->h;
+    if (h <= 0)
+        return 0;
+
+    int stride = src->a;
+    const int16_t *srow = (const int16_t *)src->data;
+    int16_t *drow = (int16_t *)dst->data;
+
+    for (int row = 0; row < h; row++) {
+        const int16_t *p = srow + 3;              /* &x[3] */
+        int i8 = p[-3], i7 = p[-2], i16v = p[-1];
+        int i9 = 0, i5 = 0, i17 = 0, i10 = 0, i18 = 0;
+        int16_t *po;
+        const int16_t *ps20;
+        int start, end;
+
+        if (w < 5) {
+            i9 = 0;
+            po = drow;
+            ps20 = p;
+            i10 = i8; i17 = i8; i5 = i8;
+            start = 0; end = w;
+        } else {
+            int n = w - 5;
+            i9 = i8; i18 = i7; i10 = i8; i17 = i8;
+            for (int j = 0; j <= n; j++) {
+                i5 = i17; i17 = i10; i10 = i8; i7 = i16v; i8 = i18;
+                i16v = p[j];
+                drow[j] = (int16_t)((int32_t)((uint32_t)coef[6] * (uint32_t)i16v
+                                            + (uint32_t)coef[4] * (uint32_t)i8
+                                            + (uint32_t)coef[2] * (uint32_t)i17
+                                            + (uint32_t)coef[0] * (uint32_t)i9
+                                            + (uint32_t)coef[1] * (uint32_t)i5
+                                            + (uint32_t)coef[3] * (uint32_t)i10
+                                            + (uint32_t)coef[5] * (uint32_t)i7) >> 15);
+                i9 = i5; i18 = i7;
+            }
+            po = drow + n + 1;
+            ps20 = p + n + 1;
+            start = w - 4; end = w;
+        }
+
+        for (int j = start; j < end; j++) {
+            i18 = i17; i17 = i10; i10 = i8;
+            int16_t sv = *ps20;
+            *po = (int16_t)((int32_t)((uint32_t)coef[6] * (uint32_t)(int32_t)sv
+                                    + (uint32_t)coef[5] * (uint32_t)i16v
+                                    + (uint32_t)coef[3] * (uint32_t)i10
+                                    + (uint32_t)coef[1] * (uint32_t)i18
+                                    + (uint32_t)coef[0] * (uint32_t)i5
+                                    + (uint32_t)coef[2] * (uint32_t)i17
+                                    + (uint32_t)coef[4] * (uint32_t)i7) >> 15);
+            po++;
+            i8 = i7; i7 = i16v; i5 = i18; i16v = sv;
+        }
+
+        srow += stride;
+        drow += stride;
+    }
+    return 0;
+}
+
 /* 0x1800169b0 — 8-neighbour 3x3 Laplacian of a single row.  out[i] is the
  * Laplacian centred on C[i+1]:
  *     8*C[i+1] - (A[i]+A[i+1]+A[i+2] + C[i]+C[i+2] + B[i]+B[i+1]+B[i+2])

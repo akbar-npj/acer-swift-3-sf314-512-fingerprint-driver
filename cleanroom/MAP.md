@@ -194,6 +194,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x1800169b0` | `fpc_bio_bep_sw23_1fe4634733` | `cr_laplacian_3x3` | `void fn(int16_t *out, const int16_t *A, const int16_t *C, const int16_t *B, int w)`. 8-neighbour 3x3 Laplacian of one row: `out[i] = 8*C[i+1] - (A[i]+A[i+1]+A[i+2] + C[i]+C[i+2] + B[i]+B[i+1]+B[i+2])`, where `C` is the centre row and `A`/`B` the neighbours. Two-pass 4-wide vectorised loop (bulk `[0,w-4)`, tail `[w-4,w)`); the tail pass offsets its output pointer by `-((-w)&3)` shorts. 32-bit arithmetic, low 16 bits stored. |
 
+### Batch 22 — 7-tap edge-clamped int16 FIR
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180020d80` | `fpc_bio_bep_sw23_49a7dfde4e` | `cr_fir7_s16` | `int fn(cr_image *dst, const cr_image *src, const int16_t *coef)`. Applies a 7-tap FIR to every row of `src` into `dst`: `out[j] = (Σ_{k=0..6} coef[k]*x[j-3+k]) >> 15`, with the taps clamped to the row (left edge repeats `x[0]`, right edge repeats `x[w-1]`). Both descriptors must be canonical (`a==w`, `b==h`, `offx==offy==0`) and share the same `(a,b)` pair, else returns `0x69`. The vendor splits each row into a rolling-history loop for columns `0..w-5` and a second loop for the last four columns whose newest tap is pinned at `x[w-1]`; widths `< 5` take only the second loop (reading `x[3]` as the pinned tap). 32-bit wrapping arithmetic; result is the low 16 bits of the arithmetic `>>15`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
