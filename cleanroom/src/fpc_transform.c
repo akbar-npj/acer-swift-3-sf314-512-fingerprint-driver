@@ -118,3 +118,50 @@ void cr_polyphase_fir4(uint8_t *out, const uint8_t *in, const int16_t *coef,
         out += 4;
     } while (end != in);
 }
+
+/* 0x180044b10 — bilinear "splat" of 16 weighted points into two float buffers.
+ * `w[16]` and `alpha[16]` are per-point weights; `x0`/`y0` are both the start
+ * coordinate AND the per-step increment (x_k = x0*(k+1), y_k = y0*(k+1)); the
+ * float position is scaled by `scale`.  For each point the four bilinear taps
+ * are accumulated into `bufB` (weight only) and `bufA` (weight*alpha), both
+ * laid out with a 17-float row stride:
+ *     xi = (int)x, xf = x - (float)(int)x, yi = (int)y - (y0 < 0), yf = y - (float)yi
+ *     wf = w[k]*scale
+ *     w00 = ((1-xf)*(1-yf))*wf   -> idx
+ *     w10 = ((1-yf)*xf)*wf       -> idx+1
+ *     w01 = ((1-xf)*yf)*wf       -> idx+17
+ *     w11 = (xf*yf)*wf           -> idx+18
+ * All arithmetic is single precision in exactly this order (built with
+ * -ffp-contract=off). */
+void cr_splat_bilinear(const float *w, float *bufA, float *bufB,
+                       const float *alpha, float x0, float y0, float scale)
+{
+    float x = x0;
+    float y = y0;
+    int negy = (y0 < 0.0f) ? 1 : 0;
+
+    for (int k = 0; k < 16; k++) {
+        int xi = (int)x;
+        int yi = (int)y - negy;
+        float wf = w[k] * scale;
+        float xf = x - (float)(int)x;
+        float yf = y - (float)yi;
+        int idx = yi * 17 + xi;
+        float w00 = (1.0f - xf) * (1.0f - yf) * wf;
+        float w10 = (1.0f - yf) * xf * wf;
+        float w01 = (1.0f - xf) * yf * wf;
+        float w11 = xf * yf * wf;
+
+        bufB[idx]      += w00;
+        bufA[idx]       = w00 * alpha[k] + bufA[idx];
+        bufB[idx + 1]  += w10;
+        bufA[idx + 1]   = w10 * alpha[k] + bufA[idx + 1];
+        bufB[idx + 17] += w01;
+        bufA[idx + 17]  = w01 * alpha[k] + bufA[idx + 17];
+        bufB[idx + 18] += w11;
+        bufA[idx + 18]  = w11 * alpha[k] + bufA[idx + 18];
+
+        x += x0;
+        y += y0;
+    }
+}

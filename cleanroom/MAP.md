@@ -176,6 +176,12 @@ The image descriptor layout (established from these functions):
 | `0x18002ca30` | `fpc_bio_bep_sw23_79a4530e21.part.4` | `cr_affine_sample_u8` | `void fn(cr_image *dst, const cr_image *src, const cr_affine_map *s)`. Q15 bilinear resample: for each dst pixel `x = x_org + row*x_row + col*x_col`, `y = y_org + row*y_row + col*y_col` (all Q15, `xi=x>>15`, `xf=x&0x7fff`); `idx = yi*src->a + xi`; `out = (int8_t)((w00*P00 + w01*P01 + w10*P10 + w11*P11) >> 15)` with `w00=((0x8000-xf)(0x8000-yf))>>15`, `w10=((0x8000-yf)xf)>>15`, `w01=((0x8000-xf)yf)>>15`, `w11=(xf*yf)>>15`. Origin = `data + (offy*a + offx)` for both images; `dst->w x dst->h` pixels. |
 | `0x18000ee70` | `fpc_bio_bep_sw23_04faa0a17d.part.1` | `cr_polyphase_fir4` | `void fn(uint8_t *out, const uint8_t *in, const int16_t *coef, int nbytes, int ncoef)`. A 4-phase FIR: for each 4-byte input group at offset `4p`, `out[4p+r] = (int8_t)((0x4000 + Σ_{j=0}^{2*iters} in[4p+r+j]*coef[j]) >> 15)` where `iters = ((unsigned)(ncoef-2)>>1)+1`. `nbytes <= 3` is a no-op; accumulators are 32-bit signed; each output byte is the low byte of the SAR-15 result. |
 
+### Batch 19 — 464-byte bilinear splat
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180044b10` | `fpc_bio_bep_sw23_ed385570f8` | `cr_splat_bilinear` | `void fn(const float *w, float *bufA, float *bufB, const float *alpha, float x0, float y0, float scale)`. Splats 16 weighted points into two float buffers with a 17-float row stride. `x0`/`y0` are **both** the start coordinate and the per-step delta (`x_k = x0*(k+1)`); `scale` multiplies `w[k]`. Per point: `xi=(int)x`, `xf=x-(float)(int)x`, `yi=(int)y-(y0<0)`, `yf=y-(float)yi`, `wf=w[k]*scale`; `w00=((1-xf)(1-yf))*wf` → `idx`, `w10=((1-yf)xf)*wf` → `idx+1`, `w01=((1-xf)yf)*wf` → `idx+17`, `w11=(xf*yf)*wf` → `idx+18`; `bufB[tap]+=wxy`, `bufA[tap]=wxy*alpha[k]+bufA[tap]`. Single precision, exact evaluation order (built `-ffp-contract=off`). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

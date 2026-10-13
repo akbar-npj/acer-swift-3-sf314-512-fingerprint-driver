@@ -1448,6 +1448,40 @@ static void test_polyphase_fir4(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_polyphase_fir4\n");
 }
 
+/* ---- batch 19: bilinear splat ------------------------------------------ */
+
+/* 0x180044b10 — bilinear splat of 16 weighted points into two float buffers
+ * (17-float row stride).  x0/y0 are both the start and the per-step delta; the
+ * buffers are offset by 512 floats so negative indices stay in-bounds. */
+static void test_splat_bilinear(void)
+{
+    typedef void (WINAPI *fn_t)(const float *, float *, float *, const float *,
+                                float, float, float);
+    fn_t v = (fn_t)fn_at(RVA(0x180044b10));
+    begin("cr_splat_bilinear");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        float w[16], alpha[16];
+        float av[1024], ac[1024], bv[1024], bc[1024];
+        for (int i = 0; i < 16; i++) {
+            w[i]     = (float)((int)(rnd() % 100000u) - 50000) / 1000.0f;
+            alpha[i] = (float)((int)(rnd() % 100000u) - 50000) / 1000.0f;
+        }
+        for (int i = 0; i < 1024; i++) {
+            float f = (float)((int)(rnd() % 2001u) - 1000) / 100.0f;
+            av[i] = f; ac[i] = f; bv[i] = f; bc[i] = f;
+        }
+        float x0    = (float)((int)(rnd() % 2001u) - 1000) / 1000.0f;  /* [-1,1] */
+        float y0    = (float)((int)(rnd() % 2001u) - 1000) / 1000.0f;
+        float scale = (float)((int)(rnd() % 2001u) - 1000) / 100.0f;
+        v(w, av + 512, bv + 512, alpha, x0, y0, scale);
+        cr_splat_bilinear(w, ac + 512, bc + 512, alpha, x0, y0, scale);
+        cmp_buf("splatA", (unsigned char *)av, (unsigned char *)ac, sizeof av, (u32)t);
+        cmp_buf("splatB", (unsigned char *)bv, (unsigned char *)bc, sizeof bv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_splat_bilinear\n");
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -1944,6 +1978,8 @@ int main(int argc, char **argv)
     printf("\n== affine resample + 4-phase FIR ==\n");
     test_affine_sample_u8();
     test_polyphase_fir4();
+    printf("\n== bilinear splat ==\n");
+    test_splat_bilinear();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
