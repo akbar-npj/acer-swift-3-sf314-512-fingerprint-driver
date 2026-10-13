@@ -287,3 +287,88 @@ void cr_laplacian_3x3(int16_t *out, const int16_t *A, const int16_t *C,
         end = w;
     } while (1);
 }
+
+/* 0x180024200 — in-place row permutation of a byte matrix.  `data` is `n`
+ * rows of `stride` bytes and `perm` is an array of 8-byte entries (only the
+ * first int of each is read/written) giving, for each destination row j, the
+ * source row `perm[j]` (so the net effect is `row[j] = old_row[perm[j]]`).  The
+ * vendor walks each permutation cycle, shifting rows backwards, and marks
+ * visited entries with a temporary `+0x4000000` flag which is stripped from
+ * every entry again at the end.  `stride` must be < 0x41 (i.e. <= 64) else it
+ * returns 0x69; `stride <= 0` moves no data but still walks the cycles. */
+int cr_permute_rows(uint8_t *data, int32_t *perm, int n, int stride)
+{
+    uint8_t tmp[64];
+
+    if (stride >= 0x41)
+        return 0x69;
+
+    if (n > 0) {
+        int last = stride - 1;
+        int iv1 = 0, iv12 = 0;
+        int32_t *pv13 = perm;
+
+        for (;;) {
+            int iv9 = *pv13;
+            if (iv9 < 0x4000000) {
+                int32_t *pv10 = pv13;
+                int iv2 = iv9;
+                int iv_1 = iv1;
+                int copy = 0;
+
+                if (stride >= 1) {
+                    for (int k = 0; k < stride; k++)
+                        tmp[k] = data[iv12 + k];
+                    copy = 1;
+                }
+
+                if (iv9 != iv1) {
+                    do {
+                        iv9 = iv2;
+                        if (stride > 0) {
+                            long long l6 = (long long)stride * iv9;
+                            uint8_t *p7 = data + l6;
+                            uint8_t *p8;
+                            do {
+                                p8 = p7 + 1;
+                                p7[(long long)stride * iv_1 - l6] = *p7;
+                                p7 = p8;
+                            } while (p8 != data + 1 + (size_t)last + l6);
+                        }
+                        perm[iv_1 * 2] += 0x4000000;
+                        pv10 = perm + iv9 * 2;
+                        iv2 = *pv10;
+                        iv_1 = iv9;
+                    } while (*pv10 != iv1);
+
+                    if (stride < 1) {
+                        *pv10 += 0x4000000;
+                        goto next_row;
+                    }
+                }
+
+                if (copy)
+                    for (int k = 0; k < stride; k++)
+                        data[iv9 * stride + k] = tmp[k];
+
+                *pv10 += 0x4000000;
+            }
+next_row:
+            iv1++;
+            pv13 += 2;
+            iv12 += stride;
+            if (n == iv1)
+                break;
+        }
+
+        {
+            int32_t *e = perm + (n - 1) * 2 + 2;
+            int32_t *p = perm;
+            do {
+                *p += -0x4000000;
+                p += 2;
+            } while (e != p);
+        }
+    }
+    return 0;
+}

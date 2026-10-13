@@ -253,4 +253,7 @@ void     cr_laplacian_3x3(int16_t *out, const int16_t *A, const int16_t *C,
 int      cr_fir7_s16(cr_image *dst, const cr_image *src,
                      const int16_t *coef);                               /* 0x180020d80 */
 
+/* ---- batch 23: in-place row permutation ---------------------------------- */
+int      cr_permute_rows(uint8_t *data, int32_t *perm, int n, int stride); /* 0x180024200 */
+
 #endif /* FPC_BEP_H */

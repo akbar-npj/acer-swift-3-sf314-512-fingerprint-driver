@@ -1594,6 +1594,45 @@ static void test_fir7_s16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir7_s16\n");
 }
 
+/* ---- batch 23: in-place row permutation -------------------------------- */
+
+/* 0x180024200 — rearrange `n` rows of `stride` bytes so that destination row
+ * j takes source row perm[j].  The perm array is 8-byte entries (first int
+ * used).  A random permutation of 0..n-1 is used, so both data and the perm
+ * array (which the vendor temporarily flags) must match afterwards. */
+static void test_permute_rows(void)
+{
+    typedef int (WINAPI *fn_t)(void *, void *, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x180024200));
+    begin("cr_permute_rows");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        uint8_t dv[1024], dc[1024];
+        int32_t pv[32], pc[32];
+        int idx[16];
+        int n = (int)(rnd() % 13u);            /* 0..12 rows */
+        int stride = (int)(rnd() % 11u) - 2;   /* -2..8 (incl. the <=0 path) */
+        if (t % 64 == 0) stride = 0x41 + (int)(rnd() % 4u);   /* guard failure */
+        for (size_t i = 0; i < sizeof dv; i++) {
+            uint8_t x = (uint8_t)rnd(); dv[i] = x; dc[i] = x;
+        }
+        for (int i = 0; i < n; i++) idx[i] = i;
+        for (int i = n - 1; i > 0; i--) {
+            int j = (int)(rnd() % (unsigned)(i + 1));
+            int s = idx[i]; idx[i] = idx[j]; idx[j] = s;
+        }
+        for (int i = 0; i < 32; i++) pv[i] = pc[i] = 0;
+        for (int i = 0; i < n; i++) { pv[i * 2] = idx[i]; pc[i * 2] = idx[i]; }
+        int rv = v(dv, pv, n, stride);
+        int rc = cr_permute_rows(dc, pc, n, stride);
+        if (rv != rc) mismatch("perm_ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("perm_data", dv, dc, sizeof dv, (u32)t);
+        cmp_buf("perm_idx", (unsigned char *)pv, (unsigned char *)pc,
+                sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_permute_rows\n");
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -2098,6 +2137,8 @@ int main(int argc, char **argv)
     test_laplacian_3x3();
     printf("\n== 7-tap clamped FIR ==\n");
     test_fir7_s16();
+    printf("\n== in-place row permutation ==\n");
+    test_permute_rows();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

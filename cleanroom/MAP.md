@@ -200,6 +200,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x180020d80` | `fpc_bio_bep_sw23_49a7dfde4e` | `cr_fir7_s16` | `int fn(cr_image *dst, const cr_image *src, const int16_t *coef)`. Applies a 7-tap FIR to every row of `src` into `dst`: `out[j] = (Σ_{k=0..6} coef[k]*x[j-3+k]) >> 15`, with the taps clamped to the row (left edge repeats `x[0]`, right edge repeats `x[w-1]`). Both descriptors must be canonical (`a==w`, `b==h`, `offx==offy==0`) and share the same `(a,b)` pair, else returns `0x69`. The vendor splits each row into a rolling-history loop for columns `0..w-5` and a second loop for the last four columns whose newest tap is pinned at `x[w-1]`; widths `< 5` take only the second loop (reading `x[3]` as the pinned tap). 32-bit wrapping arithmetic; result is the low 16 bits of the arithmetic `>>15`. |
 
+### Batch 23 — in-place row permutation
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180024200` | `fpc_bio_bep_sw23_598b2d29a0` | `cr_permute_rows` | `int fn(uint8_t *data, int32_t *perm, int n, int stride)`. In-place row permutation of an `n`×`stride` byte matrix: destination row `j` takes source row `perm[j]`, where `perm` is an array of 8-byte entries (only the first int of each is used). Implemented by walking each permutation cycle, shifting rows backwards, and marking visited entries with a temporary `+0x4000000` flag that is stripped from every entry at the end. `stride` must be `< 0x41` else returns `0x69`; `stride <= 0` moves no data but still walks the cycles. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
