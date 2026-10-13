@@ -449,6 +449,15 @@ side effects, never raw pointer values.
 | `0x180026b30` | `fpc_bio_bep_sw23_...` | `cr_sep_fir_pair` | Separable FIR pair with coef `{0x4000,0,0xc000,0x4000,0x4000,0x4000}`: row-FIR `src→A` (guard `(u32)(w-4)<0xfd`), then col-FIR `A→A` (guard `h`); row-FIR `src→B` (guard `w`), col-FIR `B→B` (guard `h`). Guards return 1 / 0x69. |
 | `0x18003b110` | `fpc_bio_bep_sw23_...` | `cr_row_fir_vfir` | Streaming-FIR row twin of `cr_row_fir_i8` but the ring row is filled via `cr_mirror_extend_fir` and the vertical pass is `cr_vfir4_u8(out, ring, coef+((n-rr)-1)%n, w, n)`; mirror branch uses `lv=((2h-(srcrow+3+(n>>1)))%n)*w`. |
 
+### Batch 58 — window generators + masked median + angle sampler
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18000e6f0` | `fpc_bio_bep_sw23_02e4655d23` | `cr_masked_median_f32` | Median of the float samples `!= skip`: `cr_malloc_aligned16(n*4)`, compact the non-skip samples, selection-sort, then `cnt` even → mean of the two middles, odd → middle. Returns the allocator status. |
+| `0x1800345f0` | `fpc_bio_bep_sw23_a1cbee6c60` | `cr_gaussian_window_q15` | Q15 Gaussian: `q=-0.5/sigma²`, `c=(n-1)/2`; `sum=Σ expf((i-c)*q*(i-c))`; `out[k]=clamp(round(expf((k-c)*q*(k-c))*32768/sum), -32768, 32767)`. |
+| `0x180018a10` | `fpc_bio_bep_sw23_2bf628d2b6` | `cr_gaussian_deriv_windows_q15` | Q15 Gaussian + 1st/2nd derivative windows. Pass 1 sums `(t*q)*t`; pass 2 uses `(q*u)*u`, `u2=(u+u)*q`, `d=e*u2`, emitting `g=e`, `dg=d`, `d2g=(u2*d + (q+q)*e)` (all `*32768/sum`, rounded). Grouping differs between passes. |
+| `0x18003e7a0` | `fpc_bio_bep_sw23_cbae7209ea` | `cr_bilinear_angle_sample` | Orientation-field bilinear sampler: Q6 position `(px-ox, py-oy)`, corners clamped, each byte → `cr_sincos` (cos,sin), bilinear-interpolate both with Q6 weights (`>>12`), then `(cr_atan2_fixed(sin_i, cos_i)+0x400000)>>23`. Field descriptor = `cr_angle_field` (a `cr_image` + `ox@0x20, oy@0x24`). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

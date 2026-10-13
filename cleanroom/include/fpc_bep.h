@@ -572,4 +572,20 @@ uint32_t cr_sep_fir_pair(cr_image *A, cr_image *B,
 int      cr_row_fir_vfir(uint8_t *out, cr_fir_row_ctx *ctx,
                          const cr_image *img, int target);           /* 0x18003b110 */
 
+/* ---- batch 58: window generators + masked median + angle sampler -------- */
+/* A cr_image superset carrying a sampling origin at +0x20/+0x24. */
+typedef struct cr_angle_field {
+    cr_image img;        /* +0x00  a, b, data, w, h, offx, offy            */
+    int32_t  ox;         /* +0x20  sample origin x                         */
+    int32_t  oy;         /* +0x24  sample origin y                         */
+} cr_angle_field;
+
+int      cr_masked_median_f32(float *out, const float *src, int n,
+                              float skip);                     /* 0x18000e6f0 */
+void     cr_gaussian_window_q15(int16_t *out, float sigma, int n); /* 0x1800345f0 */
+void     cr_gaussian_deriv_windows_q15(int16_t *g, int16_t *dg, int16_t *d2g,
+                                       float sigma, int n);         /* 0x180018a10 */
+int      cr_bilinear_angle_sample(const cr_angle_field *d,
+                                  int px, int py);                  /* 0x18003e7a0 */
+
 #endif /* FPC_BEP_H */

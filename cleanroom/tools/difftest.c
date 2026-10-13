@@ -5565,6 +5565,100 @@ static void test_tree_batch57(void)
     }
 }
 
+static void test_tree_batch58(void)
+{
+    typedef int  (WINAPI *p58_i_pf_pif)(float *, const float *, int, float);
+    typedef void (WINAPI *p58_v_pfi)(int16_t *, float, int);
+    typedef void (WINAPI *p58_v_pppfi)(int16_t *, int16_t *, int16_t *, float, int);
+    typedef int  (WINAPI *p58_i_ppii)(const void *, int, int);
+
+    /* --- cr_masked_median_f32 (0x18000e6f0) ------------------------------- */
+    {
+        p58_i_pf_pif v = (p58_i_pf_pif)fn_at(RVA(0x18000e6f0));
+        begin("cr_masked_median_f32");
+        int bad = g_fail;
+        for (int t = 0; t < 20000; t++) {
+            int   n    = (int)(rnd() % 40);
+            float skip = (float)((int)(rnd() % 7) - 3);
+            float src[40];
+            for (int i = 0; i < n; i++) {
+                if ((rnd() & 3) == 0) src[i] = skip;
+                else src[i] = (float)((int)(rnd() % 2001) - 1000) * 0.25f;
+            }
+            float ov = 1234.5f, oc = 1234.5f;
+            int rv = v(&ov, src, n, skip);
+            int rc = cr_masked_median_f32(&oc, src, n, skip);
+            if (rv != rc) mismatch("mm-ret", (u32)t, (u32)rv, (u32)rc);
+            if (memcmp(&ov, &oc, 4) != 0) mismatch("mm", (u32)t, 0, 0);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_masked_median_f32\n");
+    }
+
+    /* --- cr_gaussian_window_q15 (0x1800345f0) ----------------------------- */
+    {
+        p58_v_pfi v = (p58_v_pfi)fn_at(RVA(0x1800345f0));
+        begin("cr_gaussian_window_q15");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            int      n     = 1 + (int)(rnd() % 40);
+            float    sigma = (float)(1 + (int)(rnd() % 20)) * 0.5f;
+            int16_t  ov[40], oc[40];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            v(ov, sigma, n); cr_gaussian_window_q15(oc, sigma, n);
+            cmp_buf("gw", (u8 *)ov, (u8 *)oc, (size_t)n * 2, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_gaussian_window_q15\n");
+    }
+
+    /* --- cr_gaussian_deriv_windows_q15 (0x180018a10) ---------------------- */
+    {
+        p58_v_pppfi v = (p58_v_pppfi)fn_at(RVA(0x180018a10));
+        begin("cr_gaussian_deriv_windows_q15");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            int      n     = 1 + (int)(rnd() % 40);
+            float    sigma = (float)(1 + (int)(rnd() % 20)) * 0.5f;
+            int16_t  gv[40], dv[40], d2v[40], gc[40], dc[40], d2c[40];
+            memset(gv,0x5A,sizeof gv);  memset(dv,0x5A,sizeof dv);
+            memset(d2v,0x5A,sizeof d2v); memset(gc,0x5A,sizeof gc);
+            memset(dc,0x5A,sizeof dc);  memset(d2c,0x5A,sizeof d2c);
+            v(gv, dv, d2v, sigma, n);
+            cr_gaussian_deriv_windows_q15(gc, dc, d2c, sigma, n);
+            cmp_buf("gdw-g",  (u8 *)gv,  (u8 *)gc,  (size_t)n * 2, (u32)t);
+            cmp_buf("gdw-d",  (u8 *)dv,  (u8 *)dc,  (size_t)n * 2, (u32)t);
+            cmp_buf("gdw-d2", (u8 *)d2v, (u8 *)d2c, (size_t)n * 2, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_gaussian_deriv_windows_q15\n");
+    }
+
+    /* --- cr_bilinear_angle_sample (0x18003e7a0) --------------------------- */
+    {
+        p58_i_ppii v = (p58_i_ppii)fn_at(RVA(0x18003e7a0));
+        begin("cr_bilinear_angle_sample");
+        int bad = g_fail;
+        enum { AW = 32, AH = 24 };
+        static int8_t fldv[AW * AH], fldc[AW * AH];
+        for (int t = 0; t < 20000; t++) {
+            int w  = 1 + (int)(rnd() % AW);
+            int h  = 1 + (int)(rnd() % AH);
+            int ox = (int)(rnd() % 64) - 32;
+            int oy = (int)(rnd() % 64) - 32;
+            for (int i = 0; i < w * h; i++) fldv[i] = (int8_t)rnd();
+            memcpy(fldc, fldv, (size_t)w * h);
+            cr_angle_field dv, dc;
+            memset(&dv, 0, sizeof dv); memset(&dc, 0, sizeof dc);
+            dv.img.data = fldv; dv.img.w = w; dv.img.h = h; dv.ox = ox; dv.oy = oy;
+            dc.img.data = fldc; dc.img.w = w; dc.img.h = h; dc.ox = ox; dc.oy = oy;
+            int px = ox + (int)(rnd() % (u32)(w * 64 + 128)) - 64;
+            int py = oy + (int)(rnd() % (u32)(h * 64 + 128)) - 64;
+            int rv = v(&dv, px, py);
+            int rc = cr_bilinear_angle_sample(&dc, px, py);
+            if (rv != rc) mismatch("bas", (u32)t, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_bilinear_angle_sample\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -5839,6 +5933,9 @@ int main(int argc, char **argv)
     test_tree_batch56();
     printf("\n== batch 57: destructor / constructor wrappers + misc ==\n");
     test_tree_batch57();
+
+    printf("\n== batch 58: window generators + masked median + angle sampler ==\n");
+    test_tree_batch58();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

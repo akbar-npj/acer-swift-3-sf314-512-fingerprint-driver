@@ -1042,3 +1042,78 @@ uint32_t cr_sep_fir_pair(cr_image *A, cr_image *B, const cr_image *src)
     }
     return 1;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800345f0 — Q15 Gaussian window generator.
+ *   void fn(int16_t *out, float sigma, int n):
+ *     q = -0.5f / (sigma*sigma);  c = (float)(n-1) * 0.5f;
+ *     sum = 0; for i<n: sum += expf(((float)i - c) * q * ((float)i - c));
+ *     for k<n:  v = round( (expf(((float)k - c) * q * ((float)k - c)) * 32768)
+ *                          / sum );
+ *               out[k] = clamp(v, -32768, 32767);
+ *   The multiply is grouped (t*q)*t exactly as the vendor emits it.
+ * ------------------------------------------------------------------------ */
+void cr_gaussian_window_q15(int16_t *out, float sigma, int n)
+{
+    float q = -0.5f / (sigma * sigma);
+
+    if (n > 0) {
+        float c   = (float)(int)((unsigned)n - 1) * 0.5f;
+        float sum = 0.0f;
+
+        for (int i = 0; i < n; i++) {
+            float t = (float)i - c;
+            sum += cr_expf(t * q * t);
+        }
+
+        for (int k = 0; k < n; k++) {
+            float t = (float)k - c;
+            float v = cr_expf(t * q * t);
+            int   r = cr_roundf_to_int((v * 32768.0f) / sum);
+
+            if (r >= 0x7fff)       out[k] = (int16_t)0x7fff;
+            else if (r <= -0x8000) out[k] = (int16_t)0x8000;
+            else                   out[k] = (int16_t)r;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180018a10 — Q15 Gaussian / 1st-derivative / 2nd-derivative windows.
+ *   void fn(int16_t *g, int16_t *dg, int16_t *d2g, float sigma, int n):
+ *     q = -0.5f/(sigma*sigma);  c = (float)(n-1)*0.5f;
+ *     sum = 0; for i<n: t = (float)i - c; sum += expf(t*q*t);
+ *     for k<n:
+ *       u  = (float)k - c;
+ *       e  = expf(q*u*u);            // note: q*u*u here (vs t*q*t above)
+ *       u2 = (u+u)*q;                // 2u*q
+ *       g  = e*u2;                   // derivative factor
+ *       g[k]  = (int16_t)round((e * 32768) / sum);
+ *       dg[k] = (int16_t)round((g * 32768) / sum);
+ *       d2g[k]= (int16_t)round(((u2*g + (q+q)*e) * 32768) / sum);
+ *   Grouping is preserved verbatim: pass 1 uses (t*q)*t, pass 2 uses
+ *   (q*u)*u, and d2g uses ((u2*g) + ((q+q)*e)) * 32768.
+ * ------------------------------------------------------------------------ */
+void cr_gaussian_deriv_windows_q15(int16_t *g, int16_t *dg, int16_t *d2g,
+                                   float sigma, int n)
+{
+    float q = -0.5f / (sigma * sigma);
+    float c = (float)(int)((unsigned)n - 1) * 0.5f;
+
+    float sum = 0.0f;
+    for (int i = 0; i < n; i++) {
+        float t = (float)i - c;
+        sum += cr_expf(t * q * t);
+    }
+
+    for (int k = 0; k < n; k++) {
+        float u  = (float)k - c;
+        float e  = cr_expf(q * u * u);
+        float u2 = (u + u) * q;
+        float d  = e * u2;
+
+        g[k]   = (int16_t)cr_roundf_to_int((e * 32768.0f) / sum);
+        dg[k]  = (int16_t)cr_roundf_to_int((d * 32768.0f) / sum);
+        d2g[k] = (int16_t)cr_roundf_to_int(((u2 * d + (q + q) * e) * 32768.0f) / sum);
+    }
+}

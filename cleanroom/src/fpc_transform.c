@@ -1206,3 +1206,62 @@ int cr_row_fir_vfir(uint8_t *out, cr_fir_row_ctx *ctx,
     cr_vfir4_u8(out, ring, coef + ((n - rr) - 1) % n, w, n);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003e7a0 — bilinear orientation-field sampler.
+ *   int fn(const cr_angle_field *d, int px, int py):
+ *     Each byte of the field is an angle phase; the (cos,sin) vector is
+ *     cr_sincos(byte).  Sample at Q6 position (px-d->ox, py-d->oy), bilinearly
+ *     interpolate the (sin,cos) vectors with Q6 weights, then return
+ *     (cr_atan2_fixed(sin_i, cos_i) + 0x400000) >> 23.
+ *
+ *   The four corners are clamped to the field: x0=clamp(fx,0,w-1),
+ *   x1=clamp(fx+1,0,w-1), y0/y1 likewise.  The byte is read sign-extended
+ *   (signed char) before being handed to cr_sincos as a phase.
+ * ------------------------------------------------------------------------ */
+int cr_bilinear_angle_sample(const cr_angle_field *d, int px, int py)
+{
+    uint32_t      ux   = (uint32_t)(px - d->ox);
+    uint32_t      uy   = (uint32_t)(py - d->oy);
+    int           w    = d->img.w;
+    const int8_t *data = (const int8_t *)d->img.data;
+
+    int      fxb = (int)ux >> 6;
+    uint32_t fx  = ux & 0x3fu;
+    int      fyb = (int)uy >> 6;
+    uint32_t fy  = uy & 0x3fu;
+
+    int xmax = w - 1;
+    int ymax = d->img.h - 1;
+
+    int x0 = fxb < 0 ? 0 : fxb;
+    if (xmax <= x0) x0 = xmax;
+    int y0 = fyb < 0 ? 0 : fyb;
+    if (ymax <= y0) y0 = ymax;
+
+    int x1 = fxb + 1;
+    if (x1 < 0) x1 = 0;
+    if (x1 < xmax) xmax = x1;              /* xmax now holds x1 */
+    int x1v = xmax;
+
+    int y1 = fyb + 1;
+    if (y1 < 0) y1 = 0;
+    if (ymax <= y1) y1 = ymax;
+
+    int32_t cTL, sTL, cTR, sTR, cBL, sBL, cBR, sBR;
+    cr_sincos(&cTL, &sTL, (uint32_t)(int32_t)data[y0 * w + x0]);
+    cr_sincos(&cTR, &sTR, (uint32_t)(int32_t)data[y0 * w + x1v]);
+    cr_sincos(&cBL, &sBL, (uint32_t)(int32_t)data[x0 + y1 * w]);
+    cr_sincos(&cBR, &sBR, (uint32_t)(int32_t)data[y1 * w + x1v]);
+
+    int32_t w00 = (int32_t)(0x40 - fx) * (int32_t)(0x40 - fy);
+    int32_t w10 = (int32_t)(0x40 - fy) * (int32_t)fx;
+    int32_t w01 = (int32_t)(0x40 - fx) * (int32_t)fy;
+    int32_t w11 = (int32_t)(fx * fy);
+
+    int32_t sin_i = (sBL * w01 + w00 * sTL + w10 * sTR + 0x8000 + sBR * w11) >> 12;
+    int32_t cos_i = (cTL * w00 + cTR * w10 + cBL * w01 + 0x8000 + cBR * w11) >> 12;
+
+    int ang = cr_atan2_fixed(sin_i, cos_i);
+    return (ang + 0x400000) >> 23;
+}

@@ -515,3 +515,63 @@ void cr_norm_corr_score(int *out, void *const *p2, const int16_t *coef,
         std = 0.1f;
     *out = cr_roundf_to_int(f / std);
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18000e6f0 — median of the float samples that differ from a skip value.
+ *   int fn(float *out, const float *src, int n, float skip):
+ *     r = cr_malloc_aligned16(&buf, n*4);
+ *     if (r == 0) {
+ *       *out = 0.0f;
+ *       if (n > 0) {
+ *         cnt = 0; for i<n: if (src[i] != skip) buf[cnt++] = src[i];
+ *         selection sort of buf[0..cnt-1] (vendor's do/while bubble);
+ *         if (cnt != 0) {
+ *           mid = buf[cnt>>1];
+ *           *out = (cnt even) ? (mid + buf[(cnt>>1)-1]) * 0.5f : mid;
+ *         }
+ *       }
+ *       cr_sized_free(&buf);
+ *     }
+ *     return r;
+ *   The allocator is observable only through its status, so the difftest
+ *   compares *out and the return code.
+ * ------------------------------------------------------------------------ */
+int cr_masked_median_f32(float *out, const float *src, int n, float skip)
+{
+    void *buf = NULL;
+    int   r   = cr_malloc_aligned16(&buf, (size_t)n * 4u);
+
+    if (r == 0) {
+        *out = 0.0f;
+        if (n > 0) {
+            float   *b   = (float *)buf;
+            uint32_t cnt = 0;
+
+            for (int i = 0; i < n; i++)
+                if (src[i] != skip)
+                    b[cnt++] = src[i];
+
+            /* Selection sort of b[0..cnt-2]; the vendor's do/while leaves the
+             * last element in place automatically. */
+            if ((int)cnt - 1 > 0) {
+                for (int i = 1; i < (int)cnt; i++)
+                    for (int j = i; j < (int)cnt; j++)
+                        if (b[j] < b[i - 1]) {
+                            float t = b[i - 1];
+                            b[i - 1] = b[j];
+                            b[j] = t;
+                        }
+            }
+
+            if (cnt != 0) {
+                float mid = b[(int)cnt >> 1];
+                if ((cnt & 1) == 0)
+                    *out = (mid + b[((int)cnt >> 1) - 1]) * 0.5f;
+                else
+                    *out = mid;
+            }
+        }
+        cr_sized_free(&buf);
+    }
+    return r;
+}
