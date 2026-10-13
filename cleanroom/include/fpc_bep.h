@@ -288,4 +288,9 @@ void     cr_box_sum_excl(int width, int height, const uint8_t *data,
 void     cr_boxsum15_s16(int16_t *base, int W, int H);                   /* 0x180032830 */
 void     cr_boxsum15_u8(uint8_t *base, int W, int H);                    /* 0x18001aaa0 */
 
+/* ---- batch 33: u8 row widen + m-tap symmetric FIR ------------------------- */
+void     cr_u8_expand_convolve(int16_t *out, uint16_t *scratch,
+                               const uint8_t *in, const int16_t *coef,
+                               int n, int m);                            /* 0x18003ecc0 */
+
 #endif /* FPC_BEP_H */

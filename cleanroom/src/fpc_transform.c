@@ -924,3 +924,48 @@ void cr_boxsum15_u8(uint8_t *base, int W, int H)
         }
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003ecc0 — widen a byte row to int16 with reflect-101 padding, then run
+ *   an m-tap symmetric FIR (divide by 512, round with +0x100).
+ *   Args (ms_abi): rcx = out (int16*), rdx = scratch (uint16*), r8 = in (u8*),
+ *   r9 = coef (int16*), [rsp+0x20] = n (input length), [rsp+0x28] = m (taps).
+ *   scratch (length n + 2*pad, pad = m>>1) is filled as
+ *       scratch[pad + i]      = in[i]              (i in [0,n))
+ *       scratch[pad - 1 - j]  = in[j + 1]          (left  reflect-101)
+ *       scratch[pad + n + j]  = in[n - 2 - j]      (right reflect-101)
+ *   and then out[i] = (int16)((Σ_{k<taps_i} coef[k]*scratch[i+k] + 0x100) >> 9).
+ *
+ *   The vendor splits the output into a 4-wide unrolled region (i < bound,
+ *   bound = 4 + 4*((n-4)>>2), 0 when n<=3) and a scalar tail (i >= bound).
+ *   The unrolled region consumes 2P+1 taps with P = 1 + ((m-2)>>1) — i.e. m
+ *   taps for ODD m (the only case the public entry FUN_180021700 admits, via
+ *   `if ((m & 1) == 0) return 1;`) but m+1 taps for EVEN m (it reads coef[m]).
+ *   The tail always consumes exactly m taps.  Both regions are reproduced
+ *   verbatim below so parity holds for every m the other callers may pass.
+ * ------------------------------------------------------------------------ */
+void cr_u8_expand_convolve(int16_t *out, uint16_t *scratch, const uint8_t *in,
+                           const int16_t *coef, int n, int m)
+{
+    int pad = m >> 1;
+
+    if (n > 0)
+        for (int i = 0; i < n; i++)
+            scratch[pad + i] = in[i];
+    if (pad > 0)
+        for (int j = 0; j < pad; j++) {
+            scratch[j] = in[pad - j];
+            scratch[pad + n + j] = in[n - 2 - j];
+        }
+
+    int unrolled_taps = 3 + 2 * ((m - 2) >> 1);   /* m for odd m, m+1 for even */
+    int bound = (n > 3) ? 4 + 4 * ((n - 4) >> 2) : 0;
+
+    for (int i = 0; i < n; i++) {
+        int taps = (i < bound) ? unrolled_taps : m;
+        int32_t acc = 0;
+        for (int k = 0; k < taps; k++)
+            acc += (int32_t)coef[k] * (int32_t)(int16_t)scratch[i + k];
+        out[i] = (int16_t)((acc + 0x100) >> 9);
+    }
+}

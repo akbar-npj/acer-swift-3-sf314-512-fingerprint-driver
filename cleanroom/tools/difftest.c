@@ -2368,6 +2368,41 @@ static void test_boxsum15_u8(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_boxsum15_u8\n");
 }
 
+/* 0x18003ecc0 — widen a byte row with reflect-101 padding, then run an m-tap
+ * symmetric FIR: out[i] = (Σ_{k<taps} coef[k]*scratch[i+k] + 0x100) >> 9.
+ * The unrolled region reads one extra tap for even m (coef[m]); both coef
+ * buffers are fully initialised so that read is well-defined and shared. */
+static void test_u8_expand_convolve(void)
+{
+    typedef void (WINAPI *v_v_ppppii)(int16_t *, uint16_t *, const uint8_t *,
+                                      const int16_t *, int, int);
+    v_v_ppppii v = (v_v_ppppii)fn_at(RVA(0x18003ecc0));
+    begin("cr_u8_expand_convolve");
+    int bad = g_fail;
+    enum { MAXN = 48, MAXM = 20, MAXS = MAXN + MAXM + 2 };
+    uint8_t inv[MAXN], inc[MAXN];
+    int16_t coefv[MAXM], coefc[MAXM];
+    uint16_t scrv[MAXS], scrc[MAXS];
+    int16_t outv[MAXN], outc[MAXN];
+    for (int t = 0; t < 20000; t++) {
+        int m = 1 + (int)(rnd() % 17);
+        int n = m + (int)(rnd() % (MAXN - m + 1));   /* n >= m, so n > pad */
+        for (int i = 0; i < n; i++) inv[i] = (uint8_t)rnd();
+        for (int k = 0; k < MAXM; k++) coefv[k] = (int16_t)rnd();
+        memcpy(inc, inv, n);
+        memcpy(coefc, coefv, sizeof coefv);
+        memset(scrv, 0x5A, sizeof scrv); memset(scrc, 0x5A, sizeof scrc);
+        memset(outv, 0x5A, sizeof outv); memset(outc, 0x5A, sizeof outc);
+        v(outv, scrv, inv, coefv, n, m);
+        cr_u8_expand_convolve(outc, scrc, inc, coefc, n, m);
+        cmp_buf("out", (unsigned char *)outv, (unsigned char *)outc,
+                sizeof(int16_t) * n, (u32)t);
+        cmp_buf("scratch", (unsigned char *)scrv, (unsigned char *)scrc,
+                sizeof(uint16_t) * (n + 2 * (m >> 1)), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_u8_expand_convolve\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2508,6 +2543,8 @@ int main(int argc, char **argv)
     test_boxsum15_s16();
     printf("\n== separable 15x15 box filter (u8) ==\n");
     test_boxsum15_u8();
+    printf("\n== u8 row widen + m-tap symmetric FIR ==\n");
+    test_u8_expand_convolve();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

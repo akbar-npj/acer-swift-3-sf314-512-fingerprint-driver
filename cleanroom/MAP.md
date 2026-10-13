@@ -261,6 +261,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x18001aaa0` | `fpc_bio_bep_sw23_311b05823c` | `cr_boxsum15_u8` | `void fn(uint8_t *base, int W, int H)`. Byte twin of `cr_boxsum15_s16`: same four in-place passes (horizontal running sum, vertical running sum, horizontal edge replication, vertical edge replication) but byte samples and the rounding constant `0x800` (sums ≤ 15*255), output `(sum*0x1111+0x800)>>16`. |
 
+### Batch 33 — u8 row widen + reflect-101 padding + m-tap symmetric FIR
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18003ecc0` | `fpc_bio_bep_sw23_cd9632fb7f` | `cr_u8_expand_convolve` | `void fn(int16_t *out, uint16_t *scratch, const uint8_t *in, const int16_t *coef, int n, int m)`. Widen a byte row to int16 with reflect-101 (BORDER_REFLECT_101) padding into `scratch` (`pad = m>>1`; `scratch[pad+i]=in[i]`, left `scratch[j]=in[pad-j]`, right `scratch[pad+n+j]=in[n-2-j]`), then run an m-tap FIR: `out[i] = (int16)((Σ_{k<taps} coef[k]*scratch[i+k] + 0x100) >> 9)`. The output is split into a 4-wide unrolled region (`i < bound`, `bound = 4 + 4*((n-4)>>2)`, 0 when `n<=3`) and a scalar tail (`i >= bound`). **Quirk:** the unrolled region consumes `3 + 2*((m-2)>>1)` taps = `m` for **odd** m but `m+1` for **even** m (it reads `coef[m]`); the tail always consumes exactly `m`. The public entry `FUN_180021700` rejects even m (`if ((m&1)==0) return 1`), so the extra tap only fires via the two other callers `FUN_180010440` / `FUN_18002af00`. Both regions are reproduced verbatim so parity holds for every m. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
