@@ -303,6 +303,9 @@ typedef void     (WINAPI *v_v_ppiii)(void *, const void *, int, int, int);
 typedef void     (WINAPI *v_v_ppppbii)(void *, void *, const void *, const void *,
                                        uint8_t, int, int);
 
+/* batch 11 */
+typedef int      (WINAPI *v_i_pph)(void *, const void *, int16_t);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -1325,6 +1328,41 @@ static void test_bitmap_popcount(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_popcount\n");
 }
 
+/* ---- batch 11: 336-byte leaf ------------------------------------------- */
+
+/* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
+static void test_downsample_mean(void)
+{
+    v_i_pph v = (v_i_pph)fn_at(RVA(0x180026fb0));
+    begin("cr_downsample_mean");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char ov[0x20], oc[0x20], iv[0x20], ic[0x20];
+        uint8_t inb[4096];
+        int16_t pv[1024], pc[1024];
+        for (size_t i = 0; i < sizeof inb; i++) inb[i] = (uint8_t)rnd();
+        for (size_t i = 0; i < sizeof pv / sizeof pv[0]; i++) {
+            uint32_t u = (uint32_t)rnd();
+            pv[i] = (int16_t)u;
+            pc[i] = pv[i];
+        }
+        int f = (int)(rnd() % 6u);            /* 0..5 (incl. the f<=0 path) */
+        int ow = (int)(rnd() % 9u);
+        int oh = (int)(rnd() % 9u);
+        int iw = (int)(rnd() % 40u);
+        int ih = (int)(rnd() % 40u);
+        mk_image(ov, pv, 0, ow, oh, 0, 0);
+        mk_image(oc, pc, 0, ow, oh, 0, 0);
+        mk_image(iv, inb, 0, iw, ih, 0, 0);
+        mk_image(ic, inb, 0, iw, ih, 0, 0);
+        int rv = v(ov, iv, (int16_t)f);
+        int rc = cr_downsample_mean((cr_image *)oc, (const cr_image *)ic, (int16_t)f);
+        if (rv != rc) mismatch("dsret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("ds", (unsigned char *)pv, (unsigned char *)pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_downsample_mean\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1562,6 +1600,9 @@ int main(int argc, char **argv)
     test_f32_to_i16_scaled();
     test_block_extreme_bitmap();
     test_bitmap_popcount();
+
+    printf("\n== 336-byte leaf ==\n");
+    test_downsample_mean();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -186,4 +186,8 @@ void     cr_f32_to_i16_scaled(cr_image *dst, const cr_image *src,
 void     cr_block_extreme_bitmap(cr_image *out, const cr_image *in); /* 0x180019490 */
 int      cr_bitmap_popcount(const cr_image *img);                    /* 0x180034190 */
 
+/* ---- batch 11: 336-byte leaf ------------------------------------------- */
+int      cr_downsample_mean(cr_image *out, const cr_image *in,
+                            int16_t f);                              /* 0x180026fb0 */
+
 #endif /* FPC_BEP_H */

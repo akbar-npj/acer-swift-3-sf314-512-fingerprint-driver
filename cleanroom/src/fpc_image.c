@@ -161,3 +161,47 @@ void cr_classify_mark(const float *vals, uint8_t *const *base,
             *pc = 0x10;
     }
 }
+
+/* 0x180026fb0 — integer-factor block-average downsample.
+ *
+ * `out` (int16 image) receives, for each (r,c), the mean of the f x f block of
+ * the byte image `in` at rows [r*f, r*f+f) and columns [c*f, c*f+f):
+ *   out[r*out->w + c] = (int16)(Σ in[(r*f+k)*in->w + c*f + j] / (f*f))
+ * (signed, truncated toward zero).  Neither stride/origin is used; both images
+ * are packed.  Returns 0x69 if out->w*f < in->w or out->h*f < in->h, else 0.
+ * If f <= 0 every output sample is 0 (the sum loop is skipped, no division). */
+int cr_downsample_mean(cr_image *out, const cr_image *in, int16_t f)
+{
+    if (out->w * f < in->w)
+        return 0x69;
+    if (out->h * f < in->h)
+        return 0x69;
+    if (out->h <= 0)
+        return 0;
+
+    int16_t *od = (int16_t *)out->data;
+    const uint8_t *id = (const uint8_t *)in->data;
+    int ow = out->w, oh = out->h, iw = in->w;
+    int ff = f * f;
+
+    int orow = 0, irow = 0;
+    for (int r = 0; r < oh; r++) {
+        if (ow > 0) {
+            int base = irow;
+            for (int c = 0; c < ow; c++, base += f) {
+                int32_t val = 0;
+                if (f > 0) {
+                    int32_t sum = 0;
+                    for (int k = 0; k < f; k++)
+                        for (int j = 0; j < f; j++)
+                            sum += id[base + k * iw + j];
+                    val = sum / ff;
+                }
+                od[orow + c] = (int16_t)val;
+            }
+        }
+        irow += iw * f;
+        orow += ow;
+    }
+    return 0;
+}
