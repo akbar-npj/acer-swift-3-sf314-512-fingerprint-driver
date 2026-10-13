@@ -218,3 +218,53 @@ void cr_masked_minmax_s16(int *out_min, int *out_max, int *out_count,
     *out_max = (int)mx;
     *out_count = count;
 }
+
+/* 0x180017840 — float twin of cr_masked_minmax_s16.  Scans img->h*img->w
+ * contiguous float samples (stride is ignored, like the s16 version); with a
+ * mask, a sample counts iff (mask[i] & and_mask) != 0.  Uses SSE minss/maxss
+ * semantics, i.e. `(mn < v) ? mn : v` / `(mx > v) ? mx : v` (which also
+ * reproduce the "return the second operand on NaN" behaviour exactly). */
+void cr_masked_minmax_f32(float *out_min, float *out_max, int *out_count,
+                          const cr_image *img, const cr_image *mask,
+                          uint8_t and_mask)
+{
+    int total = img->h * img->w;
+    const float *d = (const float *)img->data;
+    float mn = 3.4028234663852886e+38f;    /* +FLT_MAX */
+    float mx = -3.4028234663852886e+38f;   /* -FLT_MAX */
+
+    if (!mask) {
+        if (total > 0) {
+            for (int i = 0; i < total; i++) {
+                float v = d[i];
+                mn = (mn < v) ? mn : v;
+                mx = (mx > v) ? mx : v;
+            }
+        }
+        *out_min = mn;
+        *out_max = mx;
+        *out_count = total;
+        return;
+    }
+
+    if (total <= 0) {
+        *out_min = 3.4028234663852886e+38f;
+        *out_max = -3.4028234663852886e+38f;
+        *out_count = 0;
+        return;
+    }
+
+    const uint8_t *m = (const uint8_t *)mask->data;
+    int count = 0;
+    for (int i = 0; i < total; i++) {
+        if (m[i] & and_mask) {
+            float v = d[i];
+            mn = (mn < v) ? mn : v;
+            mx = (mx > v) ? mx : v;
+            count++;
+        }
+    }
+    *out_min = mn;
+    *out_max = mx;
+    *out_count = count;
+}

@@ -1068,6 +1068,72 @@ static void test_masked_minmax_s16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_masked_minmax_s16\n");
 }
 
+/* ---- batch 8: 288-byte leaves ------------------------------------------ */
+
+/* 0x180017840 — float min/max/count of float samples, optional byte mask. */
+static void test_masked_minmax_f32(void)
+{
+    v_v_pppppb v = (v_v_pppppb)fn_at(RVA(0x180017840));
+    begin("cr_masked_minmax_f32");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char iv[0x20], ic[0x20], mv[0x20], mc[0x20];
+        uint32_t d[160];
+        uint8_t m[160];
+        for (size_t i = 0; i < sizeof d / sizeof d[0]; i++) d[i] = (uint32_t)rnd();
+        for (size_t i = 0; i < sizeof m; i++) m[i] = (uint8_t)rnd();
+        int w = (int)(rnd() % 12u);
+        int h = (int)(rnd() % 12u);
+        uint8_t am = (uint8_t)rnd();
+        int usemask = (rnd() % 4u) != 0;
+        mk_image(iv, d, 0, w, h, 0, 0);
+        mk_image(ic, d, 0, w, h, 0, 0);
+        mk_image(mv, m, 0, 0, 0, 0, 0);
+        mk_image(mc, m, 0, 0, 0, 0, 0);
+        float a = 0, b = 0, p = 0, q = 0;
+        int c = -1, r = -1;
+        v(&a, &b, &c, iv, usemask ? mv : NULL, am);
+        cr_masked_minmax_f32(&p, &q, &r, (const cr_image *)ic,
+                             usemask ? (const cr_image *)mc : NULL, am);
+        if (cr_f2u(a) != cr_f2u(p) || cr_f2u(b) != cr_f2u(q) || c != r)
+            mismatch("mmf32", (u32)t, cr_f2u(a), cr_f2u(p));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_minmax_f32\n");
+}
+
+/* 0x1800334c0 — int16 image -> float image with power-of-two scale. */
+static void test_i16_to_f32_scaled(void)
+{
+    v_v_ppi v = (v_v_ppi)fn_at(RVA(0x1800334c0));
+    begin("cr_i16_to_f32_scaled");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char dv[0x20], dc[0x20], sv[0x20], sc[0x20];
+        int16_t sb[4096];
+        float pv[4096], pc[4096];
+        for (size_t i = 0; i < sizeof sb / sizeof sb[0]; i++) sb[i] = (int16_t)rnd();
+        for (size_t i = 0; i < sizeof pv / sizeof pv[0]; i++) {
+            uint32_t u = (uint32_t)rnd();
+            memcpy(&pv[i], &u, 4);
+            pc[i] = pv[i];
+        }
+        int sa = (int)(rnd() % 40u) + 1;
+        int da = (int)(rnd() % 40u) + 1;
+        int w = (int)(rnd() % 20u), h = (int)(rnd() % 20u);
+        int sox = (int)(rnd() % 8u), soy = (int)(rnd() % 8u);
+        int dox = (int)(rnd() % 8u), doy = (int)(rnd() % 8u);
+        int shift = (int)(rnd() % 70u) - 35;   /* includes 0 and both signs */
+        mk_image(dv, pv, da, w, h, dox, doy);
+        mk_image(dc, pc, da, w, h, dox, doy);
+        mk_image(sv, sb, sa, w, h, sox, soy);
+        mk_image(sc, sb, sa, w, h, sox, soy);
+        v(dv, sv, shift);
+        cr_i16_to_f32_scaled((cr_image *)dc, (const cr_image *)sc, shift);
+        cmp_buf("i16f32", (unsigned char *)pv, (unsigned char *)pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_i16_to_f32_scaled\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1291,6 +1357,10 @@ int main(int argc, char **argv)
     test_matmul_nt();
     test_mean_stddev();
     test_masked_minmax_s16();
+
+    printf("\n== 288-byte leaves ==\n");
+    test_masked_minmax_f32();
+    test_i16_to_f32_scaled();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

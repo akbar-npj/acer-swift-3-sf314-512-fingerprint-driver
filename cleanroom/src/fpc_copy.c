@@ -81,3 +81,41 @@ void cr_image_copy_u16_shl(cr_image *dst, const cr_image *src, uint8_t shift)
         }
     }
 }
+
+/* 0x1800334c0 — convert an int16 image to a float image with a power-of-two
+ * scale.  Uses dst's w/h and both images' own stride/origin.  The scale is:
+ *   shift > 0 : 1.0f / (float)(1 << (shift & 31))
+ *   shift == 0: 1.0f
+ *   shift < 0 : (float)(1 << ((-shift) & 31))
+ * (the shift is a 32-bit x86 `shl`, so the count is masked to 5 bits). */
+void cr_i16_to_f32_scaled(cr_image *dst, const cr_image *src, int shift)
+{
+    float scale;
+    if (shift > 0)
+        scale = 1.0f / (float)(int32_t)((uint32_t)1 << ((unsigned)shift & 31u));
+    else if (shift == 0)
+        scale = 1.0f;
+    else
+        scale = (float)(int32_t)((uint32_t)1 << ((unsigned)(-shift) & 31u));
+
+    int h = dst->h;
+    if (h <= 0)
+        return;
+
+    int w = dst->w;
+    int da = dst->a, sa = src->a;
+    float *dd = (float *)dst->data;
+    const int16_t *sd = (const int16_t *)src->data;
+    int doff = dst->offy * dst->a + dst->offx;
+    int soff = src->offy * src->a + src->offx;
+
+    int32_t drow = 0, srow = 0;
+    for (int r = 0; r < h; r++, drow += da, srow += sa) {
+        if (w > 0) {
+            long long db = (long long)(int32_t)doff + (long long)drow;
+            long long sb = (long long)(int32_t)soff + (long long)srow;
+            for (int j = 0; j < w; j++)
+                dd[db + j] = (float)sd[sb + j] * scale;
+        }
+    }
+}
