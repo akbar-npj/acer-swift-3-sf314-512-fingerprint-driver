@@ -230,6 +230,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x18000d8e0` | `fpc_bio_bep_sw23_02a79f65fe` | `cr_bitmap_mean_correct` | `int fn(cr_image *img, const cr_image *bm, const uint8_t *cfg)`. `cfg[9]` is a mode byte: `0` → `0`, `2` → run, else `0x69`; mode 2 needs `r0=cfg[0xc]`, `r1=cfg[0x10]+r0`, `r1 <= img->w` and `img->h > 29`, else `0x69`. A **global** mean is taken over set bits of bitmap rows `bm->offy+r0 .. r1-1`, columns `bm->offx .. offx+h-1` (sampling `img->data[row + k*img->w]`). Then for every image column `col` in `[0,img->w)` a **local** mean is taken over bitmap row `bm->offy+col` (same span) and, if that row has a set bit, every pixel of the column becomes `clamp((int)(p + global - local), 0, 255)`. All sums 32-bit; single-precision division/addition in exactly the written order. |
 
+### Batch 28 — bit-packed sign signature of a filter bank
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180043db0` | `fpc_bio_bep_sw23_e809dd007c` | `cr_signpack_dot` | `int fn(uint8_t *out, const void *const *inpp, const uint8_t *cfg)`. `cfg[0x10]` = 16-byte-aligned matrix pointer, `cfg[4]` = window size `m`, `cfg[8]` = signed byte `b8` with output count `n = b8/2`; `*inpp` = input window. Guards: NULL matrix → `0x69`, misaligned → `1`, `n <= 0` → `0`. For each matrix row `i` the window (`m*m` bytes) is scanned forward and backward; each matrix entry (16 bytes = 8 int16, stride `b8*8` bytes) is split `lo`=entries 0..3 / `hi`=4..7 (sign-extended to int32). Four 4-lane 32-bit SIMD dot products `A=Σlo*in[k]`, `B=Σhi*in[k]`, `C=Σlo*in[nwin-1-k]`, `D=Σhi*in[nwin-1-k]` are reduced to sign bits: `out[i]=pack(A,B)`, `out[i+n]=pack(C,D)` with `pack(P,Q)=Σ_l (P[l]>0?1<<l:0)|(Q[l]>0?0x10<<l:0)`. The packing constants at `0x18008c470`/`0x18008c480` are `{1,2,4,8}` and `{0x10,0x20,0x40,0x80}`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

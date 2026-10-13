@@ -372,6 +372,65 @@ int cr_bitmap_mean_correct(cr_image *img, const cr_image *bm,
     return 0;
 }
 
+/* 0x180043db0 — bit-packed sign signature of a small filter bank.  `cfg[0x10]`
+ * is a 16-byte-aligned matrix pointer (`cfg[4]` = window size `m`, `cfg[8]` =
+ * signed byte `b8`, output count `n = b8/2`); `*inpp` is the input window.
+ * NULL matrix -> 0x69, misaligned -> 1, n <= 0 -> 0.  For each matrix row i the
+ * window (m*m bytes) is scanned forward and backward; each matrix entry is 16
+ * bytes = 8 int16, split lo = entries 0..3 and hi = 4..7 (sign-extended to
+ * int32).  Four 4-lane dot products are accumulated in 32-bit SIMD:
+ *     A = Σ lo*in[k],  B = Σ hi*in[k],  C = Σ lo*in[m*m-1-k],  D = Σ hi*in[...]
+ * then `out[i] = pack(A,B)` and `out[i+n] = pack(C,D)`, where
+ * `pack(P,Q) = Σ_l (P[l]>0 ? 1<<l : 0) | (Q[l]>0 ? 0x10<<l : 0)` (a signed
+ * per-lane greater-than-zero test, packed as two nibbles).  The matrix entry
+ * stride is `b8*8` bytes and the row stride 16. */
+int cr_signpack_dot(uint8_t *out, const void *const *inpp, const uint8_t *cfg)
+{
+    const uint8_t *mat = *(const uint8_t *const *)(cfg + 0x10);
+    if (mat == NULL)
+        return 0x69;
+    if (((uintptr_t)mat & 0xf) != 0)
+        return 1;
+
+    int n = (int8_t)cfg[8] / 2;
+    if (n <= 0)
+        return 0;
+
+    int m = *(const int *)(cfg + 4);
+    int nwin = m * m;
+    const uint8_t *input = (const uint8_t *)*inpp;
+    long long estride = (long long)(int8_t)cfg[8] * 8;
+
+    for (int i = 0; i < n; i++) {
+        uint32_t A[4] = {0, 0, 0, 0}, B[4] = {0, 0, 0, 0};
+        uint32_t C[4] = {0, 0, 0, 0}, D[4] = {0, 0, 0, 0};
+        const uint8_t *mrow = mat + i * 16;
+
+        for (int k = 0; k < nwin; k++) {
+            uint32_t fwd = input[k];
+            uint32_t back = input[nwin - 1 - k];
+            const int16_t *vec = (const int16_t *)(mrow + (long long)k * estride);
+            for (int l = 0; l < 4; l++) {
+                A[l] += (uint32_t)vec[l] * fwd;
+                B[l] += (uint32_t)vec[4 + l] * fwd;
+                C[l] += (uint32_t)vec[l] * back;
+                D[l] += (uint32_t)vec[4 + l] * back;
+            }
+        }
+
+        uint8_t lo = 0, hi = 0;
+        for (int l = 0; l < 4; l++) {
+            if ((int32_t)A[l] > 0) lo |= (uint8_t)(1u << l);
+            if ((int32_t)B[l] > 0) lo |= (uint8_t)(0x10u << l);
+            if ((int32_t)C[l] > 0) hi |= (uint8_t)(1u << l);
+            if ((int32_t)D[l] > 0) hi |= (uint8_t)(0x10u << l);
+        }
+        out[i] = lo;
+        out[i + n] = hi;
+    }
+    return 0;
+}
+
 /* 0x1800169b0 — 8-neighbour 3x3 Laplacian of a single row.  out[i] is the
  * Laplacian centred on C[i+1]:
  *     8*C[i+1] - (A[i]+A[i+1]+A[i+2] + C[i]+C[i+2] + B[i]+B[i+1]+B[i+2])

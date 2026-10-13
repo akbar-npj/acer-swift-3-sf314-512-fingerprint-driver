@@ -1800,6 +1800,48 @@ static void test_bitmap_mean_correct(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_mean_correct\n");
 }
 
+/* ---- batch 28: bit-packed sign signature of a filter bank --------------- */
+
+/* 0x180043db0 — cfg[0x10] = 16-byte-aligned matrix, cfg[4] = m, cfg[8] = b8
+ * (output count n = b8/2); *inpp = input window.  Per matrix row, four 4-lane
+ * dot products over the m*m window are reduced to sign bits and packed into two
+ * output bytes.  Guards: NULL matrix -> 0x69, misaligned -> 1, n <= 0 -> 0. */
+static void test_signpack_dot(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x180043db0));
+    begin("cr_signpack_dot");
+    int bad = g_fail;
+    static _Alignas(16) uint8_t mat[8192];
+    for (int t = 0; t < 20000; t++) {
+        unsigned char cfg[0x20];
+        uint8_t in[256], ov[256], oc[256];
+        void *pv = in, *pc = in;
+        int m = 1 + (int)(rnd() % 4u);        /* 1..4 */
+        int n = 1 + (int)(rnd() % 8u);        /* output count 1..8 */
+        int b8 = n * 2;
+        for (int i = 0; i < 256; i++) in[i] = (uint8_t)rnd();
+        for (int i = 0; i < 8192; i++) mat[i] = (uint8_t)rnd();
+        memset(ov, 0xAB, sizeof ov); memset(oc, 0xAB, sizeof oc);
+        memset(cfg, 0, sizeof cfg);
+        *(int *)(cfg + 4) = m;
+        cfg[8] = (uint8_t)b8;
+        *(void **)(cfg + 0x10) = mat;
+        switch (t & 7) {                      /* exercise the guards */
+        case 1: *(void **)(cfg + 0x10) = NULL; break;
+        case 2: *(void **)(cfg + 0x10) = mat + 1; break;   /* misaligned */
+        case 3: cfg[8] = 0; break;                          /* n == 0 */
+        case 4: *(int *)(cfg + 4) = 0; break;               /* m == 0 */
+        default: break;
+        }
+        int rv = v(ov, &pv, cfg);
+        int rc = cr_signpack_dot(oc, (const void *const *)&pc, cfg);
+        if (rv != rc) mismatch("spk_ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("spk_out", ov, oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_signpack_dot\n");
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -2314,6 +2356,8 @@ int main(int argc, char **argv)
     test_fir7_s16_col();
     printf("\n== masked per-column mean correction ==\n");
     test_bitmap_mean_correct();
+    printf("\n== bit-packed sign signature ==\n");
+    test_signpack_dot();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -271,4 +271,8 @@ int      cr_fir7_s16_col(cr_image *dst, const cr_image *src,
 int      cr_bitmap_mean_correct(cr_image *img, const cr_image *bm,
                                 const uint8_t *cfg);                     /* 0x18000d8e0 */
 
+/* ---- batch 28: bit-packed sign signature of a filter bank ---------------- */
+int      cr_signpack_dot(uint8_t *out, const void *const *inpp,
+                         const uint8_t *cfg);                            /* 0x180043db0 */
+
 #endif /* FPC_BEP_H */
