@@ -260,4 +260,7 @@ int      cr_permute_rows(uint8_t *data, int32_t *perm, int n, int stride); /* 0x
 int      cr_bitmap_copy_shift(cr_image *dst, const cr_image *src,
                               uint32_t bitoff, int rowoff);             /* 0x18000fd90 */
 
+/* ---- batch 25: right-shifted bitmap extract ------------------------------ */
+int      cr_bitmap_extract_shift(cr_image *dst, const cr_image *src);    /* 0x18003e590 */
+
 #endif /* FPC_BEP_H */

@@ -349,6 +349,60 @@ int cr_bitmap_copy_shift(cr_image *dst, const cr_image *src,
     return 0;
 }
 
+/* 0x18003e590 — extract a bitmap window from `src` into `dst`, shifting the
+ * source bits RIGHT by (src->offx & 31).  The window starts at bit column
+ * `src->offx` and row `src->offy` of the source and is `dst->a` bits wide and
+ * `dst->h` rows tall; the last destination word is masked to the destination's
+ * valid width (`0xffffffff >> ((dst->a - dst->w) & 31)`).  `dst` must have
+ * offx==offy==0 and `src->a >= dst->a`, else 0x69.  When the bit offset is
+ * word-aligned the words are copied verbatim; otherwise each destination word
+ * is `(src[k+1] << (32-s)) | (src[k] >> s)` and the final word additionally
+ * takes a carry from `src[dst_words]` when `src->a > dst->a`. */
+int cr_bitmap_extract_shift(cr_image *dst, const cr_image *src)
+{
+    if (dst->offx != 0 || dst->offy != 0)
+        return 0x69;
+    if (src->a < dst->a)
+        return 0x69;
+
+    int src_words = src->a >> 5;
+    int dst_words = dst->a >> 5;
+    uint32_t mask = 0xffffffffu >> ((dst->a - dst->w) & 0x1f);
+    int s   = src->offx & 0x1f;
+    int sob = src->offx >> 5;
+    int h   = dst->h;
+
+    uint32_t *d = (uint32_t *)dst->data;
+    const uint32_t *sd = (const uint32_t *)src->data;
+
+    if (s == 0) {
+        if (h <= 0)
+            return 0;
+        for (int row = 0; row < h; row++) {
+            const uint32_t *ps = sd + sob + (src->offy + row) * src_words;
+            uint32_t *pd = d + row * dst_words;
+            for (int k = 0; k < dst_words - 1; k++)
+                pd[k] = ps[k];
+            pd[dst_words - 1] = ps[dst_words - 1] & mask;
+        }
+        return 0;
+    }
+
+    if (h <= 0)
+        return 0;
+    for (int row = 0; row < h; row++) {
+        const uint32_t *ps = sd + sob + (src->offy + row) * src_words;
+        uint32_t *pd = d + row * dst_words;
+        for (int k = 0; k < dst_words - 1; k++)
+            pd[k] = (ps[k + 1] << (32 - s)) | (ps[k] >> s);
+        uint32_t last = ps[dst_words - 1] >> s;
+        if (src->a > dst->a)
+            last |= ps[dst_words] << (32 - s);
+        pd[dst_words - 1] = last & mask;
+    }
+    return 0;
+}
+
 /* 0x180024200 — in-place row permutation of a byte matrix.  `data` is `n`
  * rows of `stride` bytes and `perm` is an array of 8-byte entries (only the
  * first int of each is read/written) giving, for each destination row j, the

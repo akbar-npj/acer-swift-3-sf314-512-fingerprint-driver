@@ -1681,6 +1681,58 @@ static void test_bitmap_copy_shift(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_copy_shift\n");
 }
 
+/* ---- batch 25: right-shifted bitmap extract ---------------------------- */
+
+/* 0x18003e590 — extract a `dst->a`-bit-wide, `dst->h`-row window from `src` at
+ * bit column src->offx / row src->offy, shifting source bits right by
+ * (src->offx & 31) and masking the last destination word.  Needs dst offx==offy
+ * ==0 and src->a >= dst->a (else 0x69). */
+static void test_bitmap_extract_shift(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x18003e590));
+    begin("cr_bitmap_extract_shift");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char dv[0x20], dc[0x20], sv[0x20], sc[0x20];
+        uint32_t dbv[256], dbc[256], sbv[1024], sbc[1024];
+        int dw = 1 + (int)(rnd() % 4u);          /* dst words 1..4 */
+        int sw = dw + (int)(rnd() % 4u);         /* src words >= dst */
+        int h  = 1 + (int)(rnd() % 4u);
+        int offx = (int)(rnd() % 97u);           /* 0..96 (word + bit) */
+        int offy = (int)(rnd() % 3u);
+        int dwbits = dw * 32;
+        int w = dwbits - (int)(rnd() % 32u);     /* valid width <= stride */
+        for (int i = 0; i < 256; i++) {
+            uint32_t u = (uint32_t)rnd(); dbv[i] = u; dbc[i] = u;
+        }
+        for (int i = 0; i < 1024; i++) {
+            uint32_t u = (uint32_t)rnd(); sbv[i] = u; sbc[i] = u;
+        }
+        memset(dv, 0, sizeof dv); memset(dc, 0, sizeof dc);
+        memset(sv, 0, sizeof sv); memset(sc, 0, sizeof sc);
+        mk_image(dv, dbv, dwbits, dwbits, h, 0, 0);
+        mk_image(dc, dbc, dwbits, dwbits, h, 0, 0);
+        *(int *)(dv + 0x10) = w; *(int *)(dc + 0x10) = w;
+        mk_image(sv, sbv, sw * 32, sw * 32, h, offx, offy);
+        mk_image(sc, sbc, sw * 32, sw * 32, h, offx, offy);
+        /* exercise the guard on ~1/8 of runs */
+        switch (t & 7) {
+        case 1: *(int *)(dv + 0x18) = 1; *(int *)(dc + 0x18) = 1; break;
+        case 2: *(int *)(dv + 0x1c) = 1; *(int *)(dc + 0x1c) = 1; break;
+        case 3: *(int *)(sv + 0x00) = dwbits - 32;   /* src->a < dst->a */
+                *(int *)(sc + 0x00) = dwbits - 32; break;
+        default: break;
+        }
+        int rv = v(dv, sv);
+        int rc = cr_bitmap_extract_shift((cr_image *)dc, (const cr_image *)sc);
+        if (rv != rc) mismatch("bext_ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("bext_dst", (unsigned char *)dbv, (unsigned char *)dbc,
+                sizeof dbv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_extract_shift\n");
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -2189,6 +2241,8 @@ int main(int argc, char **argv)
     test_permute_rows();
     printf("\n== bit-shifted bitmap blit ==\n");
     test_bitmap_copy_shift();
+    printf("\n== right-shifted bitmap extract ==\n");
+    test_bitmap_extract_shift();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
