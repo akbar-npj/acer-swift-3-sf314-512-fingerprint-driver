@@ -391,6 +391,17 @@ side effects, never raw pointer values.
 | `0x18002d960` | `fpc_bio_bep_sw23_7fead33409` | `cr_fir_reflect_rows_guarded` | Row twin of the above; returns 1 (not 0x69) on validation failure; else `cr_fir_reflect_rows`. |
 | `0x180010e60` | `fpc_bio_bep_sw23_0fbb842e61.part.2` | `cr_palette_remap` | If `flag[0x3d]!=0`: allocate `count*2` at `obj+0x18` (obj=`*(ctx+0x48)`, count=`*(obj+0x20)`), then for each `i` in `count` look up `lut[src[2i+1]*mult + src[2i]]` (`lut=lut_desc->data`, `mult=lut_desc->w`) into `dst[i]`. Returns the allocator code. |
 
+### Batch 53 — ready wrappers (size 160–500)
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18000d310` | `fpc_bio_bep_sw23_00445c6288` | `cr_shuffle_indices` | `void fn(int *arr, int n, uint64_t seed)`: fill `arr[i]=i`, then `n*10` Fisher–Yates swaps using `cr_prng_range(&state,0,n)` twice per iteration (`state=(uint32_t)seed`). |
+| `0x1800363b0` | `fpc_bio_bep_sw23_a87c7724d4` | `cr_softmax2` | Two-way softmax: `s = 2^-24 * (float)*(u32*)(ctx+0x20)`; `a=vals[0]*s*2^-14`, `b=vals[1]*s*2^-14`, `m=(b<=a)?a:b`; `*out = expf(a-m)/(expf(b-m)+expf(a-m))`. |
+| `0x180038930` | `fpc_bio_bep_sw23_b19b9db308` | `cr_centroid_affine` | If `1.0f<=scale<2.0f`: `r=cr_bitmap_centroid(bm,win_h,win_w,&y,&x,margin)`; if `r==0` build the 2×3 affine (`q=0x40000000/(int)(scale*32768)`, off-diagonal 0, translation from centroid + window) into `out[0..5]`; else 0x69. |
+| `0x180030ea0` | `fpc_bio_bep_sw23_91ac20e376` | `cr_running_avg` | Per-sample running average: for `src[i] < 250`, bump the saturating counter `cnt[i]` up to `*limit`, then `dst[i] = roundf((dst[i]*2^-6*(c-1) + s*k)/c*64)` clamped to 0x7fff. |
+| `0x180012260` | `fpc_bio_bep_sw23_15363dfc49` | `cr_atan2_fixed` | Fixed-point atan2: octant reduction (iVar7 base `0x8000000`/`0xc8000000`/`+0x10000000`/`+0x20000000`), normalise `uVar6` by `clz-1`, `q=num/den`, then a Q15 polynomial `a4*-0x1ce + a2*-0xd46 + q*0x28bc + a3*0x657 + base`. Domain is 16-bit inputs (the vendor IDIV faults beyond). |
+| `0x1800335e0` | `fpc_bio_bep_sw23_9b7f284e32` | `cr_box_mean_edge` | Moving-average box filter with edge replication: `w<2` → copy; `half=lroundf(w*0.5f)`; `out[0..half-1]=Σin[0..w-1]/w`; sliding `out[k]=(in[k]-in[k-w])*inv+out[k-1]` for `k=half..iVar3`; then replicate `out[iVar3]` to the tail. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

@@ -871,3 +871,41 @@ int cr_palette_remap(void *ctx, const cr_image *lut_desc, const void *flag_obj)
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180038930 — centroid-based Q15 affine seed (scale must be in [1,2)).
+ *   int fn(int *out, const void *bm, float scale, int win_w, int win_h, int margin):
+ *     if (scale < 1.0 || scale >= 2.0) return 0x69;
+ *     r = cr_bitmap_centroid(bm, win_h, win_w, &out_y, &out_x, margin);
+ *     if (r == 0) {
+ *       out[1]=0; out[3]=0;
+ *       q = (int)(0x40000000LL / (long long)(int)(scale*32768.0f));
+ *       out[0]=q; out[4]=q;
+ *       a = win_w*0x8000 - win_w*q;  b = win_h*0x8000 - q*win_h;
+ *       out[2] = (((a - (a>>31)) >> 16) + out_x) * 0x8000;
+ *       out[5] = (((b - (b>>31)) >> 16) + out_y) * 0x8000;
+ *     }
+ *     return r;
+ * ------------------------------------------------------------------------ */
+int cr_centroid_affine(int *out, const void *bm, float scale,
+                       int win_w, int win_h, int margin)
+{
+    if (scale >= 1.0f && scale < 2.0f) {
+        int out_y = 0, out_x = 0;
+        int r = cr_bitmap_centroid((const cr_bitmap_desc *)bm, win_h, win_w,
+                                   &out_y, &out_x, margin);
+        if (r == 0) {
+            out[1] = 0;
+            out[3] = 0;
+            int q = (int)(0x40000000LL / (long long)(int)(scale * 32768.0f));
+            out[0] = q;
+            out[4] = q;
+            int a = win_w * 0x8000 - win_w * q;
+            int b = win_h * 0x8000 - q * win_h;
+            out[2] = (((a - (a >> 31)) >> 16) + out_x) * 0x8000;
+            out[5] = (((b - (b >> 31)) >> 16) + out_y) * 0x8000;
+        }
+        return r;
+    }
+    return 0x69;
+}

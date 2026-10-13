@@ -468,4 +468,16 @@ int      cr_fir_reflect_rows_guarded(int16_t *out, const int16_t *in,
 int      cr_palette_remap(void *ctx, const cr_image *lut_desc,
                          const void *flag_obj);              /* 0x180010e60 */
 
+/* ---- batch 53: ready wrappers (size 160-500) ---------------------------- */
+void     cr_shuffle_indices(int *arr, int n, uint64_t seed); /* 0x18000d310 */
+void     cr_softmax2(float *out, const void *ctx,
+                     const int16_t *vals);                   /* 0x1800363b0 */
+int      cr_centroid_affine(int *out, const void *bm, float scale,
+                            int win_w, int win_h, int margin); /* 0x180038930 */
+void     cr_running_avg(int16_t *cnt, int16_t *dst, const int16_t *src,
+                        int n, float k, const int16_t *limit); /* 0x180030ea0 */
+int      cr_atan2_fixed(int p1, int p2);                     /* 0x180012260 */
+void     cr_box_mean_edge(float *out, const float *in, int n,
+                          uint32_t w);                       /* 0x1800335e0 */
+
 #endif /* FPC_BEP_H */

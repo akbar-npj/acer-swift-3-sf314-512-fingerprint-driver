@@ -365,3 +365,22 @@ void cr_box_sum_excl(int width, int height, const uint8_t *data,
         }
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800363b0 — two-way softmax of scaled int16 samples.
+ *   void fn(float *out, const void *ctx, const int16_t *vals):
+ *     s = 2^-24 * (float)*(uint32_t*)(ctx+0x20);
+ *     a = (float)vals[0] * s * 2^-14;  b = (float)vals[1] * s * 2^-14;
+ *     m = (b <= a) ? a : b;            // MAXSS tie -> a
+ *     *out = expf(a-m) / (expf(b-m) + expf(a-m));
+ * ------------------------------------------------------------------------ */
+void cr_softmax2(float *out, const void *ctx, const int16_t *vals)
+{
+    float s = 0x1p-24f * (float)*(const uint32_t *)((const uint8_t *)ctx + 0x20);
+    float a = (float)(int)vals[0] * s * 0x1p-14f;
+    float b = (float)(int)vals[1] * s * 0x1p-14f;
+    float m = (b <= a) ? a : b;
+    float ea = cr_expf(a - m);
+    float eb = cr_expf(b - m);
+    *out = ea / (eb + ea);
+}

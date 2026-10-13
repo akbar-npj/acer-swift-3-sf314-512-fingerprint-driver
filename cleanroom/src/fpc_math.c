@@ -289,3 +289,70 @@ void cr_sincos_f32(float *out_cos, float *out_sin, float x)
     *out_cos = oc;
     *out_sin = os;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180012260 — fixed-point atan2 (octant reduction + Q15 polynomial).
+ *   int fn(int p1, int p2)
+ * ------------------------------------------------------------------------ */
+int cr_atan2_fixed(int p1, int p2)
+{
+    if ((p2 | p1) == 0)
+        return 0;
+    int iVar7 = 0x8000000;
+    int iVar2, iVar3;
+
+    if (p1 > 0) {
+        if (p2 < 0)
+            goto L355;
+    } else {
+        p2 = -p2;
+        p1 = -p1;
+        iVar7 = (int)0xc8000000u;
+        if (p2 >= 0)
+            goto L28a;
+        goto L355;
+    }
+
+L28a:
+    iVar2 = -0x30fc;
+    iVar3 = 0x7642;
+    if (p1 <= p2)
+        goto L2ac;
+    goto L29a;
+
+L355:
+    {
+        int t = p1;
+        p1 = -p2;
+        p2 = t;
+        iVar7 += 0x20000000;
+        iVar2 = -0x30fc;
+        iVar3 = 0x7642;
+        if (p1 <= p2)
+            goto L2ac;
+    }
+
+L29a:
+    iVar7 += 0x10000000;
+    iVar2 = -0x7642;
+    iVar3 = 0x30fc;
+
+L2ac:
+    {
+        uint32_t uVar6 = (uint32_t)(p2 * iVar3 - p1 * iVar2);
+        int res = 0;
+        if (uVar6 != 0) {
+            int      clz = (int)cr_clz(uVar6);
+            unsigned sh  = (unsigned)(uint8_t)((int8_t)clz - 1) & 0x1fu;
+            int den = (int)((uint32_t)uVar6 << sh) >> 15;
+            int num = (int)((uint32_t)(p2 * iVar2 + p1 * iVar3) << sh);
+            int q  = num / den;
+            int a1 = (q * q + 0x4000) >> 15;
+            int a2 = (q * a1 + 0x4000) >> 15;
+            int a3 = (a2 * a1 + 0x4000) >> 15;
+            int a4 = (a3 * a1 + 0x4000) >> 15;
+            res = a4 * -0x1ce + a2 * -0xd46 + q * 0x28bc + iVar7 + a3 * 0x657;
+        }
+        return res;
+    }
+}

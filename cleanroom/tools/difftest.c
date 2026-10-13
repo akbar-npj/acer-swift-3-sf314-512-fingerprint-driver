@@ -4492,6 +4492,174 @@ static void test_tree_batch52(void)
     }
 }
 
+/* ---- batch 53: ready wrappers (size 160-500) --------------------------- */
+static void test_tree_batch53(void)
+{
+    /* --- cr_shuffle_indices (0x18000d310) --------------------------------- */
+    {
+        typedef void (WINAPI *v_v_piU)(int *, int, uint64_t);
+        v_v_piU v = (v_v_piU)fn_at(RVA(0x18000d310));
+        begin("cr_shuffle_indices");
+        int bad = g_fail;
+        enum { MAXN = 64 };
+        int av[MAXN], ac[MAXN];
+        for (int t = 0; t < 20000; t++) {
+            int n = 1 + (int)(rnd() % MAXN);
+            uint64_t seed = ((uint64_t)rnd() << 32) | rnd();
+            memset(av, 0x5A, sizeof av);
+            memset(ac, 0x5A, sizeof ac);
+            v(av, n, seed);
+            cr_shuffle_indices(ac, n, seed);
+            cmp_buf("shuf", (u8 *)av, (u8 *)ac, sizeof(int) * n, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_shuffle_indices\n");
+    }
+
+    /* --- cr_softmax2 (0x1800363b0) ---------------------------------------- */
+    {
+        typedef void (WINAPI *v_v_pfp)(float *, const void *, const int16_t *);
+        v_v_pfp v = (v_v_pfp)fn_at(RVA(0x1800363b0));
+        begin("cr_softmax2");
+        int bad = g_fail;
+        u8 ctx[0x28];
+        int16_t vals[2];
+        for (int t = 0; t < 20000; t++) {
+            memset(ctx, 0, sizeof ctx);
+            *(uint32_t *)(ctx + 0x20) = rnd();
+            vals[0] = (int16_t)rnd();
+            vals[1] = (int16_t)rnd();
+            float ov = 0.0f, oc = 0.0f;
+            v(&ov, ctx, vals);
+            cr_softmax2(&oc, ctx, vals);
+            cmp_buf("sm", (u8 *)&ov, (u8 *)&oc, 4, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_softmax2\n");
+    }
+
+    /* --- cr_centroid_affine (0x180038930) --------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppfiii)(int *, const void *, float, int, int, int);
+        v_i_ppfiii v = (v_i_ppfiii)fn_at(RVA(0x180038930));
+        begin("cr_centroid_affine");
+        int bad = g_fail;
+        enum { MAXW = 64, MAXH = 24, MAXWORDS = 8 };
+        uint32_t bits[MAXH * MAXWORDS];
+        int ov[6], oc[6];
+        for (int t = 0; t < 20000; t++) {
+            int w = 1 + (int)(rnd() % MAXW);
+            int h = 1 + (int)(rnd() % MAXH);
+            int stride_words = (w + 31) / 32 + (int)(rnd() % 3);
+            int win_w = (int)(rnd() % (w + 4));
+            int win_h = (int)(rnd() % (h + 4));
+            int margin = (int)(rnd() % 8);
+            for (int i = 0; i < h * stride_words; i++) bits[i] = rnd();
+            cr_bitmap_desc bm;
+            memset(&bm, 0, sizeof bm);
+            bm.a = stride_words * 32; bm.data = bits; bm.w = w; bm.h = h;
+            float scale;
+            switch (rnd() % 4u) {
+                case 0: scale = 1.0f; break;
+                case 1: scale = 1.0f + (float)(rnd() % 1000u) * 0x1p-10f; break;
+                case 2: scale = 0.5f; break;
+                default: scale = 2.0f + (float)(rnd() % 100u); break;
+            }
+            for (int i = 0; i < 6; i++) { ov[i] = 0x5A5A5A5A; oc[i] = 0x5A5A5A5A; }
+            int rv = v(ov, &bm, scale, win_w, win_h, margin);
+            int rc = cr_centroid_affine(oc, &bm, scale, win_w, win_h, margin);
+            if (rv != rc) mismatch("ca-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0)
+                cmp_buf("ca", (u8 *)ov, (u8 *)oc, sizeof ov, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_centroid_affine\n");
+    }
+
+    /* --- cr_running_avg (0x180030ea0) ------------------------------------- */
+    {
+        typedef void (WINAPI *v_v_pppifp)(int16_t *, int16_t *, const int16_t *,
+                                          int, float, const int16_t *);
+        v_v_pppifp v = (v_v_pppifp)fn_at(RVA(0x180030ea0));
+        begin("cr_running_avg");
+        int bad = g_fail;
+        enum { MAXN = 64 };
+        int16_t cntv[MAXN], cntc[MAXN], dstv[MAXN], dstc[MAXN];
+        int16_t src[MAXN], limit;
+        for (int t = 0; t < 20000; t++) {
+            int n = 1 + (int)(rnd() % MAXN);
+            float k = (float)(int)(rnd() % 2000u) * 0x1p-10f - 1.0f;
+            limit = (int16_t)(int)(rnd() % 400u);
+            for (int i = 0; i < n; i++) {
+                /* bias src toward the active branch (s < 250) */
+                src[i] = (int16_t)((int)(rnd() % 600u) - 50);
+                cntv[i] = cntc[i] = (int16_t)(1 + (int)(rnd() % 300u));
+                dstv[i] = dstc[i] = (int16_t)rnd();
+            }
+            v(cntv, dstv, src, n, k, &limit);
+            cr_running_avg(cntc, dstc, src, n, k, &limit);
+            cmp_buf("ra-cnt", (u8 *)cntv, (u8 *)cntc, sizeof(int16_t) * n, (u32)t);
+            cmp_buf("ra-dst", (u8 *)dstv, (u8 *)dstc, sizeof(int16_t) * n, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_running_avg\n");
+    }
+
+    /* --- cr_atan2_fixed (0x180012260) ------------------------------------- *
+     * The vendor normalises with `sh = clz(uVar6) - 1`; when bit 31 of the
+     * signed difference uVar6 is set this makes den == 0 and the vendor IDIV
+     * faults.  That only occurs for |p1|,|p2| > 2^15, so the function's real
+     * domain is 16-bit inputs (where |uVar6| < 2^31 and clz >= 1). */
+    {
+        typedef int (WINAPI *v_i_ii)(int, int);
+        v_i_ii v = (v_i_ii)fn_at(RVA(0x180012260));
+        begin("cr_atan2_fixed");
+        int bad = g_fail;
+        static const int edge[] = { 0, 1, -1, 2, -2, 32767, -32768,
+                                    12540, -12540, 30274, -30274,
+                                    16384, -16384, 10000, -10000, 12345, -6789 };
+        enum { NE = sizeof edge / sizeof edge[0] };
+        for (int e = 0; e < NE; e++) {
+            for (int f = 0; f < NE; f++) {
+                int p1 = edge[e], p2 = edge[f];
+                int rv = v(p1, p2);
+                int rc = cr_atan2_fixed(p1, p2);
+                if (rv != rc) mismatch("at-edge", (u32)(e * NE + f), (u32)rv, (u32)rc);
+            }
+        }
+        for (int t = 0; t < 200000; t++) {
+            int p1 = (int)(int16_t)rnd();
+            int p2 = (int)(int16_t)rnd();
+            int rv = v(p1, p2);
+            int rc = cr_atan2_fixed(p1, p2);
+            if (rv != rc) mismatch("at", (u32)t, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_atan2_fixed\n");
+    }
+
+    /* --- cr_box_mean_edge (0x1800335e0) ----------------------------------- */
+    {
+        typedef void (WINAPI *v_v_ppiu)(float *, const float *, int, uint32_t);
+        v_v_ppiu v = (v_v_ppiu)fn_at(RVA(0x1800335e0));
+        begin("cr_box_mean_edge");
+        int bad = g_fail;
+        enum { MAXN = 64, MAXW = 20 };
+        float inbuf[MAXN + MAXW + 8];
+        float outv[MAXN + 2], outc[MAXN + 2];
+        for (int t = 0; t < 20000; t++) {
+            uint32_t w = rnd() % (MAXW + 1);
+            int n = (int)w + (int)(rnd() % (MAXN - (int)w + 1)); /* n >= w */
+            for (int i = 0; i < (int)(sizeof inbuf / sizeof inbuf[0]); i++)
+                inbuf[i] = (float)(int)rnd() * 0x1p-8f;
+            outv[0] = outc[0] = 0.0f;
+            outv[MAXN + 1] = outc[MAXN + 1] = 0.0f;
+            for (int i = 1; i <= MAXN; i++) {
+                outv[i] = 0x5A5A5A5Au; outc[i] = 0x5A5A5A5Au;
+            }
+            v(outv + 1, inbuf, n, w);
+            cr_box_mean_edge(outc + 1, inbuf, n, w);
+            cmp_buf("bm", (u8 *)outv, (u8 *)outc, sizeof(float) * (MAXN + 2), (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_box_mean_edge\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -4757,6 +4925,8 @@ int main(int argc, char **argv)
     test_tree_wrappers();
     printf("\n== batch 52: ready wrappers / allocators ==\n");
     test_tree_batch52();
+    printf("\n== batch 53: ready wrappers (size 160-500) ==\n");
+    test_tree_batch53();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

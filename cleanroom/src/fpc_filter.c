@@ -588,3 +588,91 @@ int cr_box_mean_f32(void *img1, void *img2, int mode)
 
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180030ea0 — per-sample running average with a saturation counter.
+ *   void fn(int16_t *cnt, int16_t *dst, const int16_t *src, int n,
+ *           float k, const int16_t *limit):
+ *     for i in 0..n-1:
+ *       s = src[i];
+ *       if (s < 0xfa) {                       // signed 16-bit
+ *         c = cnt[i];
+ *         if (c < *limit) { c++; cnt[i]=c; s=src[i]; }
+ *         ce = (int)c;                        // sign-extended
+ *         v = ((dst[i]*2^-6 * (ce-1)) + s*k) / ce * 64;
+ *         r = cr_roundf_to_int(v); if (r > 0x7fff) r = 0x7fff;
+ *         dst[i] = r;
+ *       }
+ * ------------------------------------------------------------------------ */
+void cr_running_avg(int16_t *cnt, int16_t *dst, const int16_t *src,
+                    int n, float k, const int16_t *limit)
+{
+    for (int i = 0; i < n; i++) {
+        int16_t s = src[i];
+        if (s < 0xfa) {
+            int16_t c = cnt[i];
+            if (c < *limit) {
+                c = (int16_t)(c + 1);
+                cnt[i] = c;
+                s = src[i];
+            }
+            int ce = (int)c;
+            float v = ((((float)(int)dst[i] * 0x1p-6f) * ((float)ce - 1.0f)) +
+                       ((float)(int)s * k)) / (float)ce * 64.0f;
+            int r = cr_roundf_to_int(v);
+            if (r > 0x7fff)
+                r = 0x7fff;
+            dst[i] = (int16_t)r;
+        }
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800335e0 — moving average (box filter) of a float signal with edge
+ * replication.
+ *   void fn(float *out, const float *in, int n, uint32_t w):
+ *     if ((int)w < 2) { copy in->out (n elements); return; }
+ *     half = cr_lroundf((float)w * 0.5f);
+ *     sum = Σ_{j<w} in[j]; inv = 1.0f/(float)w;
+ *     out[0..half-1] = sum*inv;
+ *     iVar3 = (n - half) - ((w even) ? 1 : 0);
+ *     sliding: out[half..iVar3] = (in[k] - in[k-w])*inv + out[k-1];
+ *     edge: out[iVar3+1..n-1] = out[iVar3];
+ * ------------------------------------------------------------------------ */
+void cr_box_mean_edge(float *out, const float *in, int n, uint32_t w)
+{
+    int half = cr_lroundf((float)(int)w * 0.5f);
+    if ((int)w < 2) {
+        if (n > 0)
+            for (int k = 0; k < n; k++)
+                out[k] = in[k];
+        return;
+    }
+    float sum = 0.0f;
+    for (uint32_t j = 0; j < w; j++)
+        sum += in[j];
+    float inv = 1.0f / (float)(int)w;
+    for (int j = 0; j < half; j++)
+        out[j] = sum * inv;
+    int iVar3 = (n - half) - ((w & 1u) == 0 ? 1 : 0);
+    if (half <= iVar3) {
+        const float *p2 = in + w;
+        float       *p6 = out + half - 1;
+        const float *endp = in + (unsigned)(iVar3 - half) + w + 1;
+        do {
+            p6[1] = (*p2 - p2[-(ptrdiff_t)w]) * inv + p6[0];
+            p2 = p2 + 1;
+            p6 = p6 + 1;
+        } while (p2 != endp);
+    }
+    int start = iVar3 + 1;
+    if (start < n) {
+        float *p2 = out + start;
+        float *endp = out + (unsigned)((n - 2) - iVar3) + start + 1;
+        do {
+            float *p6 = p2 + 1;
+            *p2 = p2[-1];
+            p2 = p6;
+        } while (p2 != endp);
+    }
+}

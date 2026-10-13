@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **165** (46.5% of funcs, 39840 B = 23.51% of bytes) |
+| **rewritten + parity-verified** | **171** (48.2% of funcs, 41392 B = 24.42% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -180,7 +180,13 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 163 | `cr_fir_reflect_guarded` | `0x1800280d0` | `fpc_bio_bep_sw23_6d0a2edcde` | 128 | **done** |
 | 164 | `cr_fir_reflect_rows_guarded` | `0x18002d960` | `fpc_bio_bep_sw23_7fead33409` | 128 | **done** |
 | 165 | `cr_palette_remap` | `0x180010e60` | `fpc_bio_bep_sw23_0fbb842e61.part.2` | 144 | **done** |
-| … | 190 more | | | | pending |
+| 166 | `cr_shuffle_indices` | `0x18000d310` | `fpc_bio_bep_sw23_00445c6288` | 160 | **done** |
+| 167 | `cr_softmax2` | `0x1800363b0` | `fpc_bio_bep_sw23_a87c7724d4` | 176 | **done** |
+| 168 | `cr_centroid_affine` | `0x180038930` | `fpc_bio_bep_sw23_b19b9db308` | 240 | **done** |
+| 169 | `cr_running_avg` | `0x180030ea0` | `fpc_bio_bep_sw23_91ac20e376` | 288 | **done** |
+| 170 | `cr_atan2_fixed` | `0x180012260` | `fpc_bio_bep_sw23_15363dfc49` | 320 | **done** |
+| 171 | `cr_box_mean_edge` | `0x1800335e0` | `fpc_bio_bep_sw23_9b7f284e32` | 368 | **done** |
+| … | 184 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 

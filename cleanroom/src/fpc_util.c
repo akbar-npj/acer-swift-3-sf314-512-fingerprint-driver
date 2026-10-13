@@ -292,3 +292,25 @@ int cr_sqrt_q16(uint32_t x)
     uint32_t sh  = (0x10u - (uint32_t)(signed char)((cz - 1u) >> 1)) & 0x1fu;
     return (int)(res << sh);
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18000d310 — seeded index shuffle.
+ *   void fn(int *arr, int n, uint64_t seed):
+ *     fill arr[i]=i (0..n-1); state = (uint32_t)seed;
+ *     repeat n*10 times: i4=cr_prng_range(&state,0,n); i5=cr_prng_range(...);
+ *     swap arr[i4] and arr[i5].
+ * ------------------------------------------------------------------------ */
+void cr_shuffle_indices(int *arr, int n, uint64_t seed)
+{
+    for (int i = 0; i < n; i++)
+        arr[i] = i;
+    uint64_t state = (uint32_t)seed;
+    int iters = n * 10;
+    for (int k = 0; k < iters; k++) {
+        int i4 = cr_prng_range(&state, 0, n);
+        int i5 = cr_prng_range(&state, 0, n);
+        int t = arr[i4];
+        arr[i4] = arr[i5];
+        arr[i5] = t;
+    }
+}
