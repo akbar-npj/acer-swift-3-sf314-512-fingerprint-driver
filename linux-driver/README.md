@@ -1,99 +1,173 @@
-# Linux Driver for FPC Fingerprint Sensor (`10a5:e340`)
+# Linux driver / tooling for the FPC `10a5:e340` fingerprint sensor
 
-This driver supports the **Fingerprint Cards AB (FPC)** sensor controller found in Acer laptops (such as Acer Swift Go series), identified by:
+Reverse-engineered and ported to Linux for the **Acer Swift 3 SF314-512**.
+
 - **USB Vendor ID:** `0x10a5`
-- **USB Product ID:** `0xe340`
-- **Controller Model:** FPC2040 ("Disum")
-- **Original Windows Driver:** `FingerPrint_Carewe_20.26.23.27_W11x64` (`fpc_disum.dll`)
+- **USB Product ID:** `0xe340` ("FPC Sensor Controller")
+- **Interface string:** `FPC L:0001 FW:20262327`
+- **Firmware reported by `GET_STATE`:** `20.26.23.27`
+- **Original Windows driver:** `FingerPrint_Carewe_20.26.23.27_W11x64` (`fpc_disum.dll`)
+
+Everything below was verified against the real hardware, not inferred from the
+sibling `10a5:9201` part (which differs in endianness, TLS roles and geometry).
 
 ---
 
-## 1. Reverse-Engineered USB Protocol Summary
+## 1. Reverse-engineered USB protocol
 
-Using **REA** and **Ghidra 12.1.4**, the internal communication protocol in `fpc_disum.dll` was reverse-engineered:
+### A. Commands — vendor control transfers on endpoint 0
 
-### A. USB Control Transfers (Host to Device)
-All vendor requests use `bmRequestType = 0x40` (Vendor OUT) or `0xC0` (Vendor IN):
-- **`CMD_INIT` (`0x01`):** `wValue = 1, wIndex = 0, length = 4` — Sensor hardware initialization.
-- **`CMD_ARM` (`0x02`):** `wValue = 1, wIndex = 0, length = 4` — Arms the sensor for touch detection.
-- **`CMD_ABORT` (`0x03`):** `wValue = 1, wIndex = 0, length = 0` — Cancels ongoing capture.
-- **`CMD_GET_IMG` (`0x09`):** `wValue = 0, wIndex = 0, length = 0` — Triggers fingerprint frame readout.
-- **`CMD_GET_FW_VERSION` (`0x30`):** Query firmware build info.
-- **`CMD_GET_HW_UNIQUE_ID` (`0x31`):** Query sensor serial number.
-- **`CMD_REFRESH_SENSOR` (`0x20`):** Resets/recalibrates sensor matrix.
-- **`CMD_FINGERPRINT_SESSION_OFF` (`0x12`):** Shuts down biometric session / powers down.
+| `bmRequestType` | direction |
+|---|---|
+| `0x40` | host → device (OUT) |
+| `0xc0` | device → host (IN) |
 
-### B. Event Notifications (Device to Host)
-Streamed asynchronously via **Endpoint `0x81` (Interrupt IN)**:
-- **Packet Structure:**
-  ```c
-  struct fpc_packet_header {
-      uint32_t event_id;   /* 1=HELLO, 2=INIT_RESULT, 3=ARM_RESULT, 6=FINGER_DWN, 7=FINGER_UP, 8=IMG, etc. */
-      uint32_t length;     /* Payload size */
-      uint32_t status;     /* Result code */
-  };
-  ```
-- **Flow:**
-  1. Sensor arms via `CMD_ARM`.
-  2. User places finger -> sensor fires `EVT_FINGER_DWN` (`0x06`).
-  3. Host sends `CMD_GET_IMG` (`0x09`).
-  4. Device sends `EVT_IMG` (`0x08`):
-     - First 34 bytes: metadata header (`0x22`).
-     - Subsequent bytes: raw 8-bit grayscale pixel stream.
-  5. User lifts finger -> sensor fires `EVT_FINGER_UP` (`0x07`).
+`bRequest` is one of the command codes; `wValue`/`wIndex` are command specific.
+
+| Command | Value | Notes |
+|---|---|---|
+| `CMD_INIT` | `0x01` | `wValue=1`, 4-byte payload `10 2f 11 17` |
+| `CMD_ARM` | `0x02` | `wValue=1`, payload `11 2f 11 17` (arm) / `12 2f 11 17` (disarm) |
+| `CMD_ABORT` | `0x03` | |
+| `CMD_TLS_INIT` | `0x05` | `wValue=1` |
+| `CMD_TLS_DATA` | `0x06` | TLS record transport, `wValue=1`, ≤64-byte chunks |
+| `CMD_INDICATE_S_STATE` | `0x08` | `wValue=0x10` |
+| `CMD_GET_IMG` | `0x09` | request a frame after finger-down |
+| `CMD_GET_DEAD_PIXELS` | `0x0a` | |
+| `CMD_GET_TLS_KEY` | `0x0b` | returns the sealed PSK blob |
+| `CMD_GET_KPI` | `0x0c` | quality/coverage metrics |
+| `CMD_FINGERPRINT_SESSION_OFF` | `0x12` | |
+| `CMD_REFRESH_SENSOR` | `0x20` | |
+| `CMD_GET_FW_VERSION` | `0x30` | |
+| `CMD_GET_HW_UNIQUE_ID` | `0x31` | |
+| `GET_STATE` | `0x50` | 72-byte reply; first 4 bytes = `20.26.23.27` |
+
+### B. Events — bulk IN endpoint `0x81` (64-byte MPS)
+
+There is **one** endpoint, `0x81`, and it is **Bulk**, not Interrupt. Every packet
+is a 12-byte little-endian header followed by a payload:
+
+```c
+struct fpc_event_hdr { uint32_t code; uint32_t len; uint32_t unknown; };
+/* len = TOTAL packet length (header + payload) */
+```
+
+| Event | Value |
+|---|---|
+| `EVT_HELLO` | `0x01` |
+| `EVT_INIT_RESULT` | `0x02` |
+| `EVT_ARM_RESULT` | `0x03` |
+| `EVT_DEAD_PIXEL_REPORT` | `0x04` |
+| `EVT_TLS` | `0x05` (payload is a raw TLS record) |
+| `EVT_FINGER_DWN` | `0x06` |
+| `EVT_FINGER_UP` | `0x07` |
+| `EVT_IMG` | `0x08` |
+| `EVT_USB_LOGS` | `0x09` |
+| `EVT_TLS_KEY` | `0x0a` |
+| `EVT_REFRESH_SENSOR` | `0x20` |
+
+### C. Session flow
+
+1. `CMD_INDICATE_S_STATE(0x10)` → `GET_STATE` (firmware version).
+2. `CMD_INIT` with magic `10 2f 11 17` → `EVT_INIT_RESULT`.
+3. `CMD_GET_TLS_KEY` → sealed-PSK blob → derive PSK (see below).
+4. `CMD_TLS_INIT` → **TLS-PSK handshake**. The **host is the TLS client** and the
+   device is the TLS server (opposite of the `9201`). Ciphersuite is
+   `TLS_PSK_WITH_AES_128_GCM_SHA256` / `..._CBC_SHA256` (mbedTLS on the device).
+   Host→device TLS records go out over `CMD_TLS_DATA`; device→host records arrive
+   as `EVT_TLS` bulk packets (strip the 12-byte header before feeding OpenSSL).
+5. `CMD_ARM` (`11 2f 11 17`) → `EVT_FINGER_DWN` → `CMD_GET_IMG` → `EVT_IMG`.
+6. Teardown: `CMD_ARM` with `12 2f 11 17`, `CMD_ABORT`,
+   `CMD_FINGERPRINT_SESSION_OFF`.
+
+> On this unit the post-handshake finger/image events arrive as **plain** framed
+> packets, not wrapped in `EVT_TLS`.
+
+### D. PSK derivation
+
+The `CMD_GET_TLS_KEY` blob has magic `0x0dec0ded` followed by offset/length pairs
+for the sealed key, the AAD (`"FPC TLS Keys"`) and the signature. To recover the
+32-byte PSK:
+
+1. Verify `HMAC-SHA256(AAD || sealed_key)` using key `sha256("FPC_HMAC_KEY")` (13 bytes).
+2. Unseal with **AES-256-CBC**, key `sha256("FPC_SEALING_KEY")` (16 bytes),
+   zero IV, padding disabled.
 
 ---
 
-## 2. Testing with Standalone Utility (`fpc_disum_tool`)
+## 2. Image format
 
-The standalone utility directly connects to the device, initializes it, arms it, detects finger placement, and captures frames into `.pgm` grayscale images.
+An `EVT_IMG` payload is a **22-byte frame header** (it embeds the capture id
+`11 2f 11 17` at offset 10) followed by `128 × 88 = 11264` pixel bytes:
 
-### Compilation
+```
+payload = 11286 bytes = 22-byte header + 128*88 pixels
+```
+
+* Layout is **row-major, 128 wide × 88 tall**, 8-bit grayscale.
+* The sensor reads out in **8 column-blocks of 16 columns**, which leaves
+  visible per-block fixed-pattern noise (vertical banding) in the raw data.
+* The raw frame is **noise dominated**: two single captures of the same finger
+  correlate only ~0.1–0.4, and two *different* fingers correlate ~0.83 — the
+  frame is dominated by the sensor's fixed pattern.
+
+### The raw frame has no ridges — reconstruction is host-side
+
+Averaging many frames does **not** recover ridges: the averaged stack is a
+smooth contact map whose radial power spectrum is monotonic (no ridge-frequency
+peak). Confirmed against the vendor's own decrypted USB session — Windows
+receives the *same* ridge-free `EVT_IMG` buffer. Ridge recovery is entirely the
+host-side BEP algorithm inside the vendor's `fpc_enclave.dll`.
+
+That module is a plain `no_sgx` x86-64 DLL and has been **rehosted** — first
+under Wine, then natively: [`native/fpc_recon_native`](../native/) maps the DLL
+and runs it directly (no Wine), byte-identical to the Wine build.
+`wine-rehost/fpc_reconstruct.sh` drives the whole path (capture → inject → BEP →
+reconstructed ridge image) and picks the native backend automatically. See
+[`../WINE_REHOST.md`](../WINE_REHOST.md) and [`../native/README.md`](../native/README.md).
+
+---
+
+## 3. Building and running
+
 ```bash
 cd linux-driver
-make
+make                     # needs libusb-1.0 + OpenSSL dev headers
+sudo make install-udev   # optional: allow non-root access
 ```
 
-### Install Udev Rules
+Run the capture tool (the argument is the number of frames to stack):
+
 ```bash
-sudo make install-udev
+./fpc_disum_tool 20
 ```
 
-### Run
+Because the device yields exactly **one frame per touch**, tap the sensor
+repeatedly (place, lift, place again) to collect frames. The tool:
+
+* initialises the sensor and completes the TLS-PSK handshake,
+* arms the sensor and waits for `EVT_FINGER_DWN`,
+* requests a frame, re-arms, and repeats until `N` frames are collected,
+* writes every frame as `acer_fingerprint_NNN.pgm` / `.raw`, and
+* writes the averaged stack as `acer_fingerprint_stack.pgm`.
+
+Touch the sensor repeatedly while it runs; it exits once `N` frames are captured.
+
+To turn the captured raw frames into a **usable ridge image**, run the
+reconstruction wrapper (uses the native rehost, or Wine as a fallback):
+
 ```bash
-./fpc_disum_tool
+~/fpc-rehost/fpc_reconstruct.sh --from acer_fingerprint_001.raw ...   # existing frames
+~/fpc-rehost/fpc_reconstruct.sh 5 ~/caps                              # capture + reconstruct
 ```
 
-Touch the sensor with your finger. The tool will capture the fingerprint image and save it as `fingerprint_001.pgm`.
+See [`../WINE_REHOST.md`](../WINE_REHOST.md) and [`../native/README.md`](../native/README.md).
 
 ---
 
-## 3. Integrating into `libfprint`
+## 4. Integrating into `libfprint`
 
-The native driver [`src/fpc2040.c`](file:///home/shaanair/Projects/Acer%20Finger%20Print%20Sensor/linux-driver/src/fpc2040.c) is formatted for upstream `libfprint`:
-
-1. Clone `libfprint`:
-   ```bash
-   git clone https://gitlab.freedesktop.org/libfprint/libfprint.git
-   cd libfprint
-   ```
-2. Copy the driver files:
-   ```bash
-   cp /path/to/linux-driver/src/fpc2040.c libfprint/drivers/
-   cp /path/to/linux-driver/include/fpc_protocol.h libfprint/drivers/
-   ```
-3. Add `fpc2040` to `libfprint/meson.build` under the drivers list.
-4. Build and install:
-   ```bash
-   meson setup builddir -Ddrivers=all
-   ninja -C builddir
-   sudo ninja -C builddir install
-   ```
-5. Restart `fprintd`:
-   ```bash
-   sudo systemctl restart fprintd
-   ```
-6. Enroll your fingerprint:
-   ```bash
-   fprintd-enroll
-   ```
+`src/fpc2040.c` is a libfprint driver skeleton. It predates the reverse
+engineering above and still contains the old (incorrect) assumptions
+(interrupt endpoint, 160×160, plaintext), so it must be updated to use this
+protocol before it will work with `fprintd`.

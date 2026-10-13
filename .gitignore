@@ -1,14 +1,34 @@
 # Build artifacts
 fpc_disum_tool
 linux-driver/fpc_disum_tool
+native/fpc_recon_native
+native/*.o
+wine-rehost/*.exe
+wine-rehost/*.o
 *.o
 *.a
 *.so
 
-# Captured fingerprint images
+# IDA database (11 MB, regenerable)
+*.i64
+*.idb
+*.til
+
+# windows-calibration/: extracted artefacts. The DLL/exe here are byte-identical
+# duplicates of the already-tracked vendor package, so only the config/calibration
+# data (pndat, keys, txt) is committed.
+windows-calibration/*.dll
+windows-calibration/*.exe
+
+# Captured fingerprint images (raw frames + renders)
 *.pgm
 *.bmp
 *.png
+*.raw
+
+# ...except the analysis evidence committed as documentation
+!analysis/**/*.png
+!analysis/**/*.raw
 
 # Temporary files
 *.swp

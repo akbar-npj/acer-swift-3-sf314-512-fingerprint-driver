@@ -30,6 +30,30 @@ Unified Linux driver, reverse-engineering findings, automated build toolchain, a
 
 ---
 
+## ⭐ Headline result (2026-10-13): ridge images, on Linux, no Wine
+
+The sensor never hands the host a ridge image — it streams a ridge-free contact
+buffer. The ridge structure is produced by FPC's host-side BEP algorithm inside
+`fpc_enclave.dll`. **That algorithm now runs on Linux**, driven from our own
+capture tool, producing a genuine finger-specific ridge image:
+
+```sh
+# capture N taps from the real sensor, reconstruct, write PNGs + a montage
+~/fpc-rehost/fpc_reconstruct.sh 5 ~/caps
+```
+
+This works via the **native rehost** ([`native/`](native/)) — a small Linux ELF
+that maps the vendor DLL and runs the BEP reconstruction directly (no Wine, no
+Windows, no SGX). It is byte-for-byte identical to the Wine oracle on all 27
+distinct captured frames, and has been validated **end-to-end against live
+hardware**. Full write-up: [`WINE_REHOST.md`](WINE_REHOST.md) ·
+[`native/README.md`](native/README.md) · [`ENCLAVE_IMAGE_PIPELINE.md`](ENCLAVE_IMAGE_PIPELINE.md).
+
+Live capture evidence: [`analysis/reconstructed/live-native/montage.png`](analysis/reconstructed/live-native/montage.png)
+(three real taps → clear whorl/loop ridges).
+
+---
+
 ## 1. Quickstart: Automated Build (`build.sh`)
 
 The repository includes a self-contained automated build and setup script [`build.sh`](file:///home/shaanair/Projects/FingerPrintSensors/Acer%20Swift%203%20SF314-512/build.sh):
@@ -93,7 +117,13 @@ sudo make install-udev
 
 ### Running the Test Tool
 ```bash
-./fpc_disum_tool
+./fpc_disum_tool          # capture N frames (arg = count, default 1)
+./fpc_disum_tool probe    # ask for a no-finger image, log every event
+./fpc_disum_tool sweep    # sweep every command that might yield a second/reference
+                          # (no-finger) image; no finger interaction required
+./fpc_disum_tool calib    # read the runtime per-unit data (CMD_GET_KPI + dead-pixel
+                          # report); no finger interaction required
+./fpc_disum_tool calib-spi # calib + an experimental CMD_PASSTHRU_FROM_SPI probe
 ```
 
 Example session output:
@@ -130,10 +160,43 @@ The captured image is automatically saved as a standard grayscale file (`honor_f
 Using **REA MCP** backed by **Ghidra 12.1.4**, the Windows 11 drivers (`fpc_disum.dll`) for both laptops were analyzed and cross-referenced.
 
 ### Match-on-Host Architecture
-Unlike Match-on-Chip (MoC) hardware where biometric matching occurs within firmware flash, FPC DISUM operates in Match-on-Host mode:
-- The controller streams raw capacitive image frames to the host OS.
-- In standard operation (`SensorMode=1`), frames are transmitted unencrypted without requiring mandatory Intel SGX / TLS enclaves.
-- On Linux, **libfprint** natively incorporates the NIST Biometric Image Software (NBIS) minutiae extraction and matching engine (`fpi_image_device`), removing the need for proprietary closed-source matching blobs.
+
+> **⚠️ CORRECTION (2026-10-13) — see [`ENCLAVE_IMAGE_PIPELINE.md`](ENCLAVE_IMAGE_PIPELINE.md) §3d/§5.**
+> The earlier claim that the host receives a directly matchable ridge image is **wrong**.
+> The vendor's own Windows driver was run against the real unit, its whole USB session
+> captured and **decrypted**, and its `EVT_IMG` payload is byte-for-byte the *same
+> ridge-free buffer* our Linux tool captures. The ridge information is only ever
+> materialised inside FPC's host-side reconstruction module (`fpc_enclave.dll`), by the
+> `fpc_bio_bep_sw23_*` algorithm. A capture-and-match libfprint driver therefore **cannot**
+> work from `EVT_IMG` alone — it needs that reconstruction ported.
+>
+> **UPDATE (2026-10-13):** the per-unit calibration image the engine looks for
+> (`C:\Windows\System32\WinBioPlugIns\calibrationimg.pndat`) was extracted from the live
+> Windows VM and is **effectively empty** (only 55 of 52,209 bytes non-zero; the registry key
+> `HKLM\SOFTWARE\FPC\WBF` does not exist). So the missing ridges are **not** a calibration
+> problem — they are purely the `fpc_bio_bep_sw23_*` algorithm. See
+> [`ENCLAVE_IMAGE_PIPELINE.md`](ENCLAVE_IMAGE_PIPELINE.md) §"Calibration".
+
+FPC DISUM is Match-on-Host (MoH) in the sense that matching runs on the host CPU rather
+than in sensor firmware — but on Windows that host code is split between the driver
+(`fpc_disum.dll`, `FpcDisumEngine.dll`) and a **separate user-mode module**
+(`fpc_enclave.dll`) that does the secure image reconstruction and template work.
+Despite the name, `fpc_enclave.dll` is **not** a hardware Intel-SGX enclave — see
+[`ENCLAVE_IMAGE_PIPELINE.md`](ENCLAVE_IMAGE_PIPELINE.md) §4: it is FPC's
+`Prerelease_no_sgx` build, plain user-mode code with no SGX runtime dependency.
+
+- The controller streams a **raw capacitive contact/FPN buffer** (128 × 88 = 11264 px on
+  the Acer e340) — a smooth contact map with **no ridge structure**.
+- Image reconstruction (`fpc_copy_buffer_into_fmi` → dead-pixel fix →
+  `convert_column_wise_image` → `dfd_calibrate`) runs **inside `fpc_enclave.dll`** via the
+  `fpc_bio_bep_sw23_*` family. The per-unit `calibrationimg.pndat` was extracted and found
+  to be effectively empty, so the reconstruction is **algorithm-only** (raw frame + static
+  variant tables).
+- The USB session is a **TLS-PSK tunnel** (device = TLS server; see
+  `linux-driver/README.md`), with the TLS endpoint itself inside the enclave.
+- libfprint's NBIS minutiae engine is available on Linux, but it needs a ridge image to
+  work on — which this sensor never provides to the host. (This is consistent with the
+  general libfprint experience that small area sensors give too few minutiae.)
 
 ### Binary Comparison (Acer vs. Honor)
 - **Honor `fpc_disum.dll`:** 740 procedures, `.text` size 169,984 bytes, SHA256 `7d824b7b...`
@@ -238,12 +301,16 @@ Host                     Sensor (10a5:e340 or 10a5:a900)
  |                               |  [User touches sensor]
  |<-- EVT_FINGER_DWN (0x06) -----|
  |-- CMD_GET_IMG (0x09) -------->|
- |<-- EVT_IMG (0x08) ------------|  [34-byte metadata + raw grayscale pixel buffer]
+ |<-- EVT_IMG (0x08) ------------|  [sub-header + raw pixel buffer, see note below]
  |                               |  [User lifts finger]
  |<-- EVT_FINGER_UP (0x07) ------|
 ```
 
-The image frame within `EVT_IMG` begins with a **34-byte metadata header (`0x22`)**, followed immediately by raw 8-bit grayscale pixel bytes (`length - 34`).
+The image frame within `EVT_IMG` is a small metadata sub-header followed immediately by
+raw 8-bit pixel bytes. On the **Acer e340** the payload is **11286 B = 22-byte sub-header +
+11264 px (128 × 88)**; the Honor part uses a different sub-header size (e.g. 34 B +
+160 × 160 = 25600). The sub-header's fixed 4-byte field at offset 10 is the session/arm
+token echoed from `CMD_ARM` (e.g. `11 2f 11 17` for our tool).
 
 ---
 
@@ -296,6 +363,9 @@ The driver [`src/fpc2040.c`](file:///home/shaanair/Projects/FingerPrintSensors/A
 ```
 ├── build.sh                                # Automated build & dependency installer
 ├── README.md                               # Complete findings & setup guide
+├── ENCLAVE_IMAGE_PIPELINE.md               # How fpc_enclave.dll turns EVT_IMG into ridges
+├── WINE_REHOST.md                          # Wine rehost + native port + parity write-up
+├── IDA_MCP_WORKFLOW.md                     # REA/Ghidra analysis workflow notes
 ├── linux-driver/
 │   ├── build.sh                            # Local build script
 │   ├── Makefile                            # GNU Makefile
@@ -306,6 +376,16 @@ The driver [`src/fpc2040.c`](file:///home/shaanair/Projects/FingerPrintSensors/A
 │   │   └── fpc2040.c                       # Native libfprint driver
 │   └── udev/
 │       └── 70-libfprint-2-fpc2040.rules    # Hardware udev permissions
+├── native/                                 # Native (no-Wine) rehost of fpc_enclave.dll
+│   ├── pe_loader.[ch]                      # Minimal PE32+ loader
+│   ├── win32_shims.[ch]                    # ms_abi Win32 import shims + BCryptGenRandom
+│   ├── fpc_recon.c                         # Driver: maps DLL, drives BEP, dumps image
+│   └── README.md
+├── wine-rehost/
+│   ├── harness.c                           # Wine harness (the correctness oracle)
+│   ├── fpc_reconstruct.sh                  # End-to-end: capture -> reconstruct -> PNG
+│   └── recon2png.py                        # 8-bit raw -> PNG
+├── analysis/reconstructed/                 # Validation artefacts + live captures
 └── FingerPrint_Carewe_20.26.23.27_W11x64/  # Vendor Windows driver package
 ```
 

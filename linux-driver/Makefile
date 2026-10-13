@@ -1,6 +1,6 @@
 CC ?= gcc
-CFLAGS ?= -Wall -Wextra -O2 -Iinclude $(shell pkg-config --cflags libusb-1.0)
-LIBS ?= $(shell pkg-config --libs libusb-1.0)
+CFLAGS ?= -Wall -Wextra -O2 -Iinclude $(shell pkg-config --cflags libusb-1.0 openssl)
+LIBS ?= $(shell pkg-config --libs libusb-1.0 openssl)
 
 TARGET = fpc_disum_tool
 
