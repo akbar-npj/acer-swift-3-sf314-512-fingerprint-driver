@@ -394,4 +394,18 @@ int      cr_corr_kbank(int32_t *out, const int16_t *in, const int16_t *kbank,
                        const int16_t *selarr, long long unused,
                        int ow, int oh, int iw, int ih, int K);           /* 0x180038ac0 */
 
+/* ---- batch 47: object-tree lifecycle helpers + image-data accessors ------- *
+ * These call into the sized allocator (cr_malloc / cr_sized_free), so their
+ * observable contract is guard behaviour + NULL-ing, not pointer identity. */
+int      cr_meta_put_i16(void *store, uint32_t key, uint32_t value,
+                         bool overwrite);                    /* 0x18004b640 */
+void     cr_cleanup_ptr8_a(void *obj);                       /* 0x18000fc20 */
+void     cr_cleanup_ptr8_b(void *obj);                       /* 0x180011a50 */
+void     cr_cleanup_ptr8_clear(void *obj);                   /* 0x180024760 */
+void     cr_obj_zero_free(void **obj);                       /* 0x18001f9f0 */
+void     cr_free_ptr_struct(void *obj);                      /* 0x180017170 */
+int      cr_malloc_aligned16(void **out, size_t size);       /* 0x1800100c0 */
+void    *cr_image_get_dp(const void *defs, uint32_t idx);    /* 0x18004a890 */
+void     cr_image_buf_desc(const void *ctx, void *out);      /* 0x18004ab90 */
+
 #endif /* FPC_BEP_H */

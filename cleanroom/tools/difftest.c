@@ -3032,6 +3032,271 @@ static void test_corr_kbank(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_corr_kbank\n");
 }
 
+/* ---- batch 47: object-tree lifecycle helpers + image-data accessors ------ */
+/* Allocate a "sized" block (payload offset sz, 1-byte prefix = sz) the same way
+ * cr_sized_free expects, once per allocator. */
+static void *v_sized_alloc(v_i_ppz vmalloc, size_t S, int sz)
+{
+    void *b = NULL;
+    vmalloc(&b, S);
+    memset(b, 0, S);
+    ((uint8_t *)b)[sz - 1] = (uint8_t)sz;
+    return (uint8_t *)b + sz;
+}
+static void *c_sized_alloc(size_t S, int sz)
+{
+    void *b = NULL;
+    cr_malloc(&b, S);
+    memset(b, 0, S);
+    ((uint8_t *)b)[sz - 1] = (uint8_t)sz;
+    return (uint8_t *)b + sz;
+}
+
+static void test_tree_helpers(void)
+{
+    v_i_ppz vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+    v_v_p   vsfree  = (v_v_p)fn_at(RVA(0x18003bf40));
+    typedef int  (WINAPI *v_meta_put_i16)(void *, u32, u32, char);
+    typedef void *(WINAPI *v_p_ppu)(const void *, u32);
+    typedef void (WINAPI *v_v_pp2)(const void *, void *);
+
+    /* --- cr_meta_put_i16 (0x18004b640): tail-call to the uint16 store ------ */
+    {
+        v_meta_put_i16 v = (v_meta_put_i16)fn_at(RVA(0x18004b640));
+        begin("cr_meta_put_i16");
+        int bad = g_fail;
+        for (int trial = 0; trial < 20000; trial++) {
+            u8 sv[128], sc[128];
+            memset(sv, 0xAA, sizeof sv); memset(sc, 0xAA, sizeof sc);
+            u32 cap  = (rnd() % 120u) + 8u;
+            u32 used = rnd() % (cap + 1u);
+            if (used > 100u) used = 100u;
+            for (u32 off = 0; off < used && off + 12 <= 100; ) {
+                *(u32 *)(sv + 0xc + off) = rnd() % 6u;
+                *(u32 *)(sv + 0xc + off + 4) = 4;
+                *(u32 *)(sv + 0xc + off + 8) = rnd();
+                off += 12;
+            }
+            memcpy(sc, sv, sizeof sv);
+            *(u32 *)(sv + 4) = cap; *(u32 *)(sv + 8) = used; *(u32 *)(sv + 0) = 8;
+            *(u32 *)(sc + 4) = cap; *(u32 *)(sc + 8) = used; *(u32 *)(sc + 0) = 8;
+            u32 key = rnd() % 6u, val = rnd(), ow = rnd() & 1u;
+            int rv = v(sv, key, val, (char)ow);
+            int rc = cr_meta_put_i16(sc, key, val, (bool)ow);
+            if (rv != rc || memcmp(sv, sc, sizeof sv) != 0)
+                mismatch("put16", ((u64)key << 32) | val, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_meta_put_i16\n");
+    }
+
+    /* --- cr_cleanup_ptr8_a / _b (0x18000fc20, 0x180011a50) ----------------- */
+    {
+        static const char *nm[2] = { "cr_cleanup_ptr8_a", "cr_cleanup_ptr8_b" };
+        v_v_p vfn[2] = { (v_v_p)fn_at(RVA(0x18000fc20)),
+                         (v_v_p)fn_at(RVA(0x180011a50)) };
+        void (*cfn[2])(void *) = { cr_cleanup_ptr8_a, cr_cleanup_ptr8_b };
+        for (int k = 0; k < 2; k++) {
+            begin(nm[k]);
+            int bad = g_fail;
+            for (int t = 0; t < 8000; t++) {
+                u8 ov[0x20], oc[0x20];
+                memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u;
+                    int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + 8) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + 8) = c_sized_alloc(S, sz);
+                } else {
+                    *(void **)(ov + 8) = NULL; *(void **)(oc + 8) = NULL;
+                }
+                vfn[k](ov); cfn[k](oc);
+                if (*(void **)(ov + 8) != NULL || *(void **)(oc + 8) != NULL)
+                    mismatch("ptr8-null", (u32)t,
+                             (u64)*(void **)(ov + 8), (u64)*(void **)(oc + 8));
+                if (memcmp(ov, oc, 8) || memcmp(ov + 16, oc + 16, sizeof ov - 16))
+                    mismatch("ptr8-other", (u32)t, 0, 0);
+            }
+            vfn[k](NULL); cfn[k](NULL);            /* NULL object: no-op */
+            if (g_fail == bad) end(); else printf("  FAIL %s\n", nm[k]);
+        }
+    }
+
+    /* --- cr_cleanup_ptr8_clear (0x180024760) ------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x180024760));
+        begin("cr_cleanup_ptr8_clear");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x20], oc[0x20];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            if (rnd() & 1) {
+                size_t S = 2 + rnd() % 64u;
+                int sz = 1 + (int)(rnd() % (u32)S);
+                *(void **)(ov + 8) = v_sized_alloc(vmalloc, S, sz);
+                *(void **)(oc + 8) = c_sized_alloc(S, sz);
+            } else {
+                *(void **)(ov + 8) = NULL; *(void **)(oc + 8) = NULL;
+            }
+            v(ov); cr_cleanup_ptr8_clear(oc);
+            if (*(void **)(ov + 8) != NULL || *(void **)(oc + 8) != NULL)
+                mismatch("clear-null", (u32)t,
+                         (u64)*(void **)(ov + 8), (u64)*(void **)(oc + 8));
+            if (memcmp(ov, oc, 8) || memcmp(ov + 16, oc + 16, sizeof ov - 16))
+                mismatch("clear-other", (u32)t, 0, 0);
+        }
+        v(NULL); cr_cleanup_ptr8_clear(NULL);
+        if (g_fail == bad) end(); else printf("  FAIL cr_cleanup_ptr8_clear\n");
+    }
+
+    /* --- cr_obj_zero_free (0x18001f9f0) ------------------------------------ */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x18001f9f0));
+        begin("cr_obj_zero_free");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            size_t S = 32 + rnd() % 64u;          /* room for the 12-byte zero */
+            int sz = 1 + (int)(rnd() % (u32)(S - 16));
+            void *vp = v_sized_alloc(vmalloc, S, sz);
+            void *cp = c_sized_alloc(S, sz);
+            void *ov = vp, *oc = cp;
+            v(&ov); cr_obj_zero_free(&oc);
+            if (ov != NULL || oc != NULL)
+                mismatch("zf-null", (u32)t, (u64)ov, (u64)oc);
+            void *nv = NULL, *nc = NULL;
+            v(&nv); cr_obj_zero_free(&nc);        /* NULL payload: no-op */
+            if (nv != NULL || nc != NULL)
+                mismatch("zf-null2", (u32)t, (u64)nv, (u64)nc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_obj_zero_free\n");
+    }
+
+    /* --- cr_free_ptr_struct (0x180017170) ---------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x180017170));
+        static const int offs[] = { 0x00,0x08,0x10,0x18,0x20,0x28,0x30,0x70 };
+        begin("cr_free_ptr_struct");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            u8 ov[0x80], oc[0x80];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            for (int i = 0; i < 8; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u;
+                    int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + offs[i]) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + offs[i]) = c_sized_alloc(S, sz);
+                } else {
+                    *(void **)(ov + offs[i]) = NULL;
+                    *(void **)(oc + offs[i]) = NULL;
+                }
+            }
+            v(ov); cr_free_ptr_struct(oc);
+            if (memcmp(ov, oc, sizeof ov) != 0)
+                mismatch("fps", (u32)t, 0, 0);
+        }
+        v(NULL); cr_free_ptr_struct(NULL);
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_ptr_struct\n");
+    }
+
+    /* --- cr_malloc_aligned16 (0x1800100c0) --------------------------------- */
+    {
+        v_i_ppz v = (v_i_ppz)fn_at(RVA(0x1800100c0));
+        begin("cr_malloc_aligned16");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            size_t sz = (rnd() % 5u == 0) ? 0 : (size_t)(rnd() % 4096u);
+            void *pv = (void *)0xdead, *pc = (void *)0xdead;
+            int rv = v(&pv, sz);
+            int rc = cr_malloc_aligned16(&pc, sz);
+            if (rv != rc) mismatch("al-status", sz, (u32)rv, (u32)rc);
+            if ((pv == NULL) != (pc == NULL))
+                mismatch("al-null", sz, pv != NULL, pc != NULL);
+            if (rv == 0) {
+                if (((uintptr_t)pv & 0xf) || ((uintptr_t)pc & 0xf))
+                    mismatch("al-align", sz, (u64)pv & 0xf, (u64)pc & 0xf);
+                if (*(uint8_t *)((uint8_t *)pv - 1) != *(uint8_t *)((uint8_t *)pc - 1))
+                    mismatch("al-prefix", sz, *(uint8_t *)((uint8_t *)pv - 1),
+                             *(uint8_t *)((uint8_t *)pc - 1));
+                vsfree(&pv); cr_sized_free(&pc);
+                if (pv != NULL || pc != NULL)
+                    mismatch("al-freenull", sz, (u64)pv, (u64)pc);
+            }
+        }
+        {   /* size + 0x10 wraps to 0 -> cr_malloc returns 1 -> status 2 */
+            void *pv = (void *)0xdead, *pc = (void *)0xdead;
+            int rv = v(&pv, (size_t)-0x10);
+            int rc = cr_malloc_aligned16(&pc, (size_t)-0x10);
+            if (rv != rc) mismatch("al-zero", 0, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_malloc_aligned16\n");
+    }
+
+    /* --- cr_image_get_dp (0x18004a890) ------------------------------------- */
+    {
+        v_p_ppu v = (v_p_ppu)fn_at(RVA(0x18004a890));
+        static u8 defs[0x10 + 0x16 * 8 + 8];
+        static u8 bufs[0x16][0x20];
+        begin("cr_image_get_dp");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            memset(defs, 0x5A, sizeof defs);
+            for (int i = 0; i < 0x16; i++) {
+                int kind = (int)(rnd() % 4u);
+                void *p = NULL;
+                if (kind != 0) {
+                    memset(bufs[i], 0, sizeof bufs[i]);
+                    *(u32 *)bufs[i] = (kind == 1) ? 0u
+                                    : (kind == 2) ? 8u : (rnd() & 0x1fu);
+                    p = bufs[i];
+                }
+                *(void **)(defs + 0x10 + i * 8) = p;
+            }
+            u32 idx = rnd() % 24u;                /* includes out-of-range */
+            void *rv = v(defs, idx);
+            void *rc = cr_image_get_dp(defs, idx);
+            if (rv != rc)                         /* same input -> same pointer */
+                mismatch("dp", idx, (u64)rv, (u64)rc);
+        }
+        if (v(NULL, 0) != NULL || cr_image_get_dp(NULL, 0) != NULL)
+            mismatch("dp-nulldefs", 0, 0, 0);
+        if (g_fail == bad) end(); else printf("  FAIL cr_image_get_dp\n");
+    }
+
+    /* --- cr_image_buf_desc (0x18004ab90) ----------------------------------- */
+    {
+        v_v_pp2 v = (v_v_pp2)fn_at(RVA(0x18004ab90));
+        static u8 ctx[0x20], pb[0x20];
+        begin("cr_image_buf_desc");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x20], oc[0x20];
+            memset(ctx, 0x5A, sizeof ctx);
+            int kind = (int)(rnd() % 4u);
+            u8 *p = NULL;
+            if (kind != 0) {
+                memset(pb, 0, sizeof pb);
+                *(u32 *)pb = (kind == 1) ? 1u : (rnd() & 0x1fu);
+                *(u32 *)(pb + 4) = rnd();
+                *(u32 *)(pb + 0xc) = rnd();
+                p = pb;
+            }
+            *(void **)(ctx + 0x18) = p;
+            memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
+            v(ctx, ov); cr_image_buf_desc(ctx, oc);
+            if (memcmp(ov, oc, sizeof ov) != 0)   /* shared pb -> +8 matches */
+                mismatch("bd", (u32)t, 0, 0);
+        }
+        {
+            u8 ov[0x20], oc[0x20];
+            memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
+            v(NULL, ov); cr_image_buf_desc(NULL, oc);
+            if (memcmp(ov, oc, sizeof ov) != 0)
+                mismatch("bd-nullctx", 0, 0, 0);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_image_buf_desc\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3285,6 +3550,8 @@ int main(int argc, char **argv)
     test_sep11_row();
     printf("\n== per-pixel kernel-bank 2D correlation ==\n");
     test_corr_kbank();
+    printf("\n== object-tree lifecycle helpers + image-data accessors ==\n");
+    test_tree_helpers();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
