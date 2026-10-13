@@ -255,6 +255,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x180032830` | `fpc_bio_bep_sw23_97ae28484f` | `cr_boxsum15_s16` | `void fn(int16_t *base, int W, int H)`. Four in-place passes producing `(sum*0x1111+0x8000)>>16` (≈ `sum/15`): (1) horizontal 15-tap running sum into cols `0..W-15` of every row; (2) vertical 15-tap running sum, reading columns `W-15..0` right-to-left and writing 7 columns/rows to the right, so the result lands at rows `7..H-8`, cols `7..W-8`; (3) horizontal edge replication over rows `7..H-8` (col 7 → cols 0..6, col W-8 → cols W-7..W-1); (4) vertical edge replication over every column (row 7 → rows 0..6, row H-8 → rows H-7..H-1). The top-left 8x8 block ends up constant. |
 
+### Batch 32 — byte twin of the 15x15 separable box filter
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18001aaa0` | `fpc_bio_bep_sw23_311b05823c` | `cr_boxsum15_u8` | `void fn(uint8_t *base, int W, int H)`. Byte twin of `cr_boxsum15_s16`: same four in-place passes (horizontal running sum, vertical running sum, horizontal edge replication, vertical edge replication) but byte samples and the rounding constant `0x800` (sums ≤ 15*255), output `(sum*0x1111+0x800)>>16`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

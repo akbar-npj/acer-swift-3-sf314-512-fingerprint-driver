@@ -2346,6 +2346,28 @@ static void test_boxsum15_s16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_boxsum15_s16\n");
 }
 
+/* 0x18001aaa0 — byte twin of the 15x15 separable box filter. */
+static void test_boxsum15_u8(void)
+{
+    typedef void (WINAPI *v_v_pii)(void *, int, int);
+    v_v_pii v = (v_v_pii)fn_at(RVA(0x18001aaa0));
+    begin("cr_boxsum15_u8");
+    int bad = g_fail;
+    enum { MAXW = 48, MAXH = 48 };
+    uint8_t bufv[MAXW * MAXH], bufc[MAXW * MAXH];
+    for (int t = 0; t < 20000; t++) {
+        int W = 15 + (int)(rnd() % (MAXW - 14));
+        int H = 15 + (int)(rnd() % (MAXH - 14));
+        int n = W * H;
+        for (int i = 0; i < n; i++) bufv[i] = (uint8_t)rnd();
+        memcpy(bufc, bufv, n);
+        v(bufv, W, H);
+        cr_boxsum15_u8(bufc, W, H);
+        cmp_buf("box15u8", bufv, bufc, n, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_boxsum15_u8\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2484,6 +2506,8 @@ int main(int argc, char **argv)
     test_box_sum_excl();
     printf("\n== separable 15x15 box filter (int16) ==\n");
     test_boxsum15_s16();
+    printf("\n== separable 15x15 box filter (u8) ==\n");
+    test_boxsum15_u8();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -802,3 +802,125 @@ void cr_boxsum15_s16(int16_t *base, int W, int H)
         }
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001aaa0 — the byte twin of cr_boxsum15_s16 (15x15 separable box filter,
+ *   divide by 15).  Same four in-place passes (horizontal running sum,
+ *   vertical running sum, horizontal edge replication, vertical edge
+ *   replication) but the samples are bytes and the rounding constant is
+ *   0x800 (sums are at most 15*255).  Args (ms_abi): rcx = base, edx = W,
+ *   r8d = H.
+ * ------------------------------------------------------------------------ */
+static uint8_t cr_div15_u8(int32_t sum)
+{
+    uint32_t t = (uint32_t)sum * 0x1111u + 0x800u;
+    return (uint8_t)(t >> 16);
+}
+
+void cr_boxsum15_u8(uint8_t *base, int W, int H)
+{
+    int rem = W - 15;
+
+    /* pass 1: horizontal 15-tap box sum */
+    if (H > 0) {
+        uint8_t *p = base + 1;
+        int rows = 0;
+        do {
+            int prev = p[-1];
+            int32_t sum = prev;
+            uint8_t *q = p;
+            do {
+                sum += *q;
+                q++;
+            } while (p + 0xe != q);
+            if (rem > 0) {
+                uint8_t *r = p - 1;
+                while (1) {
+                    uint8_t *r2 = r + 1;
+                    int32_t v = sum * 0x1111;
+                    sum = sum - (prev - r[0xf]);
+                    *r = (uint8_t)((uint32_t)(v + 0x800) >> 16);
+                    if (p + (W - 0x10) == r2) break;
+                    prev = *r2;
+                    r = r2;
+                }
+            }
+            rows++;
+            p[(W - 0xe) - 2] = cr_div15_u8(sum);
+            p = p + W;
+        } while (H != rows);
+    }
+
+    /* pass 2: vertical 15-tap box sum */
+    if (rem >= 0) {
+        long long st = W;
+        uint8_t *p = base + (rem + W);      /* row 1, col W-15 */
+        uint8_t *end = base + (W - 1);
+        uint8_t *q2;
+        do {
+            int prev = p[-st];
+            int32_t sum = prev;
+            uint8_t *q = p;
+            int cnt = 0xe;
+            do {
+                sum += *q;
+                q += st;
+                cnt--;
+            } while (cnt != 0);
+            int i;
+            if (H < 0x10) {
+                i = 7;
+            } else {
+                q = p;
+                i = 0;
+                while (1) {
+                    int32_t v = sum * 0x1111;
+                    sum = sum - (prev - q[W * 0xf - st]);
+                    q[(W + 1) * 7 - st] =
+                        (uint8_t)((uint32_t)(v + 0x800) >> 16);
+                    if (i + 1 == H - 0xf) break;
+                    prev = *q;
+                    q = q + st;
+                    i++;
+                }
+                i = i + 8;
+            }
+            q2 = p - 1;
+            p[(i * W + 7) - st] = cr_div15_u8(sum);
+            p = q2;
+        } while (end != q2);
+    }
+
+    /* pass 3: horizontal edge replication over rows 7..H-8 */
+    if (H > 0xe) {
+        uint8_t *r9  = base + 7 * W + 7;    /* row 7, col 7 */
+        uint8_t *r11 = base + 8 * W - 8;    /* row 7, col W-8 */
+        for (int r = 7; r != H - 7; r++) {
+            uint8_t *dst = r9 - 7;          /* row r, col 0 */
+            uint8_t left  = *r9;
+            uint8_t right = *r11;
+            for (int c = 0; c < 7; c++)
+                dst[c] = left;
+            for (int c = 0; c < 7; c++)
+                dst[W - 7 + c] = right;
+            r9 += W;
+            r11 += W;
+        }
+    }
+
+    /* pass 4: vertical edge replication over every column */
+    if (W > 0) {
+        uint8_t *r9  = base + 7 * W;        /* row 7, col 0 */
+        uint8_t *r10 = base + (H - 8) * W;  /* row H-8, col 0 */
+        uint8_t *stop = base + 8 * W;       /* row 8, col 0 */
+        for (; r9 != stop; r9++, r10++) {
+            uint8_t top = *r9;
+            uint8_t bot = *r10;
+            uint8_t *dst = r9 - 7 * W;      /* row 0, col c */
+            for (int c = 0; c < 7; c++)
+                dst[c * W] = top;
+            for (int c = 0; c < 7; c++)
+                dst[(H - 7 + c) * W] = bot;
+        }
+    }
+}

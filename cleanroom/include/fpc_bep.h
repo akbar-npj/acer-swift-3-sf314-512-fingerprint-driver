@@ -286,5 +286,6 @@ void     cr_box_sum_excl(int width, int height, const uint8_t *data,
 
 /* ---- batch 31: separable 15x15 box filter --------------------------------- */
 void     cr_boxsum15_s16(int16_t *base, int W, int H);                   /* 0x180032830 */
+void     cr_boxsum15_u8(uint8_t *base, int W, int H);                    /* 0x18001aaa0 */
 
 #endif /* FPC_BEP_H */
