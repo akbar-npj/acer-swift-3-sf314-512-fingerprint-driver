@@ -256,3 +256,14 @@ int cr_clz_or32(uint32_t x)
         return (int)cr_clz(x);
     return 0x20;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800384c0 — index of the highest set bit (floor(log2)), -1 for zero.
+ *   int fn(uint32_t x): x ? 0x1f - cr_clz(x) : -1
+ * ------------------------------------------------------------------------ */
+int cr_hi_bit_index(uint32_t x)
+{
+    if (x != 0)
+        return 0x1f - (int)cr_clz(x);
+    return -1;
+}

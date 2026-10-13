@@ -3889,6 +3889,192 @@ static void test_tree_nested(void)
     }
 }
 
+/* ---- batch 51: small ready wrappers ------------------------------------ */
+static void test_tree_wrappers(void)
+{
+    v_i_ppz vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+
+    /* --- cr_sized_free_if (0x180038720) ------------------------------------ */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x180038720));
+        begin("cr_sized_free_if");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            void *vslot = NULL, *cslot = NULL;
+            if (rnd() & 1) {
+                size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                vslot = v_sized_alloc(vmalloc, S, sz);
+                cslot = c_sized_alloc(S, sz);
+            }
+            v(&vslot); cr_sized_free_if(&cslot);
+            if (vslot != NULL || cslot != NULL)
+                mismatch("sfi-null", (u32)t, (u64)vslot, (u64)cslot);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_sized_free_if\n");
+    }
+
+    /* --- cr_free_pair8 (0x18001f640) --------------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x18001f640));
+        begin("cr_free_pair8");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x18], oc[0x18];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            for (int i = 0; i < 2; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + 8 * i) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + 8 * i) = c_sized_alloc(S, sz);
+                } else {
+                    *(void **)(ov + 8 * i) = NULL; *(void **)(oc + 8 * i) = NULL;
+                }
+            }
+            v(ov); cr_free_pair8(oc);
+            if (*(void **)(ov + 0) != NULL || *(void **)(oc + 0) != NULL ||
+                *(void **)(ov + 8) != NULL || *(void **)(oc + 8) != NULL)
+                mismatch("fp8-null", (u32)t, 0, 0);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_pair8\n");
+    }
+
+    /* --- cr_free_slot8 / cr_cleanup_ptr8_guard / cr_cleanup_ptr8_clear_b --- */
+    {
+        static const char *nm[3] = { "cr_free_slot8", "cr_cleanup_ptr8_guard",
+                                     "cr_cleanup_ptr8_clear_b" };
+        v_v_p vf[3] = { (v_v_p)fn_at(RVA(0x180033f40)),
+                        (v_v_p)fn_at(RVA(0x1800276a0)),
+                        (v_v_p)fn_at(RVA(0x18003b920)) };
+        void (*cf[3])(void *) = { cr_free_slot8, cr_cleanup_ptr8_guard,
+                                  cr_cleanup_ptr8_clear_b };
+        for (int k = 0; k < 3; k++) {
+            begin(nm[k]);
+            int bad = g_fail;
+            for (int t = 0; t < 8000; t++) {
+                u8 ov[0x18], oc[0x18];
+                memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + 8) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + 8) = c_sized_alloc(S, sz);
+                } else {
+                    *(void **)(ov + 8) = NULL; *(void **)(oc + 8) = NULL;
+                }
+                vf[k](ov); cf[k](oc);
+                if ((*(void **)(ov + 8) != NULL) != (*(void **)(oc + 8) != NULL))
+                    mismatch("fs8-null", (u32)t, *(void **)(ov + 8) != NULL,
+                             *(void **)(oc + 8) != NULL);
+                if (memcmp(ov, oc, 8) || memcmp(ov + 16, oc + 16, sizeof ov - 16))
+                    mismatch("fs8-other", (u32)t, 0, 0);
+            }
+            vf[k](NULL); cf[k](NULL);              /* NULL object: no-op */
+            if (g_fail == bad) end(); else printf("  FAIL %s\n", nm[k]);
+        }
+    }
+
+    /* --- cr_free_4slot (0x1800464b0) --------------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x1800464b0));
+        static const int off[4] = { 0x18, 0x00, 0x20, 0x28 };
+        begin("cr_free_4slot");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x38], oc[0x38];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            for (int i = 0; i < 4; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + off[i]) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + off[i]) = c_sized_alloc(S, sz);
+                } else {
+                    *(void **)(ov + off[i]) = NULL; *(void **)(oc + off[i]) = NULL;
+                }
+            }
+            v(ov); cr_free_4slot(oc);
+            for (int i = 0; i < 4; i++)
+                if (*(void **)(ov + off[i]) != NULL || *(void **)(oc + off[i]) != NULL)
+                    mismatch("f4s-null", (u32)i, 0, 0);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_4slot\n");
+    }
+
+    /* --- cr_hi_bit_index (0x1800384c0) ------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_u)(uint32_t);
+        v_i_u v = (v_i_u)fn_at(RVA(0x1800384c0));
+        begin("cr_hi_bit_index");
+        int bad = g_fail;
+        for (int t = 0; t < 20000; t++) {
+            uint32_t x = (rnd() % 8u == 0) ? 0u : rnd();
+            if (rnd() % 16u == 0) x = 1u << (rnd() % 32u);
+            int rv = v(x), rc = cr_hi_bit_index(x);
+            if (rv != rc) mismatch("hbi", x, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_hi_bit_index\n");
+    }
+
+    /* --- cr_image_get_meta_dp (0x18004a910) -------------------------------- */
+    {
+        typedef void *(WINAPI *v_p_ppu)(const void *, uint32_t);
+        v_p_ppu v = (v_p_ppu)fn_at(RVA(0x18004a910));
+        static u8 defs[0x10 + 0x16 * 8 + 8];
+        static u8 bufs[0x16][0x20];
+        begin("cr_image_get_meta_dp");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            memset(defs, 0x5A, sizeof defs);
+            for (int i = 0; i < 0x16; i++) {
+                int kind = (int)(rnd() % 5u);
+                void *p = NULL;
+                if (kind != 0) {
+                    memset(bufs[i], 0, sizeof bufs[i]);
+                    /* tags: <8 (false), 8/10 (true), 9/11 (false), high-bit */
+                    switch (kind) {
+                    case 1: *(u32 *)bufs[i] = rnd() % 8u; break;
+                    case 2: *(u32 *)bufs[i] = 8u + 2u * (rnd() % 8u); break;
+                    case 3: *(u32 *)bufs[i] = 9u + 2u * (rnd() % 8u); break;
+                    default: *(u32 *)bufs[i] = 0x80000000u + (rnd() & 0xffu); break;
+                    }
+                    p = bufs[i];
+                }
+                *(void **)(defs + 0x10 + i * 8) = p;
+            }
+            u32 idx = rnd() % 24u;                /* includes out-of-range */
+            void *rv = v(defs, idx);
+            void *rc = cr_image_get_meta_dp(defs, idx);
+            if (rv != rc)                         /* same input -> same pointer */
+                mismatch("mdp", idx, (u64)rv, (u64)rc);
+        }
+        if (v(NULL, 0) != NULL || cr_image_get_meta_dp(NULL, 0) != NULL)
+            mismatch("mdp-nulldefs", 0, 0, 0);
+        if (g_fail == bad) end(); else printf("  FAIL cr_image_get_meta_dp\n");
+    }
+
+    /* --- cr_free_4args (0x18000fd40) --------------------------------------- */
+    {
+        typedef void (WINAPI *v_v_pppp)(void *, void *, void *, void *);
+        v_v_pppp v = (v_v_pppp)fn_at(RVA(0x18000fd40));
+        begin("cr_free_4args");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            void *va[4], *ca[4];
+            for (int i = 0; i < 4; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    va[i] = v_sized_alloc(vmalloc, S, sz);
+                    ca[i] = c_sized_alloc(S, sz);
+                } else { va[i] = NULL; ca[i] = NULL; }
+            }
+            v(va[0], va[1], va[2], va[3]);
+            cr_free_4args(ca[0], ca[1], ca[2], ca[3]);
+            /* no outputs: the contract is "frees exactly these four, no crash" */
+        }
+        v(NULL, NULL, NULL, NULL);
+        cr_free_4args(NULL, NULL, NULL, NULL);
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_4args\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -4150,6 +4336,8 @@ int main(int argc, char **argv)
     test_tree_higher();
     printf("\n== nested destructor chain ==\n");
     test_tree_nested();
+    printf("\n== small ready wrappers ==\n");
+    test_tree_wrappers();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

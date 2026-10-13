@@ -360,6 +360,20 @@ side effects, never raw pointer values.
 | `0x180044ce0` | `fpc_bio_bep_sw23_ee965c1257.constprop.2` | `cr_wrap_destroy` | `void fn(void **slot)`: if `*slot` non-NULL, `cr_obj_destroy(*slot)` then `cr_sized_free(slot)` (frees the held object and NULLs `*slot`); if `*slot` is NULL, no-op. |
 | `0x180043a10` | `fpc_bio_bep_sw23_e76dc431bf` | `cr_wrap_destroy2` | `void fn(void **slot)`: if `*slot` non-NULL, `cr_wrap_destroy((void**)((uint8_t*)*slot + 8))` then `cr_sized_free(slot)`; if `*slot` is NULL, no-op. |
 
+### Batch 51 — small ready wrappers
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180038720` | `fpc_bio_bep_sw23_b08a6243f0` | `cr_sized_free_if` | `void fn(void **slot)`: asm is `CMP qword [RCX],0 ; JZ ret ; JMP cr_sized_free` — `if (*slot) cr_sized_free(slot)`. No guard on the slot pointer itself. |
+| `0x18001f640` | `fpc_bio_bep_sw23_406a45a1c8.isra.0.part.1` | `cr_free_pair8` | `void fn(void *obj)`: `cr_sized_free(obj); cr_sized_free(obj + 8)` (two consecutive slots, no guard). |
+| `0x180033f40` | `fpc_bio_bep_sw23_9d5b96a246` | `cr_free_slot8` | `void fn(void *obj)`: `if (obj) cr_sized_free((void**)((uint8_t*)obj + 8))`. |
+| `0x1800276a0` | `fpc_bio_bep_sw23_68cec20a19` | `cr_cleanup_ptr8_guard` | `void fn(void *obj)`: `if (obj) cr_cleanup_ptr8_a(obj)` — a NULL-guarded alias of `cr_cleanup_ptr8_a`. |
+| `0x1800464b0` | `fpc_bio_bep_sw23_f2ad1c4415` | `cr_free_4slot` | `void fn(void *obj)`: sized-free four owned pointers, in the vendor's order — `+0x18, +0x00, +0x20, +0x28`. |
+| `0x1800384c0` | `fpc_bio_bep_sw23_afa5254b16.part.5` | `cr_hi_bit_index` | `int fn(uint32_t x)`: `x ? 0x1f - cr_clz(x) : -1` — index of the highest set bit (floor log2), `-1` for zero. |
+| `0x18004a910` | `fpc_image_data_get_payload_size_from_defs` | `cr_image_get_meta_dp` | `void *fn(const void *defs, u32 idx)`: `defs && idx<0x16` → `p = *(void**)(defs+0x10+idx*8)`; return `p` iff `cr_buf_is_metadata_class(p)`, else `NULL`. The **metadata-class** twin of `cr_image_get_dp` (debug class). |
+| `0x18003b920` | `fpc_bio_bep_sw23_bc5ecf1262` | `cr_cleanup_ptr8_clear_b` | Byte-identical twin of `cr_cleanup_ptr8_clear`: `if (obj) { if (*(void**)(obj+8)) cr_sized_free(obj+8); *(void**)(obj+8) = NULL; }`. |
+| `0x18000fd40` | `fpc_bio_bep_sw23_0a647d6e5c` | `cr_free_4args` | `void fn(void *p0, void *p1, void *p2, void *p3)`: copies each argument into a stack local and `cr_sized_free`s that local — i.e. frees exactly the four passed sized pointers. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

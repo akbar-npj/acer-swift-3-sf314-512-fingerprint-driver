@@ -437,4 +437,15 @@ void     cr_obj_destroy(void *obj);                          /* 0x18001c680 */
 void     cr_wrap_destroy(void **slot);                       /* 0x180044ce0 */
 void     cr_wrap_destroy2(void **slot);                      /* 0x180043a10 */
 
+/* ---- batch 51: small ready wrappers ------------------------------------- */
+void     cr_sized_free_if(void **slot);                      /* 0x180038720 */
+void     cr_free_pair8(void *obj);                           /* 0x18001f640 */
+void     cr_free_slot8(void *obj);                           /* 0x180033f40 */
+void     cr_cleanup_ptr8_guard(void *obj);                   /* 0x1800276a0 */
+void     cr_free_4slot(void *obj);                           /* 0x1800464b0 */
+int      cr_hi_bit_index(uint32_t x);                        /* 0x1800384c0 */
+void    *cr_image_get_meta_dp(const void *defs, uint32_t idx); /* 0x18004a910 */
+void     cr_cleanup_ptr8_clear_b(void *obj);                 /* 0x18003b920 */
+void     cr_free_4args(void *p0, void *p1, void *p2, void *p3); /* 0x18000fd40 */
+
 #endif /* FPC_BEP_H */

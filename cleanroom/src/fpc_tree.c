@@ -509,3 +509,113 @@ void cr_wrap_destroy2(void **slot)
         cr_sized_free(slot);
     }
 }
+
+/* ======================================================================== *
+ *  Batch 51 — small ready wrappers
+ * ======================================================================== */
+
+/* ------------------------------------------------------------------------ *
+ * 0x180038720 — free the sized object held in a slot, but only if present.
+ *   Assembly: CMP qword [RCX],0 ; JZ ret ; JMP cr_sized_free.  No guard on the
+ *   slot pointer itself (the caller always passes a valid address).
+ *   void fn(void **slot): if (*slot) cr_sized_free(slot);
+ * ------------------------------------------------------------------------ */
+void cr_sized_free_if(void **slot)
+{
+    if (*slot)
+        cr_sized_free(slot);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001f640 — free two consecutive sized pointers at obj+0 and obj+8.
+ *   void fn(void *obj): cr_sized_free(obj); cr_sized_free(obj + 8);
+ * ------------------------------------------------------------------------ */
+void cr_free_pair8(void *obj)
+{
+    cr_sized_free((void **)obj);
+    cr_sized_free((void **)((uint8_t *)obj + 8));
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180033f40 — free the sized object at obj+8, if obj is non-NULL.
+ *   void fn(void *obj): if (obj) cr_sized_free((void **)((uint8_t *)obj + 8));
+ * ------------------------------------------------------------------------ */
+void cr_free_slot8(void *obj)
+{
+    if (obj)
+        cr_sized_free((void **)((uint8_t *)obj + 8));
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800276a0 — NULL-guarded cr_cleanup_ptr8_a.
+ *   void fn(void *obj): if (obj) cr_cleanup_ptr8_a(obj);
+ * ------------------------------------------------------------------------ */
+void cr_cleanup_ptr8_guard(void *obj)
+{
+    if (obj)
+        cr_cleanup_ptr8_a(obj);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800464b0 — free four sized pointers, in the vendor's order:
+ *   obj+0x18, obj+0x00, obj+0x20, obj+0x28.
+ *   void fn(void *obj)
+ * ------------------------------------------------------------------------ */
+void cr_free_4slot(void *obj)
+{
+    cr_sized_free((void **)((uint8_t *)obj + 0x18));
+    cr_sized_free((void **)((uint8_t *)obj + 0x00));
+    cr_sized_free((void **)((uint8_t *)obj + 0x20));
+    cr_sized_free((void **)((uint8_t *)obj + 0x28));
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18004a910 — read a metadata-class buffer from slot `idx` of the definition
+ * table (the metadata twin of cr_image_get_dp, which uses the debug class).
+ *   void *fn(const void *defs, uint32_t idx):
+ *     if (defs && idx < 0x16) {
+ *         p = *(void **)((uint8_t *)defs + 0x10 + idx * 8);
+ *         if (cr_buf_is_metadata_class(p)) return p;
+ *     }
+ *     return NULL;
+ * ------------------------------------------------------------------------ */
+void *cr_image_get_meta_dp(const void *defs, uint32_t idx)
+{
+    if (defs && idx < 0x16) {
+        void *p = *(void **)((const uint8_t *)defs + 0x10 + (size_t)idx * 8);
+        if (cr_buf_is_metadata_class(p))
+            return p;
+    }
+    return NULL;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003b920 — byte-identical twin of cr_cleanup_ptr8_clear: free the sized
+ * object at obj+8 and unconditionally clear the slot.
+ *   void fn(void *obj):
+ *     if (obj) { if (*(void**)(obj+8)) cr_sized_free(obj+8);
+ *                *(void**)(obj+8) = NULL; }
+ * ------------------------------------------------------------------------ */
+void cr_cleanup_ptr8_clear_b(void *obj)
+{
+    if (obj) {
+        if (*(void **)((uint8_t *)obj + 8))
+            cr_sized_free((void **)((uint8_t *)obj + 8));
+        *(void **)((uint8_t *)obj + 8) = NULL;
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18000fd40 — free four sized pointers passed by value: the vendor copies
+ * each argument into a stack local and sized-frees that local.
+ *   void fn(void *p0, void *p1, void *p2, void *p3):
+ *     cr_sized_free(&p0); cr_sized_free(&p1);
+ *     cr_sized_free(&p2); cr_sized_free(&p3);
+ * ------------------------------------------------------------------------ */
+void cr_free_4args(void *p0, void *p1, void *p2, void *p3)
+{
+    cr_sized_free(&p0);
+    cr_sized_free(&p1);
+    cr_sized_free(&p2);
+    cr_sized_free(&p3);
+}
