@@ -293,4 +293,39 @@ void     cr_u8_expand_convolve(int16_t *out, uint16_t *scratch,
                                const uint8_t *in, const int16_t *coef,
                                int n, int m);                            /* 0x18003ecc0 */
 
+/* ---- batch 34: spatial top-K accumulator (batch 34) ----------------------- */
+/* one cell of the W*H node table: count @0, list head @2, weight @4 */
+typedef struct {
+    int16_t key;      /* +0x00  slots currently held by this cell       */
+    int16_t head;     /* +0x02  head slot index (-1 = empty list)       */
+    float   val;      /* +0x04  accumulated weight (read only here)     */
+} cr_grid_node;
+
+typedef struct {
+    cr_grid_node *nodes;   /* +0x00  W*H cells                        */
+    uint8_t      *coords;  /* +0x08  2 bytes per slot                 */
+    float        *values;  /* +0x10  value per slot                   */
+    int16_t      *next;    /* +0x18  next slot per slot (-1 = end)    */
+    uint8_t      *coords2; /* +0x20  mode-2 coords                    */
+    float        *values2; /* +0x28  mode-2 values                    */
+    int32_t       W;       /* +0x30                                   */
+    int32_t       H;       /* +0x34                                   */
+    int32_t       divx;    /* +0x38                                   */
+    int32_t       divy;    /* +0x3c                                   */
+    int32_t       count;   /* +0x40  slots held                       */
+    int32_t       count2;  /* +0x44  mode-2 entries                   */
+    int32_t       cap;     /* +0x48  slot capacity                    */
+} cr_grid;
+
+/* param_5: only the fields this leaf reads */
+typedef struct {
+    uint8_t  _pad[0x10];
+    int16_t  cap2;         /* +0x10  mode-2 capacity                  */
+    uint8_t  _pad2[0x12];
+    uint8_t  mode;         /* +0x24  2 = append, 5 = accumulate       */
+} cr_grid_cfg;
+
+int      cr_grid_insert(cr_grid *g, uint8_t x, uint8_t y, float v,
+                        cr_grid_cfg *cfg);                               /* 0x18002f070 */
+
 #endif /* FPC_BEP_H */

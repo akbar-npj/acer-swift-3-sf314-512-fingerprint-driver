@@ -267,6 +267,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x18003ecc0` | `fpc_bio_bep_sw23_cd9632fb7f` | `cr_u8_expand_convolve` | `void fn(int16_t *out, uint16_t *scratch, const uint8_t *in, const int16_t *coef, int n, int m)`. Widen a byte row to int16 with reflect-101 (BORDER_REFLECT_101) padding into `scratch` (`pad = m>>1`; `scratch[pad+i]=in[i]`, left `scratch[j]=in[pad-j]`, right `scratch[pad+n+j]=in[n-2-j]`), then run an m-tap FIR: `out[i] = (int16)((Σ_{k<taps} coef[k]*scratch[i+k] + 0x100) >> 9)`. The output is split into a 4-wide unrolled region (`i < bound`, `bound = 4 + 4*((n-4)>>2)`, 0 when `n<=3`) and a scalar tail (`i >= bound`). **Quirk:** the unrolled region consumes `3 + 2*((m-2)>>1)` taps = `m` for **odd** m but `m+1` for **even** m (it reads `coef[m]`); the tail always consumes exactly `m`. The public entry `FUN_180021700` rejects even m (`if ((m&1)==0) return 1`), so the extra tap only fires via the two other callers `FUN_180010440` / `FUN_18002af00`. Both regions are reproduced verbatim so parity holds for every m. |
 
+### Batch 34 — spatial top-K accumulator
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18002f070` | `fpc_bio_bep_sw23_861d4887f0` | `cr_grid_insert` | `int fn(cr_grid *g, uint8_t x, uint8_t y, float v, cr_grid_cfg *cfg)`. Map `(x,y)` to a `W*H` cell (`px = x*W/divx`, `py = y*H/divy`, both clamped), then push the sample onto that cell's singly-linked list of `cap` pooled slots, kept in **ascending** value order (head = smallest). When the pool is full, pick the cell with the largest `key*val` score (the target cell is seeded with `(key+1)*val` — a quirk; all other cells use `key*val`), evict its list head and reuse the freed slot. `cfg->mode==2` instead appends to flat `coords2`/`values2` arrays (bounded by `cfg->cap2`); any other mode returns `0x69`. `node.val` is read but never written by this leaf (a caller accumulates it). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

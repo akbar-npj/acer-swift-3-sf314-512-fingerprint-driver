@@ -2403,6 +2403,96 @@ static void test_u8_expand_convolve(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_u8_expand_convolve\n");
 }
 
+/* 0x18002f070 — spatial top-K accumulator with per-cell bounded slot lists. */
+struct grid_state {
+    cr_grid_node nodes[64];
+    int16_t next[16];
+    float   values[16];
+    uint8_t coords[32];
+    float   values2[16];
+    uint8_t coords2[32];
+    cr_grid g;
+    cr_grid_cfg cfg;
+};
+
+static void test_grid_insert(void)
+{
+    typedef int (WINAPI *v_i_pbbfp)(void *, uint8_t, uint8_t, float, void *);
+    v_i_pbbfp vfn = (v_i_pbbfp)fn_at(RVA(0x18002f070));
+    begin("cr_grid_insert");
+    int bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        int W = 1 + (int)(rnd() % 8);
+        int H = 1 + (int)(rnd() % 8);
+        int cap = 1 + (int)(rnd() % 16);
+        int cap2 = (int)(rnd() % 17);
+        int divx = 1 + (int)(rnd() % 512);
+        int divy = 1 + (int)(rnd() % 512);
+        int mode = ((int)(rnd() % 4) == 0) ? 2
+                 : ((int)(rnd() % 8) == 0) ? 7 : 5;
+
+        struct grid_state sv, sc;
+        memset(&sv, 0, sizeof sv);
+        sv.g.nodes = sv.nodes; sv.g.coords = sv.coords; sv.g.values = sv.values;
+        sv.g.next = sv.next; sv.g.coords2 = sv.coords2; sv.g.values2 = sv.values2;
+        sv.g.W = W; sv.g.H = H; sv.g.divx = divx; sv.g.divy = divy;
+        sv.g.count = 0; sv.g.count2 = 0; sv.g.cap = cap;
+        sv.cfg.cap2 = (int16_t)cap2; sv.cfg.mode = (uint8_t)mode;
+        for (int k = 0; k < W * H; k++) {
+            sv.nodes[k].key = 0; sv.nodes[k].head = -1;
+            sv.nodes[k].val = (float)(1 + (int)(rnd() % 1000)) * 0.001f;  /* > 0 */
+        }
+        for (int k = 0; k < cap; k++) {
+            sv.next[k] = -1; sv.values[k] = 0.0f;
+            sv.coords[2 * k] = sv.coords[2 * k + 1] = 0;
+        }
+        for (int k = 0; k < cap2; k++) {
+            sv.values2[k] = 0.0f;
+            sv.coords2[2 * k] = sv.coords2[2 * k + 1] = 0;
+        }
+
+        sc = sv;
+        sc.g.nodes = sc.nodes; sc.g.coords = sc.coords; sc.g.values = sc.values;
+        sc.g.next = sc.next; sc.g.coords2 = sc.coords2; sc.g.values2 = sc.values2;
+
+        int steps = cap + 4 + (int)(rnd() % (cap + 5));
+        int failed = 0;
+        for (int st = 0; st < steps && !failed; st++) {
+            uint8_t x = (uint8_t)rnd();
+            uint8_t y = (uint8_t)rnd();
+            u32 vb = rnd();
+            float v = ((int)(rnd() % 8) == 0) ? cr_u2f(vb)
+                                              : (float)(int)(vb % 4001) - 2000.0f;
+            int rv = vfn(&sv.g, x, y, v, &sv.cfg);
+            int rc = cr_grid_insert(&sc.g, x, y, v, &sc.cfg);
+            if (rv != rc) { mismatch("ret", (u64)st, (u32)rv, (u32)rc); failed = 1; break; }
+            size_t nn = sizeof(cr_grid_node) * (size_t)(W * H);
+            if (memcmp(sv.nodes, sc.nodes, nn)) {
+                cmp_buf("nodes", (unsigned char *)sv.nodes, (unsigned char *)sc.nodes,
+                        nn, (u32)st); failed = 1; break; }
+            if (memcmp(sv.values, sc.values, sizeof(float) * (size_t)cap)) {
+                cmp_buf("values", (unsigned char *)sv.values, (unsigned char *)sc.values,
+                        sizeof(float) * (size_t)cap, (u32)st); failed = 1; break; }
+            if (memcmp(sv.next, sc.next, sizeof(int16_t) * (size_t)cap)) {
+                cmp_buf("next", (unsigned char *)sv.next, (unsigned char *)sc.next,
+                        sizeof(int16_t) * (size_t)cap, (u32)st); failed = 1; break; }
+            if (memcmp(sv.coords, sc.coords, 2 * (size_t)cap)) {
+                cmp_buf("coords", sv.coords, sc.coords, 2 * (size_t)cap, (u32)st);
+                failed = 1; break; }
+            if (memcmp(sv.values2, sc.values2, sizeof(float) * (size_t)cap2)) {
+                cmp_buf("values2", (unsigned char *)sv.values2, (unsigned char *)sc.values2,
+                        sizeof(float) * (size_t)cap2, (u32)st); failed = 1; break; }
+            if (memcmp(sv.coords2, sc.coords2, 2 * (size_t)cap2)) {
+                cmp_buf("coords2", sv.coords2, sc.coords2, 2 * (size_t)cap2, (u32)st);
+                failed = 1; break; }
+            if (sv.g.count != sc.g.count || sv.g.count2 != sc.g.count2) {
+                mismatch("count", (u64)st, (u32)sv.g.count, (u32)sc.g.count);
+                failed = 1; break; }
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_grid_insert\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2545,6 +2635,8 @@ int main(int argc, char **argv)
     test_boxsum15_u8();
     printf("\n== u8 row widen + m-tap symmetric FIR ==\n");
     test_u8_expand_convolve();
+    printf("\n== spatial top-K accumulator ==\n");
+    test_grid_insert();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
