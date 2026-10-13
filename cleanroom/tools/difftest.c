@@ -1482,6 +1482,46 @@ static void test_splat_bilinear(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_splat_bilinear\n");
 }
 
+/* ---- batch 20: bitmap border set --------------------------------------- */
+
+/* 0x180017ac0 — fill a border frame of a packed bitmap: whole top/bottom rows
+ * and the left/right bit columns.  Descriptor must have a==w, b==0, offx==0 and
+ * w a multiple of 32; occasionally we corrupt b to exercise the 0x69 path. */
+static void test_bitmap_border_set(void)
+{
+    typedef int (WINAPI *fn_t)(void *, int, int, int, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x180017ac0));
+    begin("cr_bitmap_border_set");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char dv[0x20], dc[0x20];
+        uint32_t bv[128], bc[128];
+        int words = 1 + (int)(rnd() % 4u);   /* 1..4 words */
+        int w = words * 32;
+        int h = 1 + (int)(rnd() % 6u);
+        int left   = (int)(rnd() % (unsigned)(w + 1));
+        int top    = (int)(rnd() % (unsigned)(h + 1));
+        int right  = (int)(rnd() % (unsigned)(w + 1));
+        int bottom = (int)(rnd() % (unsigned)(h + 1));
+        int value  = (int)(rnd() & 1u);
+        for (int i = 0; i < 128; i++) {
+            uint32_t u = (uint32_t)rnd(); bv[i] = u; bc[i] = u;
+        }
+        memset(dv, 0, sizeof dv); memset(dc, 0, sizeof dc);
+        mk_image(dv, bv, w, w, h, 0, 0);
+        mk_image(dc, bc, w, w, h, 0, 0);
+        *(int *)(dv + 4) = h;   /* duplicate dimension: guard needs b == h */
+        *(int *)(dc + 4) = h;
+        if (t % 16 == 0) { *(int *)(dv + 4) = h + 1; *(int *)(dc + 4) = h + 1; }
+        int rv = v(dv, left, top, right, bottom, value);
+        int rc = cr_bitmap_border_set((cr_image *)dc, left, top, right,
+                                      bottom, value);
+        if (rv != rc) mismatch("bborder_ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("bborder", (unsigned char *)bv, (unsigned char *)bc, sizeof bv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_border_set\n");
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -1980,6 +2020,8 @@ int main(int argc, char **argv)
     test_polyphase_fir4();
     printf("\n== bilinear splat ==\n");
     test_splat_bilinear();
+    printf("\n== bitmap border set ==\n");
+    test_bitmap_border_set();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

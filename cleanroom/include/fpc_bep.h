@@ -241,4 +241,8 @@ void     cr_splat_bilinear(const float *w, float *bufA, float *bufB,
                            const float *alpha, float x0, float y0,
                            float scale);                                 /* 0x180044b10 */
 
+/* ---- batch 20: bitmap border set --------------------------------------- */
+int      cr_bitmap_border_set(cr_image *d, int left, int top, int right,
+                              int bottom, int value);                    /* 0x180017ac0 */
+
 #endif /* FPC_BEP_H */

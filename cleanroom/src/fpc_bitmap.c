@@ -259,6 +259,84 @@ void cr_bitmap_dilate(cr_image *dst, const cr_image *src, int count)
     } while (count != it);
 }
 
+/* 0x180017ac0 — set a border frame of a packed bitmap to a constant.  `d` must
+ * have a==w (stride in bits), b==0, offx==0 and w a multiple of 32, else 0x69
+ * is returned.  It writes `v` (all-ones when `value`!=0, else all-zeros) to:
+ *   - the whole of the first `top` rows and the last `bottom` rows;
+ *   - the left `left` bits and right `right` bits of every row (partial edge
+ *     words are masked with `0xffffffff << (left&31)` / `0xffffffff >> (right&31)`).
+ * Returns 0 on success. */
+int cr_bitmap_border_set(cr_image *d, int left, int top, int right,
+                         int bottom, int value)
+{
+    /* guard: the descriptor carries duplicate dimensions — (a,b) must equal
+     * (w,h) as an 8-byte pair, and (offx,offy) must be zero. */
+    if (d->a != d->w || d->b != d->h || d->offx != 0 || d->offy != 0)
+        return 0x69;
+    if ((d->w & 0x1f) != 0)
+        return 0x69;
+
+    int w = d->w;
+    int h = d->h;
+    uint32_t *data = (uint32_t *)d->data;
+    uint32_t v = value ? 0xffffffffu : 0u;
+    int words = (w >= 0 ? w : w + 0x1f) >> 5;
+
+    /* top / bottom rows: fill every word of those rows */
+    if (words > 0) {
+        int bot = h - bottom;
+        for (int col = 0; col < words; col++) {
+            uint32_t *p = data + col;
+            for (int r = 0; r < top; r++) { *p = v; p += words; }
+            if (h > bot) {
+                uint32_t *q = data + col + (long long)bot * words;
+                for (int r = bot; r < h; r++) { *q = v; q += words; }
+            }
+        }
+    }
+
+    /* left bits: whole words set to v, the final partial word masked */
+    if (left > 0) {
+        uint32_t mask = 0xffffffffu << (left & 31);
+        int last = ((left - 1) & ~31) + 0x20;
+        int off = 0;
+        int next;
+        do {
+            next = off + 0x20;
+            uint32_t m = (next >= left) ? mask : 0u;
+            if (h > 0) {
+                uint32_t *p = data + (off >> 5);
+                for (int r = 0; r < h; r++) {
+                    *p = ((*p ^ v) & m) ^ v;
+                    p += words;
+                }
+            }
+            off = next;
+        } while (next != last);
+    }
+
+    /* right bits: the first partial word masked, the rest set to v */
+    uint32_t mask2 = (right == 0x20) ? 0u : (0xffffffffu >> (right & 31));
+    int off = w - right;
+    if (w > off) {
+        int last = ((right - 1) & ~31) + off + 0x20;
+        for (;;) {
+            if (h > 0) {
+                uint32_t *p = data + (off >> 5);
+                for (int r = 0; r < h; r++) {
+                    *p = ((*p ^ v) & mask2) ^ v;
+                    p += words;
+                }
+            }
+            mask2 = 0;
+            if (off + 0x20 == last)
+                break;
+            off += 0x20;
+        }
+    }
+    return 0;
+}
+
 /* 0x1800220e0 — binary erosion: the AND-twin of cr_bitmap_dilate.  `dst`
  * supplies the word count (dst->w >> 5) and height (dst->h); `src` supplies the
  * input words.  The horizontal interior update is

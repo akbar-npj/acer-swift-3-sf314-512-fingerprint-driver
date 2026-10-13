@@ -182,6 +182,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x180044b10` | `fpc_bio_bep_sw23_ed385570f8` | `cr_splat_bilinear` | `void fn(const float *w, float *bufA, float *bufB, const float *alpha, float x0, float y0, float scale)`. Splats 16 weighted points into two float buffers with a 17-float row stride. `x0`/`y0` are **both** the start coordinate and the per-step delta (`x_k = x0*(k+1)`); `scale` multiplies `w[k]`. Per point: `xi=(int)x`, `xf=x-(float)(int)x`, `yi=(int)y-(y0<0)`, `yf=y-(float)yi`, `wf=w[k]*scale`; `w00=((1-xf)(1-yf))*wf` → `idx`, `w10=((1-yf)xf)*wf` → `idx+1`, `w01=((1-xf)yf)*wf` → `idx+17`, `w11=(xf*yf)*wf` → `idx+18`; `bufB[tap]+=wxy`, `bufA[tap]=wxy*alpha[k]+bufA[tap]`. Single precision, exact evaluation order (built `-ffp-contract=off`). |
 
+### Batch 20 — bitmap border set
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180017ac0` | `fpc_bio_bep_sw23_267120cd30` | `cr_bitmap_border_set` | `int fn(cr_image *d, int left, int top, int right, int bottom, int value)`. Sets a border frame of a packed bitmap to all-ones (`value!=0`) or all-zeros. Guard: the descriptor's 8-byte `(a,b)` must equal `(w,h)` (**duplicate dimension fields** — `b==h`, not `b==0`), `(offx,offy)==0`, and `w` a multiple of 32; else returns `0x69`. Fills the whole first `top` and last `bottom` rows, then the left `left` bits and right `right` bits of every row (partial edge words masked by `0xffffffff << (left&31)` / `0xffffffff >> (right&31)`). Returns 0. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
