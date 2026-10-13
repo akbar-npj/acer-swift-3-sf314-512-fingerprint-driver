@@ -180,4 +180,10 @@ void     cr_masked_box_sum(int *out_count, float *out_sum,
                            const cr_image *img, const cr_image *mask,
                            uint8_t and_mask, int win, int idx);      /* 0x180037330 */
 
+/* ---- batch 10: 320-byte leaves ----------------------------------------- */
+void     cr_f32_to_i16_scaled(cr_image *dst, const cr_image *src,
+                              int shift);                            /* 0x18000f9d0 */
+void     cr_block_extreme_bitmap(cr_image *out, const cr_image *in); /* 0x180019490 */
+int      cr_bitmap_popcount(const cr_image *img);                    /* 0x180034190 */
+
 #endif /* FPC_BEP_H */

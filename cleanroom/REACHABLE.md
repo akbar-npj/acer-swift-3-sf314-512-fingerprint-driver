@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **64** (18.0% of funcs, 8320 B = 4.91% of bytes) |
+| **rewritten + parity-verified** | **67** (18.9% of funcs, 9280 B = 5.48% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -86,7 +86,10 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 62 | `cr_bilinear_sample_u8` | `0x18001f790` | `fpc_bio_bep_sw23_4172e0ed57` | 304 | **done** |
 | 63 | `cr_box_blur_h_f32` | `0x18002cc00` | `fpc_bio_bep_sw23_7b12c18a30` | 304 | **done** |
 | 64 | `cr_masked_box_sum` | `0x180037330` | `fpc_bio_bep_sw23_ab8df24280` | 304 | **done** |
-| … | 291 more | | | | pending |
+| 65 | `cr_f32_to_i16_scaled` | `0x18000f9d0` | `fpc_bio_bep_sw23_08800726c8` | 320 | **done** |
+| 66 | `cr_block_extreme_bitmap` | `0x180019490` | `fpc_bio_bep_sw23_30229e9ac0` | 320 | **done** |
+| 67 | `cr_bitmap_popcount` | `0x180034190` | `fpc_bio_bep_sw23_9e452a5621.isra.7.constprop.13` | 320 | **done** |
+| … | 288 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 
@@ -172,9 +175,9 @@ tested in isolation. Sorted by size (smallest first).
 | `0x18001f790` | `fpc_bio_bep_sw23_4172e0ed57` | 304 | 2 | **done** |
 | `0x18002cc00` | `fpc_bio_bep_sw23_7b12c18a30` | 304 | 1 | **done** |
 | `0x180037330` | `fpc_bio_bep_sw23_ab8df24280` | 304 | 3 | **done** |
-| `0x18000f9d0` | `fpc_bio_bep_sw23_08800726c8` | 320 | 4 |  |
-| `0x180019490` | `fpc_bio_bep_sw23_30229e9ac0` | 320 | 2 |  |
-| `0x180034190` | `fpc_bio_bep_sw23_9e452a5621.isra.7.constprop.13` | 320 | 2 |  |
+| `0x18000f9d0` | `fpc_bio_bep_sw23_08800726c8` | 320 | 4 | **done** |
+| `0x180019490` | `fpc_bio_bep_sw23_30229e9ac0` | 320 | 2 | **done** |
+| `0x180034190` | `fpc_bio_bep_sw23_9e452a5621.isra.7.constprop.13` | 320 | 2 | **done** |
 | `0x180026fb0` | `fpc_bio_bep_sw23_66bb0714da` | 336 | 1 |  |
 | `0x18000eca0` | `fpc_bio_bep_sw23_045ad05bbf` | 384 | 2 |  |
 | `0x18001c4e0` | `fpc_bio_bep_sw23_3281879ff9` | 384 | 1 |  |

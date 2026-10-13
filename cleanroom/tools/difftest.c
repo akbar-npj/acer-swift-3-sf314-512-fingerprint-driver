@@ -1234,6 +1234,97 @@ static void test_masked_box_sum(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_masked_box_sum\n");
 }
 
+/* ---- batch 10: 320-byte leaves ----------------------------------------- */
+
+/* 0x18000f9d0 — float image -> int16 image with a power-of-two scale. */
+static void test_f32_to_i16_scaled(void)
+{
+    v_v_ppi v = (v_v_ppi)fn_at(RVA(0x18000f9d0));
+    begin("cr_f32_to_i16_scaled");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char dv[0x20], dc[0x20], sv[0x20], sc[0x20];
+        float sb[4096];
+        int16_t pv[4096], pc[4096];
+        for (size_t i = 0; i < sizeof sb / sizeof sb[0]; i++) {
+            uint32_t u = (uint32_t)rnd();
+            memcpy(&sb[i], &u, 4);
+        }
+        for (size_t i = 0; i < sizeof pv / sizeof pv[0]; i++) {
+            uint32_t u = (uint32_t)rnd();
+            pv[i] = (int16_t)u;
+            pc[i] = pv[i];
+        }
+        int sa = (int)(rnd() % 40u) + 1;
+        int da = (int)(rnd() % 40u) + 1;
+        int w = (int)(rnd() % 20u), h = (int)(rnd() % 20u);
+        int sox = (int)(rnd() % 8u), soy = (int)(rnd() % 8u);
+        int dox = (int)(rnd() % 8u), doy = (int)(rnd() % 8u);
+        int shift = (int)(rnd() % 70u) - 35;
+        mk_image(dv, pv, da, w, h, dox, doy);
+        mk_image(dc, pc, da, w, h, dox, doy);
+        mk_image(sv, sb, sa, w, h, sox, soy);
+        mk_image(sc, sb, sa, w, h, sox, soy);
+        v(dv, sv, shift);
+        cr_f32_to_i16_scaled((cr_image *)dc, (const cr_image *)sc, shift);
+        cmp_buf("f2i16", (unsigned char *)pv, (unsigned char *)pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_f32_to_i16_scaled\n");
+}
+
+/* 0x180019490 — per-32-byte-block "intermediate byte" bitmap. */
+static void test_block_extreme_bitmap(void)
+{
+    v_v_pp v = (v_v_pp)fn_at(RVA(0x180019490));
+    begin("cr_block_extreme_bitmap");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char ov[0x20], oc[0x20], iv[0x20], ic[0x20];
+        uint8_t inbuf[8192];
+        uint32_t pv[512], pc[512];
+        for (size_t i = 0; i < sizeof inbuf; i++) inbuf[i] = (uint8_t)rnd();
+        for (size_t i = 0; i < sizeof pv / sizeof pv[0]; i++) {
+            uint32_t u = (uint32_t)rnd();
+            pv[i] = u;
+            pc[i] = u;
+        }
+        int w = (int)(rnd() % 70u) + 1;
+        int h = (int)(rnd() % 8u) + 1;
+        int a = (w + 31) & ~31;            /* output row stride in bits */
+        uint8_t *indata = inbuf + 2048;    /* margin for the downward reads */
+        mk_image(ov, pv, a, w, h, 0, 0);
+        mk_image(oc, pc, a, w, h, 0, 0);
+        mk_image(iv, indata, w, w, h, 0, 0);
+        mk_image(ic, indata, w, w, h, 0, 0);
+        v(ov, iv);
+        cr_block_extreme_bitmap((cr_image *)oc, (const cr_image *)ic);
+        cmp_buf("beb", (unsigned char *)pv, (unsigned char *)pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_block_extreme_bitmap\n");
+}
+
+/* 0x180034190 — total popcount of a bitmap with `w` significant bits per row. */
+static void test_bitmap_popcount(void)
+{
+    v_i_p v = (v_i_p)fn_at(RVA(0x180034190));
+    begin("cr_bitmap_popcount");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char iv[0x20], ic[0x20];
+        uint32_t d[512];
+        for (size_t i = 0; i < sizeof d / sizeof d[0]; i++) d[i] = (uint32_t)rnd();
+        int a = (int)(rnd() % 20u) * 32 + 32;   /* multiple of 32, >= 32 */
+        int w = (int)(rnd() % (unsigned)(a + 1));
+        int h = (int)(rnd() % 8u);
+        mk_image(iv, d, a, w, h, 0, 0);
+        mk_image(ic, d, a, w, h, 0, 0);
+        int rv = v(iv);
+        int rc = cr_bitmap_popcount((const cr_image *)ic);
+        if (rv != rc) mismatch("popcnt", (u32)t, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_popcount\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1466,6 +1557,11 @@ int main(int argc, char **argv)
     test_bilinear_sample_u8();
     test_box_blur_h_f32();
     test_masked_box_sum();
+
+    printf("\n== 320-byte leaves ==\n");
+    test_f32_to_i16_scaled();
+    test_block_extreme_bitmap();
+    test_bitmap_popcount();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -119,3 +119,46 @@ void cr_i16_to_f32_scaled(cr_image *dst, const cr_image *src, int shift)
         }
     }
 }
+
+/* 0x18000f9d0 — convert a float image to an int16 image with a power-of-two
+ * scale, rounding half away from zero (the inverse of cr_i16_to_f32_scaled).
+ * Uses dst's w/h and both images' own stride/origin.  The scale is
+ *   shift > 0 : (float)(1 << (shift & 31))
+ *   shift == 0: 1.0f
+ *   shift < 0 : 1.0f / (float)(1 << ((-shift) & 31))
+ * Each sample: v = src*scale; t = (v > 0.0f) ? v + 0.5f : v - 0.5f; out =
+ * (int16)(int32)t (cvttss2si truncation; NaN/overflow -> INT_MIN -> 0). */
+void cr_f32_to_i16_scaled(cr_image *dst, const cr_image *src, int shift)
+{
+    float scale;
+    if (shift > 0)
+        scale = (float)(int32_t)((uint32_t)1 << ((unsigned)shift & 31u));
+    else if (shift == 0)
+        scale = 1.0f;
+    else
+        scale = 1.0f / (float)(int32_t)((uint32_t)1 << ((unsigned)(-shift) & 31u));
+
+    int h = dst->h;
+    if (h <= 0)
+        return;
+
+    int w = dst->w;
+    int da = dst->a, sa = src->a;
+    int16_t *dd = (int16_t *)dst->data;
+    const float *sd = (const float *)src->data;
+    int doff = dst->offy * dst->a + dst->offx;
+    int soff = src->offy * src->a + src->offx;
+
+    int32_t drow = 0, srow = 0;
+    for (int r = 0; r < h; r++, drow += da, srow += sa) {
+        if (w > 0) {
+            long long db = (long long)(int32_t)doff + (long long)drow;
+            long long sb = (long long)(int32_t)soff + (long long)srow;
+            for (int j = 0; j < w; j++) {
+                float v = sd[sb + j] * scale;
+                float t = (v > 0.0f) ? v + 0.5f : v - 0.5f;
+                dd[db + j] = (int16_t)(int32_t)t;
+            }
+        }
+    }
+}

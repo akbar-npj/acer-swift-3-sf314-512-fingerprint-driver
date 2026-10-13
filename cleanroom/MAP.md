@@ -121,6 +121,14 @@ The image descriptor layout (established from these functions):
 | `0x18002cc00` | `fpc_bio_bep_sw23_7b12c18a30` | `cr_box_blur_h_f32` | if `win` even, copy `nrows*ncols` floats; else horizontal box blur of width `win` (clamp-to-edge, `lo=-(win-1)/2`), each output `= Σ win clamped samples / (float)win`; column-major (`stride==nrows`). `*dst_ref` is the dest pointer. |
 | `0x180037330` | `fpc_bio_bep_sw23_ab8df24280` | `cr_masked_box_sum` | sum+count of masked pixels in the centred `(2r+1)²` box (`r=win/2`) around linear index `idx` (`cy=idx/W`, `cx=idx%W`), clamped to the image; `*out_sum += img[y*W+x]` and `*out_count++` when `mask[y*W+x] & and_mask`. |
 
+### Batch 10 — 320-byte leaves
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18000f9d0` | `fpc_bio_bep_sw23_08800726c8` | `cr_f32_to_i16_scaled` | float image → int16 image, scale `(float)(1<<(shift&31))` for `shift>0`, `1.0f` for `shift==0`, `1/(float)(1<<((-shift)&31))` for `shift<0`; rounds half-away-from-zero (`t = v>0 ? v+0.5 : v-0.5`, then `(int16)(int)t`); uses dst's w/h, both strides/origins. |
+| `0x180019490` | `fpc_bio_bep_sw23_30229e9ac0` | `cr_block_extreme_bitmap` | per 32-byte block of the input image (row stride `out->w`), build a word whose bit is 1 iff the byte is 0 or 255, then complement it (set bit = "intermediate" byte 1..254); stored in `out->data` with row stride `out->a>>5` words. |
+| `0x180034190` | `fpc_bio_bep_sw23_9e452a5621.isra.7.constprop.13` | `cr_bitmap_popcount` | total popcount of a bitmap with row stride `a` bits and `w` significant bits per row: sums the `w/32` full words per row, plus (when `w!=a`) the partial word masked to `0xffffffff >> ((a-w)&31)`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
