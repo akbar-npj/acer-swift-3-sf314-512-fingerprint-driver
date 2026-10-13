@@ -1458,6 +1458,37 @@ static void test_image_border_extend(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_image_border_extend\n");
 }
 
+/* 0x180016df0 — int16 border extension (edge replication). */
+static void test_image_border_extend_s16(void)
+{
+    v_v_piiii v = (v_v_piiii)fn_at(RVA(0x180016df0));
+    begin("cr_image_border_extend_s16");
+    int bad = g_fail;
+    const int BUFW = 128, BUFH = 128;
+    for (int t = 0; t < 20000; t++) {
+        int16_t pv[BUFW * BUFH], pc[BUFW * BUFH];
+        unsigned char va[0x20], ca[0x20];
+        int offx = 32, offy = 32, w = 64, h = 64;
+        int top    = (int)(rnd() % 17u);
+        int bottom = (int)(rnd() % 17u);
+        int left   = (int)(rnd() % 17u);
+        int right  = (int)(rnd() % 17u);
+        for (int i = 0; i < BUFW * BUFH; i++) { pv[i] = (int16_t)rnd(); pc[i] = pv[i]; }
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca);
+        *(int *)(va + 0) = BUFW;  *(int *)(ca + 0) = BUFW;
+        *(int *)(va + 4) = BUFH;  *(int *)(ca + 4) = BUFH;
+        *(int *)(va + 0x10) = w;  *(int *)(ca + 0x10) = w;
+        *(int *)(va + 0x14) = h;  *(int *)(ca + 0x14) = h;
+        *(int *)(va + 0x18) = offx; *(int *)(ca + 0x18) = offx;
+        *(int *)(va + 0x1c) = offy; *(int *)(ca + 0x1c) = offy;
+        *(void **)(va + 8) = pv;  *(void **)(ca + 8) = pc;
+        v(va, top, bottom, left, right);
+        cr_image_border_extend_s16((cr_image *)ca, top, bottom, left, right);
+        cmp_buf("extend16", (unsigned char *)pv, (unsigned char *)pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_border_extend_s16\n");
+}
+
 /* 0x1800356e0 — saturation / usable-pixel score of a byte image. */
 static void test_saturation_score(void)
 {
@@ -1733,6 +1764,7 @@ int main(int argc, char **argv)
     test_image_border_fill();
     printf("\n== 400-byte leaf (border extend) + 96-byte leaf (saturation) ==\n");
     test_image_border_extend();
+    test_image_border_extend_s16();
     test_saturation_score();
 
     printf("\n=============================\n");

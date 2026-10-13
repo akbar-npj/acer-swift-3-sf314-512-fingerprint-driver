@@ -400,6 +400,90 @@ void cr_image_border_extend(cr_image *img, int top, int bottom, int left,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180016df0 — int16 border extension (edge replication).
+ *   The 16-bit twin of cr_image_border_extend: identical four-region frame
+ *   logic, but the pixels are int16 and `a` is the row stride in ELEMENTS.
+ *   Args (ms_abi): rcx=img, rdx=top, r8=bottom, r9=left, [rsp+0x20]=right.
+ * ------------------------------------------------------------------------ */
+void cr_image_border_extend_s16(cr_image *img, int top, int bottom, int left,
+                                int right)
+{
+    int16_t *data = (int16_t *)img->data;
+    int32_t  a    = img->a;
+    int32_t  w    = img->w;
+    int32_t  h    = img->h;
+    int32_t  offx = img->offx;
+    int32_t  offy = img->offy;
+
+    int16_t *r11 = data + (int64_t)offy * a + offx;   /* window top-left */
+
+    if (top > 0) {
+        int16_t *rdi = r11;
+        int32_t  r12 = 0;
+        do {
+            rdi = rdi - a;
+            if (w > 0)
+                for (int32_t i = 0; i < w; i++) rdi[i] = r11[i];
+            r12 += 1;
+        } while (r12 != top);
+    }
+
+    if (bottom > 0) {
+        int16_t *rdi = r11 + (int64_t)(h - 1) * a;
+        int16_t *rcx = rdi;
+        int32_t  r12 = 0;
+        do {
+            rcx = rcx + a;
+            if (w > 0)
+                for (int32_t i = 0; i < w; i++) rcx[i] = rdi[i];
+            r12 += 1;
+        } while (r12 != bottom);
+    }
+
+    if (left > 0) {
+        int16_t *rdi = r11 - (int64_t)a * top;
+        int32_t  ebp = h + top + bottom;
+        int16_t *r9  = rdi;
+        int16_t *r14 = rdi - left;
+        int16_t *r13;
+        do {
+            r13 = r9 - 1;
+            if (ebp > 0) {
+                int32_t ecx = 0;
+                int64_t rax = 0;
+                do {
+                    r13[rax] = rdi[rax];
+                    ecx += 1;
+                    rax += a;
+                } while (ecx != ebp);
+            }
+            r9 = r13;
+        } while (r14 != r13);
+    }
+
+    if (right > 0) {
+        int16_t *src = r11 + (int64_t)(w - 1) - (int64_t)a * top;
+        int32_t  r8d = h + top + bottom;
+        int16_t *rbx = src;
+        int16_t *r10 = src + right;
+        int16_t *r9;
+        do {
+            r9 = rbx + 1;
+            if (r8d > 0) {
+                int32_t edx = 0;
+                int64_t rax = 0;
+                do {
+                    r9[rax] = src[rax];
+                    edx += 1;
+                    rax += a;
+                } while (edx != r8d);
+            }
+            rbx = r9;
+        } while (r9 != r10);
+    }
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x1800356e0 — "saturation / usable-pixel" score for a byte image.
  *   n = h * w ; if n <= 0 -> *out = 1000.
  *   count = number of pixels equal to 0 or 255 (i.e. (uint8)(b-1) > 253).

@@ -129,7 +129,7 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **72** (20.3% of functions, 10,880 B = 6.42% of bytes) |
+| rewritten + parity-verified | **73** (20.6% of functions, 11,296 B = 6.66% of bytes) |
 
 Eleven batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)

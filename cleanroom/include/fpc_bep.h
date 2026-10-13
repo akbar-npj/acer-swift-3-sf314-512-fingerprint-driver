@@ -198,6 +198,8 @@ void     cr_image_fill_border(cr_image *img, int top, int bottom,
 /* ---- batch 14: 400/96-byte border-extend + saturation leaves ----------- */
 void     cr_image_border_extend(cr_image *img, int top, int bottom,
                                 int left, int right);                /* 0x18001fb80 */
+void     cr_image_border_extend_s16(cr_image *img, int top, int bottom,
+                                    int left, int right);            /* 0x180016df0 */
 
 /* byte image descriptor used by the saturation scorer: w/h at +0/+2, data at +0x10 */
 typedef struct {
