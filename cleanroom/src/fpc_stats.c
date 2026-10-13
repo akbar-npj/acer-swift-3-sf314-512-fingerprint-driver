@@ -459,3 +459,59 @@ void cr_corr_coeff(float *out_corr, int *out_valid,
         *out_valid = 1;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180046c40 — normalised correlation score of an n*n byte patch against an
+ * n*n int16 template.
+ *   void fn(int *out, void *const *p2, const int16_t *coef, int n, int mode):
+ *     nn = n*n;
+ *     cr_mean_stddev(&mean, &std, *p2, nn);
+ *     acc = 0;
+ *     if (mode == 1) { for (i<nn) acc += coef[i] * data[nn-1-i]; }   // reversed
+ *     else           { for (i<nn) acc += coef[i] * data[i]; }
+ *     (nn==0 -> acc stays 0)
+ *     if (std <= 0.1f) std = 0.1f;
+ *     *out = cr_roundf_to_int((float)acc / std);
+ *   The multiply-add is 32-bit wrapping (the vendor mixes int/uint); the low
+ *   32 bits are the same for signed or unsigned, so accumulate in uint32_t and
+ *   reinterpret as int32_t for the float conversion.
+ * ------------------------------------------------------------------------ */
+void cr_norm_corr_score(int *out, void *const *p2, const int16_t *coef,
+                        int n, int mode)
+{
+    int nn = n * n;
+    float mean, std;
+    cr_mean_stddev(&mean, &std, (const uint8_t *)*p2, nn);
+
+    uint32_t acc = 0;
+    float f;
+    if (mode == 1) {
+        if (nn != 0) {
+            const uint8_t *pb = (const uint8_t *)*p2 + (nn - 1);
+            for (int i = 0; i < nn; i++) {
+                uint32_t s = (uint32_t)(int32_t)coef[i];
+                uint32_t b = (uint32_t)*pb--;
+                acc += s * b;
+            }
+            f = (float)(int32_t)acc;
+        } else {
+            f = 0.0f;
+        }
+    } else {
+        if (nn != 0) {
+            const uint8_t *pb = (const uint8_t *)*p2;
+            for (int i = 0; i < nn; i++)
+                acc += (uint32_t)(int32_t)coef[i] * (uint32_t)pb[i];
+            f = (float)(int32_t)acc;
+        } else {
+            f = 0.0f;
+        }
+    }
+
+    /* The vendor emits UCOMISS/JA, i.e. clamps when !(std > 0.1f).  This is
+     * NOT the same as (std <= 0.1f) for NaN: an nn==0 patch yields a NaN std,
+     * and MSVC's default (non-strict) comparison clamps it to 0.1f. */
+    if (!(std > 0.1f))
+        std = 0.1f;
+    *out = cr_roundf_to_int(f / std);
+}

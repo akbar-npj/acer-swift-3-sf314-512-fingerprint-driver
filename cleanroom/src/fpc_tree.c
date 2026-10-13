@@ -958,3 +958,71 @@ int cr_pool_builder(void **hdr, void **ptrs, uint8_t n, const uint32_t *sizes)
     }
     return 0;
 }
+
+/* ======================================================================== *
+ *  batch 57 — small destructor / constructor wrappers
+ * ======================================================================== */
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003f940 — tear down a 4-slot object: clear the sized slot at obj+8,
+ * then free the sized slots at obj+0x28, obj+0x48, obj+0x68 (stride 0x20).
+ *   void fn(void *obj)
+ * ------------------------------------------------------------------------ */
+void cr_free_4slot_clear1(void *obj)
+{
+    cr_cleanup_ptr8_clear_b(obj);
+    cr_cleanup_ptr8_a((uint8_t *)obj + 0x20);
+    cr_cleanup_ptr8_a((uint8_t *)obj + 0x40);
+    cr_cleanup_ptr8_a((uint8_t *)obj + 0x60);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800140d0 — free the three sized pointers at a+0x00, a+0x08, a+0x28 (only
+ * when `a` is non-NULL), then free the sized pointer at b+0x08.
+ *   void fn(void **a, void *b)
+ * ------------------------------------------------------------------------ */
+void cr_free_3ptr_and8(void **a, void *b)
+{
+    if (a != NULL) {
+        cr_sized_free(a);
+        cr_sized_free((void **)((uint8_t *)a + 0x08));
+        cr_sized_free((void **)((uint8_t *)a + 0x28));
+    }
+    cr_cleanup_ptr8_a(b);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180012f70 — tear down a 9-slot object: clear the sized slots reached from
+ * obj, obj+0x20 .. obj+0xa0 (i.e. the six slots at obj+0x08 .. obj+0xa8,
+ * stride 0x20), then free the sized slots reached from obj+0xc0, +0xe0, +0x100
+ * (slots at obj+0xc8, +0xe8, +0x108).
+ *   void fn(void *obj)
+ * ------------------------------------------------------------------------ */
+void cr_free_9slot_clear6(void *obj)
+{
+    for (int i = 0; i < 6; i++)
+        cr_cleanup_ptr8_clear_b((uint8_t *)obj + 0x20 * i);
+    cr_cleanup_ptr8_a((uint8_t *)obj + 0xc0);
+    cr_cleanup_ptr8_a((uint8_t *)obj + 0xe0);
+    cr_cleanup_ptr8_a((uint8_t *)obj + 0x100);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180038820 — allocate a 16-byte-aligned 0x60-byte object and initialise it:
+ * zero the whole block, then set the single byte at +0x30 to 1 (the vendor's
+ * extra zero stores target bytes the fill already cleared).
+ *   int fn(void **slot):
+ *     r = cr_malloc_aligned16(slot, 0x60);
+ *     if (r == 0) { p = *slot; cr_fill(p, 0, 0x60); p[0x30] = 1; }
+ *     return r;
+ * ------------------------------------------------------------------------ */
+int cr_alloc_60_init(void **slot)
+{
+    int r = cr_malloc_aligned16(slot, 0x60);
+    if (r == 0) {
+        uint8_t *p = (uint8_t *)*slot;
+        cr_fill(p, 0, 0x60);
+        p[0x30] = 1;
+    }
+    return r;
+}

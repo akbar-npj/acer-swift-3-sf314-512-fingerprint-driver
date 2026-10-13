@@ -558,4 +558,18 @@ void     cr_splat_accum16(const float *pts, const float *alpha,
                           float p3, float p4, float *bufA, float *bufB,
                           float beta, int k);                    /* 0x180043120 */
 
+/* ---- batch 57: small destructor / constructor wrappers ------------------- */
+void     cr_free_4slot_clear1(void *obj);                    /* 0x18003f940 */
+void     cr_free_3ptr_and8(void **a, void *b);               /* 0x1800140d0 */
+void     cr_free_9slot_clear6(void *obj);                    /* 0x180012f70 */
+int      cr_alloc_60_init(void **slot);                      /* 0x180038820 */
+uint32_t cr_round_dims_pow2(uint32_t *out_w, uint32_t *out_h,
+                            uint32_t w, uint32_t h, const void *cfg); /* 0x180027730 */
+void     cr_norm_corr_score(int *out, void *const *p2,
+                            const int16_t *coef, int n, int mode);    /* 0x180046c40 */
+uint32_t cr_sep_fir_pair(cr_image *A, cr_image *B,
+                         const cr_image *src);                       /* 0x180026b30 */
+int      cr_row_fir_vfir(uint8_t *out, cr_fir_row_ctx *ctx,
+                         const cr_image *img, int target);           /* 0x18003b110 */
+
 #endif /* FPC_BEP_H */

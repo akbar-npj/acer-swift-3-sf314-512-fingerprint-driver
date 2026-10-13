@@ -436,11 +436,25 @@ side effects, never raw pointer values.
 | `0x18002af00` | `fpc_bio_bep_sw23_76ff29ef93` | `cr_row_fir_i16` | One output row of a streaming n-tap vertical FIR, int16 out. No-op (`return 1`) unless `ctx->row+1 == target`; advances `ctx->row`. `rr = old_row % n`. If `target>0`: `srcrow = target + n/2`; if `srcrow<h` widen+horizontally-FIR that image row into ring row `rr` via `cr_u8_expand_convolve` (coef = the shared i16 array), else mirror ring row `rem=(2h-srcrow-n/2-3)%n` into ring row `rr` (`rem` may be negative). Then `acc[col] = Σ_{k<n} coef[(n-1-rr)%n + k] * ring[k*w+col]`; `out[col]=(int16)((acc+0x4000)>>15)`, 4 columns per iteration, **no tail** (w must be a multiple of 4; `w<=3` returns 0). |
 | `0x180010440` | `fpc_bio_bep_sw23_0dc5ae5cbd` | `cr_row_fir_i8` | Byte twin: identical fill/rotation, `out[col]=(u8)((acc+0x104000)>>21)`, plus a scalar tail loop for `col>=4+((w-4)>>2)*4` (so `w<=3` is handled entirely by the tail). |
 
+### Batch 57 — destructor / constructor wrappers + misc
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18003f940` | `fpc_bio_bep_sw23_ea4d4b3c46` | `cr_free_4slot_clear1` | Destructor: clear-b the object, then `cr_cleanup_ptr8_a` on the pointers at `+0x20`, `+0x40`, `+0x60` (slot 0 at `+0x08` is only cleared). |
+| `0x1800140d0` | `fpc_bio_bep_sw23_1a4e90d0f1` | `cr_free_3ptr_and8` | If `a` non-NULL, sized-free `a[0]`, `a[1]`, `a[5]` (`+0x00/+0x08/+0x28`); then `cr_cleanup_ptr8_a(b)` (frees `b+8`). |
+| `0x180012f70` | `fpc_bio_bep_sw23_14713a91d5` | `cr_free_9slot_clear6` | Destructor: clear-b slots `obj+0x20*i` for `i<6` (i.e. `+0x08..+0xa8`), then `cr_cleanup_ptr8_a` on `+0xc0`, `+0xe0`, `+0x100`. |
+| `0x180038820` | `fpc_bio_bep_sw23_9a4f7c2d10` | `cr_alloc_60_init` | `cr_malloc_aligned16(slot,0x60)`; on success `cr_fill(p,0,0x60)` then `p[0x30]=1`; returns the allocator status. |
+| `0x180027730` | `fpc_bio_bep_sw23_6f3e9a2b8c` | `cr_round_dims_pow2` | `cr_desc_get_ptr_ints(tmp,&lo,&hi,cfg[4])`; if ok, clamp `w`/`h` up to `lo`/`hi` and round each **up** to the next power of two (`cr_hi_bit_index`); returns the status. |
+| `0x180046c40` | `fpc_bio_bep_sw23_...` | `cr_norm_corr_score` | `nn=n*n`; `cr_mean_stddev(&mean,&std,*p2,nn)`; `acc=Σ coef[i]*data[nn-1-i]` (mode 1) or `coef[i]*data[i]`; **`if (!(std>0.1f)) std=0.1f;`** (NaN clamps — see note); `*out=cr_roundf_to_int((float)(int32_t)acc/std)`. |
+| `0x180026b30` | `fpc_bio_bep_sw23_...` | `cr_sep_fir_pair` | Separable FIR pair with coef `{0x4000,0,0xc000,0x4000,0x4000,0x4000}`: row-FIR `src→A` (guard `(u32)(w-4)<0xfd`), then col-FIR `A→A` (guard `h`); row-FIR `src→B` (guard `w`), col-FIR `B→B` (guard `h`). Guards return 1 / 0x69. |
+| `0x18003b110` | `fpc_bio_bep_sw23_...` | `cr_row_fir_vfir` | Streaming-FIR row twin of `cr_row_fir_i8` but the ring row is filled via `cr_mirror_extend_fir` and the vertical pass is `cr_vfir4_u8(out, ring, coef+((n-rr)-1)%n, w, n)`; mirror branch uses `lv=((2h-(srcrow+3+(n>>1)))%n)*w`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
 |---|---|---|
 | `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | returns static table pointers — needs the table contents. |
+| `0x18004a680` | `fpc_bio_bep_sw23_...` | 176 B `fpc_image_data_dump`: calls `cr_buf_is_metadata_class` (`0x180049120`) *before* its NULL check — needs the metadata-class predicate first. |
 | `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued, out-of-tree). |
 | `0x18002ba80` | `fpc_bio_bep_sw23_7861b9e0de` | 624 B CORDIC/rotation: uses the u16 coefficient table at `0x180117120` (12 B/entry) and the `cr_clz` helper (`0x1800393b0`). |
 | `0x18001fd10` | `fpc_bio_bep_sw23_444798a52f` | 672 B fixed-point Q15 bilinear warp with `cr_ldexpf`-scaled step increments. |

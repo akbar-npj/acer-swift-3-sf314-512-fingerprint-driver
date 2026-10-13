@@ -145,3 +145,45 @@ uint64_t cr_desc_get_triple(void *p, uint8_t sel)
     }
     return 1;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180027730 — clamp a requested (w,h) to the descriptor's minimum and round
+ * each up to the next power of two.
+ *   uint32_t fn(uint32_t *out_w, uint32_t *out_h, uint32_t w, uint32_t h,
+ *               const void *cfg):
+ *     uint64_t tmp[2] = {0,0}; uint32_t lo, hi;
+ *     r = cr_desc_get_ptr_ints(tmp, &lo, &hi, *(char*)(cfg+4));
+ *     if ((int)r == 0) {
+ *         if ((int)w <= (int)lo) w = lo;
+ *         k = cr_hi_bit_index(w);
+ *         if ((1u << (k&31)) != w) w = 1u << ((k+1)&31);
+ *         if ((int)h <= (int)hi) h = hi;
+ *         *out_w = w;
+ *         k = cr_hi_bit_index(h);
+ *         if ((1u << (k&31)) != h) h = 1u << ((k+1)&31);
+ *         *out_h = h;
+ *     }
+ *     return (uint32_t)r;
+ * ------------------------------------------------------------------------ */
+uint32_t cr_round_dims_pow2(uint32_t *out_w, uint32_t *out_h,
+                            uint32_t w, uint32_t h, const void *cfg)
+{
+    uint64_t tmp[2] = { 0, 0 };
+    uint32_t lo, hi;
+    uint64_t r = cr_desc_get_ptr_ints(tmp, &lo, &hi, *((const char *)cfg + 4));
+    if ((int32_t)r == 0) {
+        if ((int32_t)w <= (int32_t)lo)
+            w = lo;
+        int k = cr_hi_bit_index(w);
+        if ((1u << (k & 0x1f)) != w)
+            w = 1u << ((k + 1) & 0x1f);
+        if ((int32_t)h <= (int32_t)hi)
+            h = hi;
+        *out_w = w;
+        k = cr_hi_bit_index(h);
+        if ((1u << (k & 0x1f)) != h)
+            h = 1u << ((k + 1) & 0x1f);
+        *out_h = h;
+    }
+    return (uint32_t)r;
+}

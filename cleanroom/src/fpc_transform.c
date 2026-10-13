@@ -1150,3 +1150,59 @@ int cr_row_fir_i8(uint8_t *out, cr_fir_row_ctx *ctx,
 {
     return cr_row_fir(1, out, ctx, img, target);
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003b110 — a third streaming vertical-FIR variant: same ring/rotation
+ * contract as cr_row_fir_* but the ring row is filled by cr_mirror_extend_fir
+ * and the vertical pass is the 4-wide cr_vfir4_u8.
+ *   int fn(uint8_t *out, cr_fir_row_ctx *ctx, const cr_image *img, int target):
+ *     if (ctx->row+1 != target) return 1;
+ *     rr = ctx->row % n; ctx->row = target;
+ *     if (target > 0) {
+ *       srcrow = target + n/2;
+ *       if (srcrow < h) cr_mirror_extend_fir(ring + w*rr, scratch,
+ *                                            img->data + srcrow*w, coef, w, n);
+ *       else if (w > 0) mirror ring row rem=(2h-srcrow-n/2-3)%n into ring row rr;
+ *     }
+ *     cr_vfir4_u8(out, ring, coef + (n-rr-1)%n, w, n);
+ *     return 0;
+ * ------------------------------------------------------------------------ */
+int cr_row_fir_vfir(uint8_t *out, cr_fir_row_ctx *ctx,
+                    const cr_image *img, int target)
+{
+    int row = ctx->row;
+    int r1  = row + 1;
+    if (r1 != target)
+        return 1;
+
+    int n = ctx->n;
+    ctx->row = r1;
+
+    int16_t *coef = (int16_t *)((uint8_t *)ctx->base + ctx->coef_off);
+    uint8_t *ring = (uint8_t *)ctx->base + ctx->out_off;
+    uint8_t *scr  = (uint8_t *)ctx->base + ctx->scratch_off;
+    int w = img->w, h = img->h;
+    int rr = row % n;
+
+    if (r1 > 0) {
+        int srcrow = r1 + (n >> 1);
+        if (srcrow < h) {
+            cr_mirror_extend_fir(ring + (size_t)w * rr, scr,
+                                 (const uint8_t *)img->data
+                                     + (long long)srcrow * w,
+                                 coef, w, n);
+        } else if (w > 0) {
+            long long lv = (long long)(((h * 2 - (srcrow + 3 + (n >> 1))) % n)
+                                       * w);
+            uint8_t *p = ring + lv;
+            do {
+                uint8_t *q = p + 1;
+                p[(long long)(int)((uint32_t)w * (uint32_t)rr) - lv] = *p;
+                p = q;
+            } while (p != ring + lv + (w - 1) + 1);
+        }
+    }
+
+    cr_vfir4_u8(out, ring, coef + ((n - rr) - 1) % n, w, n);
+    return 0;
+}

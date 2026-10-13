@@ -87,7 +87,11 @@ cleanroom/
   flags. `ucomiss a,b ; jbe` is taken when `CF|ZF`, i.e. **also when unordered
   (NaN)**. So `if (x >= c)` in C is *wrong* for the branch — the faithful form is
   `if (!(c > x))`. This bit `cr_expf`: the vendor sends NaN down the *normal*
-  path, not the clamp.
+  path, not the clamp. The mirror case is `if (x <= c)`: MSVC (non-strict) emits
+  `ucomiss x,c ; ja` — i.e. it clamps when `!(x > c)`, which is **true for NaN**.
+  `cr_norm_corr_score`'s `if (std <= 0.1f) std = 0.1f;` therefore had to be
+  written `if (!(std > 0.1f))`: an empty patch gives a NaN std and the vendor
+  clamps it to 0.1 (result 0), whereas the IEEE `<=` leaves NaN (result INT_MIN).
 - **Exponent scaling is a 32-bit shift, not a multiply.** `ldexp` is done as
   `bits(f) + (k << 23)` with `k` an `int`; for `k = INT_MIN` (the NaN path) the
   shift yields 0. Use `(uint32_t)k << 23`, never `k * 0x800000` (signed-overflow
@@ -143,9 +147,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **190** (53.5% of functions, 49,008 B = 28.92% of bytes) |
+| rewritten + parity-verified | **198** (55.8% of functions, 50,448 B = 29.76% of bytes) |
 
-Fifty-six batches done so far:
+Fifty-seven batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -223,6 +227,10 @@ Fifty-six batches done so far:
     index-list box-mean inpainting, the 16-point bilinear splat accumulator, and the
     int16/uint8 streaming n-tap vertical FIR pair (with mirror-extend at the bottom
     edge and the shared coefficient-rotation ring) (5 functions)
+57. destructor / constructor wrappers + misc: the 4-/9-slot destructor pair, the 3-pointer
+    sized-free, the 0x60-byte aligned constructor, power-of-two dimension rounding, the
+    n*n normalised correlation score, the separable FIR pair, and the mirror-extend
+    streaming-FIR row (8 functions)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

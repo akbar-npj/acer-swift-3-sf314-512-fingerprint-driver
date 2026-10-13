@@ -5317,6 +5317,254 @@ static void test_tree_batch56(void)
     fir_rows_test("cr_row_fir_i8",  RVA(0x180010440u), 1);
 }
 
+/* ---- batch 57: small destructor / constructor wrappers ------------------ */
+static void test_tree_batch57(void)
+{
+    typedef void     (WINAPI *p57_v_p)(void *);
+    typedef void     (WINAPI *p57_v_pp)(void **, void *);
+    typedef int      (WINAPI *p57_i_pp)(void **);
+    typedef uint32_t (WINAPI *p57_u_ppuup)(uint32_t *, uint32_t *,
+                                           uint32_t, uint32_t, const void *);
+    typedef void     (WINAPI *p57_v_pi_pkii)(int *, void **,
+                                             const int16_t *, int, int);
+    typedef uint32_t (WINAPI *p57_u_ppp)(cr_image *, cr_image *,
+                                         const cr_image *);
+    typedef int      (WINAPI *p57_i_pppi)(void *, void *, const void *, int);
+    v_i_ppz vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+    v_v_p   vsfree  = (v_v_p)fn_at(RVA(0x18003bf40));
+
+    /* --- cr_free_4slot_clear1 (0x18003f940) ------------------------------- */
+    {
+        p57_v_p v = (p57_v_p)fn_at(RVA(0x18003f940));
+        static const int sl[4] = { 0x08, 0x28, 0x48, 0x68 };
+        begin("cr_free_4slot_clear1");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x80], oc[0x80];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            for (int i = 0; i < 4; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + sl[i]) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + sl[i]) = c_sized_alloc(S, sz);
+                } else { *(void **)(ov + sl[i]) = NULL; *(void **)(oc + sl[i]) = NULL; }
+            }
+            v(ov); cr_free_4slot_clear1(oc);
+            for (int i = 0; i < 4; i++)
+                if (*(void **)(ov + sl[i]) != NULL || *(void **)(oc + sl[i]) != NULL)
+                    mismatch("4sc-null", (u32)i,
+                             (u64)*(void **)(ov + sl[i]), (u64)*(void **)(oc + sl[i]));
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_4slot_clear1\n");
+    }
+
+    /* --- cr_free_3ptr_and8 (0x1800140d0) ---------------------------------- */
+    {
+        p57_v_pp v = (p57_v_pp)fn_at(RVA(0x1800140d0));
+        static const int asl[3] = { 0x00, 0x08, 0x28 };
+        begin("cr_free_3ptr_and8");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x30], oc[0x30], bv[0x10], bc[0x10];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            memset(bv, 0x5A, sizeof bv); memset(bc, 0x5A, sizeof bc);
+            int use_a = (int)(rnd() & 1);
+            if (use_a) {
+                for (int i = 0; i < 3; i++) {
+                    if (rnd() & 1) {
+                        size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                        *(void **)(ov + asl[i]) = v_sized_alloc(vmalloc, S, sz);
+                        *(void **)(oc + asl[i]) = c_sized_alloc(S, sz);
+                    } else { *(void **)(ov + asl[i]) = NULL; *(void **)(oc + asl[i]) = NULL; }
+                }
+            }
+            if (rnd() & 1) {
+                size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                *(void **)(bv + 8) = v_sized_alloc(vmalloc, S, sz);
+                *(void **)(bc + 8) = c_sized_alloc(S, sz);
+            } else { *(void **)(bv + 8) = NULL; *(void **)(bc + 8) = NULL; }
+
+            v(use_a ? (void **)ov : NULL, bv);
+            cr_free_3ptr_and8(use_a ? (void **)oc : NULL, bc);
+
+            if (*(void **)(bv + 8) != NULL || *(void **)(bc + 8) != NULL)
+                mismatch("3p-b8", (u32)t, (u64)*(void **)(bv + 8), (u64)*(void **)(bc + 8));
+            if (use_a)
+                for (int i = 0; i < 3; i++)
+                    if (*(void **)(ov + asl[i]) != NULL || *(void **)(oc + asl[i]) != NULL)
+                        mismatch("3p-a", (u32)i,
+                                 (u64)*(void **)(ov + asl[i]), (u64)*(void **)(oc + asl[i]));
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_3ptr_and8\n");
+    }
+
+    /* --- cr_free_9slot_clear6 (0x180012f70) ------------------------------- */
+    {
+        p57_v_p v = (p57_v_p)fn_at(RVA(0x180012f70));
+        static const int sl[9] = { 0x08, 0x28, 0x48, 0x68, 0x88, 0xa8,
+                                   0xc8, 0xe8, 0x108 };
+        begin("cr_free_9slot_clear6");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x120], oc[0x120];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            for (int i = 0; i < 9; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + sl[i]) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + sl[i]) = c_sized_alloc(S, sz);
+                } else { *(void **)(ov + sl[i]) = NULL; *(void **)(oc + sl[i]) = NULL; }
+            }
+            v(ov); cr_free_9slot_clear6(oc);
+            for (int i = 0; i < 9; i++)
+                if (*(void **)(ov + sl[i]) != NULL || *(void **)(oc + sl[i]) != NULL)
+                    mismatch("9sc-null", (u32)i,
+                             (u64)*(void **)(ov + sl[i]), (u64)*(void **)(oc + sl[i]));
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_9slot_clear6\n");
+    }
+
+    /* --- cr_alloc_60_init (0x180038820) ----------------------------------- */
+    {
+        p57_i_pp v = (p57_i_pp)fn_at(RVA(0x180038820));
+        begin("cr_alloc_60_init");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            void *ov = (void *)0xdead, *oc = (void *)0xdead;
+            int rv = v(&ov), rc = cr_alloc_60_init(&oc);
+            if (rv != rc) mismatch("a60-ret", (u32)t, (u32)rv, (u32)rc);
+            if ((ov == NULL) != (oc == NULL))
+                mismatch("a60-null", (u32)t, ov != NULL, oc != NULL);
+            if (rv == 0 && ov) {
+                if (memcmp(ov, oc, 0x60) != 0) mismatch("a60", (u32)t, 0, 0);
+                vsfree(&ov); cr_sized_free(&oc);
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_alloc_60_init\n");
+    }
+
+    /* --- cr_round_dims_pow2 (0x180027730) --------------------------------- */
+    {
+        p57_u_ppuup v = (p57_u_ppuup)fn_at(RVA(0x180027730));
+        begin("cr_round_dims_pow2");
+        int bad = g_fail;
+        for (int t = 0; t < 20000; t++) {
+            u8 cfg[8];
+            for (int i = 0; i < 8; i++) cfg[i] = (u8)rnd();
+            uint32_t w = rnd(), h = rnd();
+            uint32_t vw = 0xdeadbeef, vh = 0xdeadbeef;
+            uint32_t cw = 0xdeadbeef, ch = 0xdeadbeef;
+            uint32_t rv = v(&vw, &vh, w, h, cfg);
+            uint32_t rc = cr_round_dims_pow2(&cw, &ch, w, h, cfg);
+            if (rv != rc) mismatch("rd-ret", (u32)t, rv, rc);
+            if (vw != cw) mismatch("rd-w", (u32)t, vw, cw);
+            if (vh != ch) mismatch("rd-h", (u32)t, vh, ch);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_round_dims_pow2\n");
+    }
+
+    /* --- cr_norm_corr_score (0x180046c40) --------------------------------- */
+    {
+        p57_v_pi_pkii v = (p57_v_pi_pkii)fn_at(RVA(0x180046c40));
+        begin("cr_norm_corr_score");
+        int bad = g_fail;
+        for (int t = 0; t < 20000; t++) {
+            int n = (int)(rnd() % 9);              /* 0..8 -> nn 0..64 */
+            int mode = (int)(rnd() & 1);
+            u8 data[64]; int16_t coef[64];
+            for (int i = 0; i < 64; i++) {
+                data[i] = (u8)rnd();
+                coef[i] = (int16_t)((int)(rnd() % 2001) - 1000);
+            }
+            void *pv = data, *pc = data;
+            int ov = 0x5A5A, oc = 0x5A5A;
+            v(&ov, &pv, coef, n, mode);
+            cr_norm_corr_score(&oc, &pc, coef, n, mode);
+            if (ov != oc) mismatch("ncs", (u32)t, (u32)ov, (u32)oc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_norm_corr_score\n");
+    }
+
+    /* --- cr_sep_fir_pair (0x180026b30) ------------------------------------ */
+    {
+        p57_u_ppp v = (p57_u_ppp)fn_at(RVA(0x180026b30));
+        begin("cr_sep_fir_pair");
+        int bad = g_fail;
+        enum { CAP = 0x100 * 0x100 };
+        static int16_t sv[CAP], av[CAP], bv[CAP];
+        static int16_t sc[CAP], ac[CAP], bc[CAP];
+        for (int t = 0; t < 4000; t++) {
+            int w = 4 + (int)(rnd() % 0x3d);       /* 4..0x40 */
+            int h = 4 + (int)(rnd() % 0x3d);
+            if ((rnd() & 7) == 0) { w = (int)(rnd() % 4); }      /* guard: w<4 */
+            else if ((rnd() & 15) == 0) { h = (int)(rnd() % 4); }/* guard: h<4 */
+            if (w < 0) w = 0;
+            if (h < 0) h = 0;
+            size_t nn = (size_t)(w > 0 ? w : 0) * (size_t)(h > 0 ? h : 0);
+            if (nn > CAP) nn = CAP;
+            for (size_t i = 0; i < nn; i++) sv[i] = (int16_t)rnd();
+            memcpy(sc, sv, nn * sizeof(int16_t));
+            memset(av, 0x5A, sizeof(int16_t) * CAP);
+            memset(bv, 0x5A, sizeof(int16_t) * CAP);
+            memcpy(ac, av, sizeof(int16_t) * CAP);
+            memcpy(bc, bv, sizeof(int16_t) * CAP);
+            cr_image svi, avi, bvi, sci, aci, bci;
+            cr_image_set(&svi, sv, w, h);
+            cr_image_set(&avi, av, w, h);
+            cr_image_set(&bvi, bv, w, h);
+            cr_image_set(&sci, sc, w, h);
+            cr_image_set(&aci, ac, w, h);
+            cr_image_set(&bci, bc, w, h);
+            uint32_t rv = v(&avi, &bvi, &svi);
+            uint32_t rc = cr_sep_fir_pair(&aci, &bci, &sci);
+            if (rv != rc) mismatch("sfp-ret", (u32)t, rv, rc);
+            cmp_buf("sfp-A", (u8 *)av, (u8 *)ac, sizeof(int16_t) * CAP, (u32)t);
+            cmp_buf("sfp-B", (u8 *)bv, (u8 *)bc, sizeof(int16_t) * CAP, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_sep_fir_pair\n");
+    }
+
+    /* --- cr_row_fir_vfir (0x18003b110) ------------------------------------ */
+    {
+        p57_i_pppi v = (p57_i_pppi)fn_at(RVA(0x18003b110));
+        begin("cr_row_fir_vfir");
+        int bad = g_fail;
+        enum { BUF = 8192, IMG = 8192, OUTCAP = 512,
+               COEF_OFF = 0, RING_OFF = 2048, SCR_OFF = 6144 };
+        static u8 bufv[BUF], bufc[BUF];
+        u8 img[IMG], outv[OUTCAP], outc[OUTCAP];
+        for (int t = 0; t < 1500; t++) {
+            int w    = 4 * (1 + (int)(rnd() % 12));   /* 4..48 */
+            int h    = 1 + (int)(rnd() % 20);
+            int n    = 1 + (int)(rnd() % 8);
+            int rows = 1 + (int)(rnd() % 24);
+            for (int i = 0; i < w * h; i++) img[i] = (u8)rnd();
+            for (int i = 0; i < BUF; i++) bufv[i] = (u8)rnd();
+            for (int i = 0; i < 32; i++)
+                ((int16_t *)bufv)[i] = (int16_t)((int)(rnd() % 33) - 16);
+            memcpy(bufc, bufv, BUF);
+            cr_image dimg;
+            cr_image_set(&dimg, img, w, h);
+            cr_fir_row_ctx cv, cc;
+            memset(&cv, 0, sizeof cv); memset(&cc, 0, sizeof cc);
+            cv.n = n; cv.base = bufv;
+            cv.coef_off = COEF_OFF; cv.out_off = RING_OFF; cv.scratch_off = SCR_OFF;
+            cc.n = n; cc.base = bufc;
+            cc.coef_off = COEF_OFF; cc.out_off = RING_OFF; cc.scratch_off = SCR_OFF;
+            for (int r = 1; r <= rows; r++) {
+                memset(outv, 0x5A, sizeof outv);
+                memset(outc, 0x5A, sizeof outc);
+                int rv = v(outv, &cv, &dimg, r);
+                int rc = cr_row_fir_vfir(outc, &cc, &dimg, r);
+                if (rv != rc) { mismatch("vfr-ret", (u32)t, (u32)rv, (u32)rc); break; }
+                if (cv.row != cc.row) { mismatch("vfr-row", (u32)t, (u32)cv.row, (u32)cc.row); break; }
+                cmp_buf("vfr", outv, outc, (size_t)w, (u32)t);
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_row_fir_vfir\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -5589,6 +5837,8 @@ int main(int argc, char **argv)
     test_tree_batch55();
     printf("\n== batch 56: streaming FIR + correlation / splat ==\n");
     test_tree_batch56();
+    printf("\n== batch 57: destructor / constructor wrappers + misc ==\n");
+    test_tree_batch57();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

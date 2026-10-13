@@ -990,3 +990,55 @@ void cr_inpaint_index_list(cr_image *img, cr_image *mask,
         }
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180026b30 — two separable 3-tap FIR products from one int16 source image.
+ * Template taps: rows/cols use {0x4000, 0, 0xc000} (derivative) and
+ * {0x4000, 0x4000, 0x4000} (smoothing).
+ *   uint32_t fn(cr_image *A, cr_image *B, const cr_image *src):
+ *     if (!(w in [4,0x100])) return 1;
+ *     r = fir_rows(A, src, coef,   3, w, h); if (r) return r;
+ *     if (!(h in [4,0x100])) return 0x69;
+ *     r = fir_cols(A, A,   coef+3, 3, w, h); if (r) return r;
+ *     if (!(h in [4,0x100])) return 0x69;
+ *     r = fir_cols(B, src, coef,   3, w, h); if (r) return r;
+ *     if (!(w in [4,0x100])) return 1;
+ *     return fir_rows(B, B, coef+3, 3, w, h);
+ *   "x in [4,0x100]" is the vendor's `(uint32_t)(x-4) < 0xfd` guard.
+ * ------------------------------------------------------------------------ */
+uint32_t cr_sep_fir_pair(cr_image *A, cr_image *B, const cr_image *src)
+{
+    int16_t coef[6];
+    coef[0] = 0x4000;
+    coef[1] = 0;
+    coef[2] = (int16_t)0xc000;
+    coef[3] = 0x4000;
+    coef[4] = 0x4000;
+    coef[5] = 0x4000;
+
+    int w = src->w, h = src->h;
+    if ((uint32_t)(w - 4) < 0xfd) {
+        int16_t *sd = (int16_t *)src->data;
+        int16_t *Ad = (int16_t *)A->data;
+        int r = cr_fir_reflect_rows(Ad, sd, coef, 3, w, h);
+        if (r != 0)
+            return (uint32_t)r;
+        if ((uint32_t)(h - 4) < 0xfd) {
+            r = cr_fir_reflect(Ad, Ad, coef + 3, 3, w, h);
+            if (r != 0)
+                return (uint32_t)r;
+            if ((uint32_t)(h - 4) < 0xfd) {
+                int16_t *Bd = (int16_t *)B->data;
+                r = cr_fir_reflect(Bd, sd, coef, 3, w, h);
+                if (r != 0)
+                    return (uint32_t)r;
+                if ((uint32_t)(w - 4) < 0xfd)
+                    return (uint32_t)cr_fir_reflect_rows(Bd, Bd, coef + 3,
+                                                         3, w, h);
+                return 1;
+            }
+        }
+        return 0x69;
+    }
+    return 1;
+}
