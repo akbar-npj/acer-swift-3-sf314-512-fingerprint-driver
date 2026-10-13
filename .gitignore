@@ -3,6 +3,9 @@ fpc_disum_tool
 linux-driver/fpc_disum_tool
 native/fpc_recon_native
 native/*.o
+cleanroom/*.o
+cleanroom/libfpcbep.a
+cleanroom/difftest
 wine-rehost/*.exe
 wine-rehost/*.o
 *.o
