@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **52** (14.6% of funcs, 4992 B = 2.95% of bytes) |
+| **rewritten + parity-verified** | **56** (15.8% of funcs, 6016 B = 3.55% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -74,7 +74,11 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 50 | `cr_masked_variance` | `0x180037e70` | `fpc_bio_bep_sw23_aed252bf13` | 160 | **done** |
 | 51 | `cr_read_quad` | `0x1800469e0` | `fpc_bio_bep_sw23_f3d41f1091` | 160 | **done** |
 | 52 | `cr_affine_transform` | `0x180014b30` | `fpc_bio_bep_sw23_1cbe178998` | 160 | **done** |
-| … | 303 more | | | | pending |
+| 53 | `cr_vfir4_u8` | `0x18000fb20` | `fpc_bio_bep_sw23_097e23479a` | 256 | **done** |
+| 54 | `cr_masked_minmax` | `0x180020130` | `fpc_bio_bep_sw23_45d26c97de` | 256 | **done** |
+| 55 | `cr_orient_pick` | `0x1800309a0` | `fpc_bio_bep_sw23_90875da224` | 256 | **done** |
+| 56 | `cr_atan2_deg` | `0x1800391b0` | `fpc_bio_bep_sw23_b4118e23cd` | 256 | **done** |
+| … | 299 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 
@@ -148,10 +152,10 @@ tested in isolation. Sorted by size (smallest first).
 | `0x18000f600` | `fpc_bio_bep_sw23_06c5524131` | 208 | 1 | **done** |
 | `0x18002ade0` | `fpc_bio_bep_sw23_768fe83277` | 208 | 1 | **done** |
 | `0x1800308d0` | `fpc_bio_bep_sw23_901c599831.isra.1` | 208 | 4 | **done** |
-| `0x18000fb20` | `fpc_bio_bep_sw23_097e23479a` | 256 | 1 |  |
-| `0x180020130` | `fpc_bio_bep_sw23_45d26c97de` | 256 | 2 |  |
-| `0x1800309a0` | `fpc_bio_bep_sw23_90875da224` | 256 | 1 |  |
-| `0x1800391b0` | `fpc_bio_bep_sw23_b4118e23cd` | 256 | 1 |  |
+| `0x18000fb20` | `fpc_bio_bep_sw23_097e23479a` | 256 | 1 | **done** |
+| `0x180020130` | `fpc_bio_bep_sw23_45d26c97de` | 256 | 2 | **done** |
+| `0x1800309a0` | `fpc_bio_bep_sw23_90875da224` | 256 | 1 | **done** |
+| `0x1800391b0` | `fpc_bio_bep_sw23_b4118e23cd` | 256 | 1 | **done** |
 | `0x1800277e0` | `fpc_bio_bep_sw23_69f82fab13` | 272 | 2 |  |
 | `0x18003e9f0` | `fpc_bio_bep_sw23_cbfed5bc7c` | 272 | 1 |  |
 | `0x18003f460` | `fpc_bio_bep_sw23_d1adcab3af` | 272 | 1 |  |

@@ -170,3 +170,65 @@ int cr_lroundf(float x)
 
     return e + ((float)e - x < 0.0f ? 1 : 0);
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800391b0  ->  atan2(a, b) in degrees, range [0, 360).
+ *
+ * Two-argument arctangent via a degree-scaled odd polynomial.  Let
+ * aa = |a|, bb = |b| (negation done only when 0 > x strictly, so NaN passes
+ * through unchanged).  If bb < aa (or unordered):
+ *      t = bb / (aa + C1);  r = C6 - poly(t*t) * t;
+ * else:
+ *      t = aa / (bb + C1);  r = poly(t*t) * t;
+ * with poly(u) = (((C2*u + C3)*u - C4)*u + C5).  Then quadrant fixes:
+ *      if (0 > b) r = C7 - r;   if (0 > a) r = C8 - r;
+ * C1 = 2^-52, C2..C5 the atan series, C6 = 90, C7 = 180, C8 = 360.
+ * ------------------------------------------------------------------------ */
+float cr_atan2_deg(float a, float b)
+{
+    static const float C1 = 2.220446049250313e-16f;  /* 0x18008c350 */
+    static const float C2 = -2.539724349975586f;     /* 0x18008c354 */
+    static const float C3 = 8.913999557495117f;      /* 0x18008c358 */
+    static const float C4 = 18.66744613647461f;      /* 0x18008c35c */
+    static const float C5 = 57.28362274169922f;      /* 0x18008c360 */
+    static const float C6 = 90.0f;                   /* 0x18008c364 */
+    static const float C7 = 180.0f;                  /* 0x18008c368 */
+    static const float C8 = 360.0f;                  /* 0x18008c36c */
+
+    float bb = (0.0f > b) ? -b : b;
+    float aa = (0.0f > a) ? -a : a;
+    float r, t;
+
+    if (!(bb >= aa)) {              /* bb < aa, also taken when unordered */
+        t = bb / (aa + C1);
+        float u = t * t;
+        float p = C2;
+        p = p * u;
+        p = p + C3;
+        p = p * u;
+        p = p - C4;
+        p = p * u;
+        p = p + C5;
+        p = p * t;
+        r = C6 - p;
+    } else {
+        t = aa / (bb + C1);
+        float u = t * t;
+        float p = C2;
+        p = p * u;
+        p = p + C3;
+        p = p * u;
+        p = p - C4;
+        p = p * u;
+        p = p + C5;
+        p = p * t;
+        r = p;
+    }
+
+    if (0.0f > b)
+        r = C7 - r;
+    if (0.0f > a)
+        r = C8 - r;
+
+    return r;
+}

@@ -284,6 +284,13 @@ typedef uint64_t (WINAPI *v_u64_ppuiii)(void *, const void *, uint32_t,
                                         int, int, int);
 typedef void     (WINAPI *v_v_ppp)(float *, const float *, const float *);
 
+/* batch 6 */
+typedef float    (WINAPI *v_fff)(float, float);
+typedef void     (WINAPI *v_v_pppii)(void *, const void *, const void *, int, int);
+typedef void     (WINAPI *v_v_ppppp)(void *, void *, void *, const void *, const void *);
+typedef void     (WINAPI *v_v_pppppii)(void *, void *, void *, const void *,
+                                       const void *, int, int);
+
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
 {
@@ -876,6 +883,111 @@ static void test_affine_transform(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_affine_transform\n");
 }
 
+/* ---- batch 6: 256-byte leaves ------------------------------------------ */
+
+/* 0x1800391b0 — atan2 in degrees. */
+static void test_atan2_deg(void)
+{
+    v_fff v = (v_fff)fn_at(RVA(0x1800391b0));
+    begin("cr_atan2_deg");
+    int bad = g_fail;
+    static const float sp[] = {
+        0.0f, -0.0f, 1.0f, -1.0f, 2.0f, -2.0f, 0.5f, -0.5f, 1e-30f, -1e-30f,
+        1e30f, -1e30f, 3.4028235e38f, -3.4028235e38f, 0.7071068f, -0.7071068f,
+        1e-45f, -1e-45f, 255.0f, -255.0f, 0.0001f, -0.0001f, 1e8f, -1e8f,
+    };
+    for (size_t i = 0; i < sizeof sp / sizeof sp[0]; i++) {
+        for (size_t j = 0; j < sizeof sp / sizeof sp[0]; j++) {
+            float a = sp[i], b = sp[j];
+            float rv = v(a, b), rc = cr_atan2_deg(a, b);
+            if (cr_f2u(rv) != cr_f2u(rc))
+                mismatch("atan2-sp", cr_f2u(a), cr_f2u(rv), cr_f2u(rc));
+        }
+    }
+    for (int t = 0; t < 20000; t++) {
+        float a = cr_u2f(rnd()), b = cr_u2f(rnd());
+        float rv = v(a, b), rc = cr_atan2_deg(a, b);
+        if (cr_f2u(rv) != cr_f2u(rc))
+            mismatch("atan2", (u32)t, cr_f2u(rv), cr_f2u(rc));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_atan2_deg\n");
+}
+
+/* 0x18000fb20 — Q15 vertical FIR over 4 columns at a time. */
+static void test_vfir4_u8(void)
+{
+    v_v_pppii v = (v_v_pppii)fn_at(RVA(0x18000fb20));
+    begin("cr_vfir4_u8");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        uint8_t iv[512], ov[256], oc[256];
+        int16_t coeff[8];
+        for (size_t i = 0; i < sizeof iv; i++) iv[i] = (uint8_t)rnd();
+        for (int i = 0; i < 8; i++) coeff[i] = (int16_t)rnd();
+        int n = (int)(rnd() % 40u) + 1;         /* sometimes <= 3 (no-op) */
+        int m = (int)(rnd() % 7u);              /* 0..6 */
+        memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+        v(ov, iv, coeff, n, m);
+        cr_vfir4_u8(oc, iv, coeff, n, m);
+        cmp_buf("vfir", ov, oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_vfir4_u8\n");
+}
+
+/* 0x180020130 — masked min/max/count. */
+static void test_masked_minmax(void)
+{
+    v_v_ppppp v = (v_v_ppppp)fn_at(RVA(0x180020130));
+    begin("cr_masked_minmax");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char dv[0x20], dc[0x20], bv[0x20], bc[0x20];
+        unsigned char px[256], bm[256];
+        for (size_t i = 0; i < sizeof px; i++) px[i] = (uint8_t)rnd();
+        for (size_t i = 0; i < sizeof bm; i++) bm[i] = (uint8_t)rnd();
+        int w = (int)(rnd() % 12u);
+        int h = (int)(rnd() % 12u);
+        int stride = (int)(rnd() % 24u) + 1;
+        int offx = (int)(rnd() % 4u), offy = (int)(rnd() % 4u);
+        mk_image(dv, px, 0, w, h, 0, 0);
+        mk_image(dc, px, 0, w, h, 0, 0);
+        mk_image(bv, bm, stride, 0, 0, offx, offy);
+        mk_image(bc, bm, stride, 0, 0, offx, offy);
+        int mnv = -1, mxv = -1, cnv = -1, mnc = -1, mxc = -1, cnc = -1;
+        v(&mnv, &mxv, &cnv, dv, bv);
+        cr_masked_minmax(&mnc, &mxc, &cnc, (const cr_image *)dc, (const cr_image *)bc);
+        if (mnv != mnc || mxv != mxc || cnv != cnc)
+            mismatch("mm", (u32)t, (u32)mnv, (u32)mnc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_minmax\n");
+}
+
+/* 0x1800309a0 — orientation pick (forward/reverse correlation + half-swap). */
+static void test_orient_pick(void)
+{
+    v_v_pppppii v = (v_v_pppppii)fn_at(RVA(0x1800309a0));
+    begin("cr_orient_pick");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        uint8_t av[512], ac[512];
+        uint8_t data[128];
+        int16_t coeff[128];
+        for (size_t i = 0; i < sizeof av; i++) { av[i] = (uint8_t)rnd(); ac[i] = av[i]; }
+        for (size_t i = 0; i < sizeof data; i++) data[i] = (uint8_t)rnd();
+        for (size_t i = 0; i < sizeof coeff / sizeof coeff[0]; i++) coeff[i] = (int16_t)rnd();
+        int k = (int)(rnd() % 9u);              /* k*k <= 64 */
+        int half = (int)(rnd() % 400u) - 40;
+        const uint8_t *dp = data;
+        uint8_t fv = (uint8_t)rnd(), fc = fv;
+        int ov = -1, oc = -1;
+        v(av, &fv, &ov, &dp, coeff, half, k);
+        cr_orient_pick(ac, &fc, &oc, &dp, coeff, half, k);
+        if (ov != oc || fv != fc) mismatch("orient-ret", (u32)t, (u32)ov, (u32)oc);
+        cmp_buf("orient", av, ac, sizeof av, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_orient_pick\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1088,6 +1200,12 @@ int main(int argc, char **argv)
     test_read_quad();
     test_buffer_pixels_setup();
     test_affine_transform();
+
+    printf("\n== 256-byte leaves ==\n");
+    test_atan2_deg();
+    test_vfir4_u8();
+    test_masked_minmax();
+    test_orient_pick();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

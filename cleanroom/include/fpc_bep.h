@@ -139,4 +139,14 @@ uint64_t cr_buffer_pixels_setup(void *p, const void *src, uint32_t len,
 void     cr_affine_transform(float *out, const float *pts,
                              const float *scores);                    /* 0x180014b30 */
 
+/* ---- batch 6: 256-byte leaves ------------------------------------------ */
+void     cr_vfir4_u8(uint8_t *out, const uint8_t *in, const int16_t *coeff,
+                     int n, int m);                                   /* 0x18000fb20 */
+void     cr_masked_minmax(int *out_min, int *out_max, int *out_count,
+                          const cr_image *img, const cr_image *bitmap);/* 0x180020130 */
+void     cr_orient_pick(uint8_t *arr, uint8_t *flag, int *out,
+                        const uint8_t *const *src, const int16_t *coeff,
+                        int half, int k);                             /* 0x1800309a0 */
+float    cr_atan2_deg(float a, float b);                              /* 0x1800391b0 */
+
 #endif /* FPC_BEP_H */

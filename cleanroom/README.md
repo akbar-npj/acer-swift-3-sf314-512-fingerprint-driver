@@ -71,6 +71,8 @@ cleanroom/
 ├── src/fpc_copy.c        image copies (u8/u32/u16-shift)
 ├── src/fpc_affine.c      table-driven affine transform
 ├── src/fpc_stats.c       masked variance + big-endian quad probe
+├── src/fpc_filter.c      Q15 vertical FIR (4 columns at a time)
+├── src/fpc_orient.c      orientation pick (fwd/rev correlation + half-swap)
 ├── tools/difftest.c      differential test vs the vendor DLL
 ├── Makefile              make / make check
 ├── REACHABLE.md          inventory of all 355 reachable functions
@@ -113,6 +115,11 @@ cleanroom/
   `cr_masked_variance`'s 4th arg is a `const uint8_t **`: the vendor does
   `mov rdx,[r9]` once and then walks a *flat* column-major byte array
   `(*mask)[i + j*rows]`, not `mask[j][i]`.
+- **Count do-while iterations from the *guard*, not the initial value.**
+  `cr_orient_pick` (0x1800309a0) decrements its index at the *top* of the loop
+  and exits when it reaches `base-1`, so a `k*k`-tap correlation runs `k*k`
+  times, not `k*k-1`. Transcribing it as `i < kk-1` shifted every correlation by
+  one tap (~16% of random inputs flipped the branch decision).
 
 ## Progress
 
@@ -121,14 +128,15 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **52** (14.6% of functions, 4,992 B = 2.95% of bytes) |
+| rewritten + parity-verified | **56** (15.8% of functions, 6,016 B = 3.55% of bytes) |
 
-Five batches done so far:
+Six batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
 4. rect fills + bitmap ops + misc leaves (10 functions)
 5. image copies + masked variance + affine transform (7 functions)
+6. 256-byte leaves: Q15 FIR, masked min/max, orientation pick, atan2-degrees (4 functions)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

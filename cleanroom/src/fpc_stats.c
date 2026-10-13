@@ -79,3 +79,52 @@ int cr_read_quad(const int *p)
 
     return v ? (int)v : -1;
 }
+
+/*
+ * 0x180020130 — min / max / count of image pixels selected by a bitmap.
+ *
+ * `img` is a byte image (w = +0x10, h = +0x14, data = +8, row-major w*h).
+ * `bitmap` is a 1-bit image (stride = +0x00, data = +8, offx = +0x18,
+ * offy = +0x1c); its bit at linear index `p` is word[p>>5] >> (p & 31).
+ * For every set bit in the bitmap sub-rectangle [offx,offx+w) x [offy,offy+h),
+ * the corresponding image pixel is (row, col) -> img->data[row*w + col].
+ *
+ * Writes min (init 0xff), max (init 0) and the count to the three int outputs.
+ * For h <= 0 nothing is scanned and the outputs are (0xff, 0, 0).
+ */
+void cr_masked_minmax(int *out_min, int *out_max, int *out_count,
+                      const cr_image *img, const cr_image *bitmap)
+{
+    int h = img->h, w = img->w;
+    uint32_t mn = 0xffu, mx = 0u;
+    int count = 0;
+
+    if (h > 0) {
+        int stride = bitmap->a;
+        const uint8_t *bm = (const uint8_t *)bitmap->data;
+        const uint8_t *px = (const uint8_t *)img->data;
+        int offx = bitmap->offx, offy = bitmap->offy;
+        int rowbase = 0;                         /* row * w */
+
+        for (int row = 0; row < h; row++) {
+            if (w > 0) {
+                int base = (offy + row) * stride;
+                int end  = base + offx + w;
+                for (int eax = base + offx; eax < end; eax++) {
+                    uint32_t word = ((const uint32_t *)bm)[eax >> 5];
+                    if ((word >> ((eax - base) & 31)) & 1u) {
+                        uint8_t v = px[rowbase - base - offx + eax];
+                        if ((uint8_t)mn > v) mn = v;
+                        if ((uint8_t)mx < v) mx = v;
+                        count++;
+                    }
+                }
+            }
+            rowbase += w;
+        }
+    }
+
+    *out_min = (int)mn;
+    *out_max = (int)mx;
+    *out_count = count;
+}

@@ -89,6 +89,15 @@ The image descriptor layout (established from these functions):
 | `0x1800491e0` | `fpc_buffer_pixels_check_size` | `cr_buffer_pixels_setup` | validate `len` against capacity-0x18 (with signed-overflow guard), `memmove` into `+0x24`, then record `a,b,c` at `+0xc/+0x10/+0x14`, `a*b` at `+8`, `0x100000000` at `+0x18`, `(a*c<0?a*c+7:a*c)>>3` at `+0x20`. |
 | `0x180014b30` | `fpc_bio_bep_sw23_1cbe178998` | `cr_affine_transform` | pick `k` = first argmin of `scores[0..9)`, then `out[i] = pts[3k]*T[k][i] + pts[3k+1]*T[k][16+i] + pts[3k+2]` for `i<16`, using the 9x32 basis table at `0x18008ec40`. |
 
+### Batch 6 — 256-byte leaves
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18000fb20` | `fpc_bio_bep_sw23_097e23479a` | `cr_vfir4_u8` | Q15 vertical FIR: `out[g*4+j] = (int8)((Σ_k in[k*n+g*4+j]*coeff[k] + 0x4000) >> 15)`, 4 columns per group, `((n-4)>>2)+1` groups; `n<=3` no-op. |
+| `0x180020130` | `fpc_bio_bep_sw23_45d26c97de` | `cr_masked_minmax` | over set bits of a bitmap sub-rectangle, min/max/count of the corresponding byte-image pixels; `h<=0 -> (0xff,0,0)`. |
+| `0x1800309a0` | `fpc_bio_bep_sw23_90875da224` | `cr_orient_pick` | correlate `*src` with `coeff` forwards and backwards over `k*k` taps; if `|rev|>|fwd|` flip flag bit 7, swap the first `d` bytes of `arr` with the next `d` (`d` from `half`), report 1; else report 0. |
+| `0x1800391b0` | `fpc_bio_bep_sw23_b4118e23cd` | `cr_atan2_deg` | `atan2(a,b)` in **degrees**, range `[0,360)`, via an odd polynomial `(((C2*u+C3)*u-C4)*u+C5)*t` plus the quadrant fixes (C6=90, C7=180, C8=360). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
