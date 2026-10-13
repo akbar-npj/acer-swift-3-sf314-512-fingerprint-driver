@@ -191,4 +191,8 @@ int      cr_bitmap_popcount(const cr_image *img);                    /* 0x180034
 int      cr_downsample_mean(cr_image *out, const cr_image *in,
                             int16_t f);                              /* 0x180026fb0 */
 
+/* ---- batch 13: 384-byte border-fill leaf ------------------------------- */
+void     cr_image_fill_border(cr_image *img, int top, int bottom,
+                              int left, int right, uint16_t fill);   /* 0x18001c4e0 */
+
 #endif /* FPC_BEP_H */

@@ -283,6 +283,7 @@ typedef int      (WINAPI *v_i_p)(const void *);
 typedef uint64_t (WINAPI *v_u64_ppuiii)(void *, const void *, uint32_t,
                                         int, int, int);
 typedef void     (WINAPI *v_v_ppp)(float *, const float *, const float *);
+typedef void     (WINAPI *v_v_piiiiu)(void *, int, int, int, int, uint16_t);
 
 /* batch 6 */
 typedef float    (WINAPI *v_fff)(float, float);
@@ -1386,6 +1387,41 @@ static void test_sincos_f32(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_sincos_f32\n");
 }
 
+/* 0x18001c4e0 — int16 multi-region border fill.  Args (ms_abi):
+ *   rcx=img, rdx=top, r8=bottom, r9=left, [rsp]=right, [rsp+8]=fill.
+ * The image uses a 64x64 buffer with offx=offy=16, w=h=32, a=64 (stride),
+ * so every region (top/bottom/left/right margins) stays inside the buffer. */
+static void test_image_border_fill(void)
+{
+    v_v_piiiiu v = (v_v_piiiiu)fn_at(RVA(0x18001c4e0));
+    begin("cr_image_fill_border");
+    int bad = g_fail;
+    const int BUFW = 128, BUFH = 128;
+    for (int t = 0; t < 20000; t++) {
+        int16_t pv[BUFW * BUFH], pc[BUFW * BUFH];
+        unsigned char va[0x20], ca[0x20];
+        int offx = 32, offy = 32, w = 64, h = 64;
+        int top    = (int)(rnd() % 17u);
+        int bottom = (int)(rnd() % 17u);
+        int left   = (int)(rnd() % 17u);
+        int right  = (int)(rnd() % 17u);
+        uint16_t fill = (uint16_t)(rnd() & 0xffffu);
+        for (int i = 0; i < BUFW * BUFH; i++) { pv[i] = (int16_t)i; pc[i] = (int16_t)i; }
+        memset(va, 0, sizeof va); memset(ca, 0, sizeof ca);
+        *(int *)(va + 0) = BUFW;  *(int *)(ca + 0) = BUFW;   /* a = stride */
+        *(int *)(va + 4) = BUFH;  *(int *)(ca + 4) = BUFH;   /* b */
+        *(int *)(va + 0x10) = w;  *(int *)(ca + 0x10) = w;   /* w */
+        *(int *)(va + 0x14) = h;  *(int *)(ca + 0x14) = h;   /* h */
+        *(int *)(va + 0x18) = offx; *(int *)(ca + 0x18) = offx; /* offx */
+        *(int *)(va + 0x1c) = offy; *(int *)(ca + 0x1c) = offy; /* offy */
+        *(void **)(va + 8) = pv;  *(void **)(ca + 8) = pc;   /* data */
+        v(va, top, bottom, left, right, fill);
+        cr_image_fill_border((cr_image *)ca, top, bottom, left, right, fill);
+        cmp_buf("border", (unsigned char *)pv, (unsigned char *)pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_fill_border\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1628,6 +1664,8 @@ int main(int argc, char **argv)
     test_downsample_mean();
     printf("\n== 384-byte leaf (sincos) ==\n");
     test_sincos_f32();
+    printf("\n== 384-byte leaf (border fill) ==\n");
+    test_image_border_fill();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

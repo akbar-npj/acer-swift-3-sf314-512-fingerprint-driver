@@ -205,3 +205,103 @@ int cr_downsample_mean(cr_image *out, const cr_image *in, int16_t f)
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001c4e0 — int16 multi-region border fill.
+ *   Args (ms_abi): rcx=img, rdx=top, r8=bottom, r9=left,
+ *   [rsp+0x20]=right (5th), [rsp+0x28]=fill (uint16, 6th).
+ *   Reads a=stride, data, w, h, offx, offy from the descriptor and writes a
+ *   constant word into a rectangular FRAME around the image window: the outer
+ *   rectangle is the window expanded by (top,bottom,left,right) on each side;
+ *   the inner window (offx..offx+w-1, offy..offy+h-1) is left untouched.
+ *   Implemented as four strips (top/bottom horizontal bars, left/right
+ *   vertical bars) that together cover the frame.  NOTE: the assembly
+ *   measures row/column steps in BYTES; these pointers are int16_t* so all
+ *   steps below are in int16 ELEMENTS (half the byte count).
+ * ------------------------------------------------------------------------ */
+void cr_image_fill_border(cr_image *img, int top, int bottom, int left,
+                          int right, uint16_t fill)
+{
+    int16_t *data = (int16_t *)img->data;
+    int32_t  a    = img->a;            /* stride (int16 elements per row) */
+    int32_t  w    = img->w;
+    int32_t  h    = img->h;
+    int32_t  offx = img->offx;
+    int32_t  offy = img->offy;
+
+    int64_t  base_off = (int64_t)offy * a + offx;
+    int16_t *r12 = data + base_off;    /* inner top-left element */
+
+    /* region 1 : top horizontal bar — `top` rows above the window, width w */
+    if (top > 0) {
+        int64_t r14 = (int64_t)a;             /* row step (elements) */
+        int16_t *rsi = r12;
+        int32_t r13 = 0;
+        do {
+            rsi = rsi - r14;                  /* one row up */
+            if (w > 0) {
+                int16_t *end = rsi + w;
+                int16_t *p = rsi;
+                do { *p = (int16_t)fill; p++; } while (p != end);
+            }
+            r13 += 1;
+        } while (r13 != top);
+    }
+
+    /* region 2 : bottom horizontal bar — `bottom` rows below the window */
+    if (bottom > 0) {
+        int16_t *rsi = r12 + (int64_t)(h - 1) * a;   /* bottom window row */
+        int64_t r14 = (int64_t)a;                    /* row step (down) */
+        int32_t r13 = 0;
+        do {
+            rsi = rsi + r14;                         /* one row down */
+            if (w > 0) {
+                int16_t *end = rsi + w;
+                int16_t *p = rsi;
+                do { *p = (int16_t)fill; p++; } while (p != end);
+            }
+            r13 += 1;
+        } while (r13 != bottom);
+    }
+
+    /* region 3 : left vertical bar — `left` columns left of the window,
+     * spanning the full frame height (h + top + bottom rows). */
+    if (left > 0) {
+        int16_t *rdi = r12 - (int64_t)a * top;       /* topmost frame row */
+        int32_t esi = h + top + bottom;              /* full height */
+        int16_t *r13 = rdi - left;                   /* column end */
+        do {
+            rdi = rdi - 1;                           /* step left first (col offx-1 ..) */
+            if (esi > 0) {
+                int16_t *rcx = rdi;
+                int32_t eax = 0;
+                do {
+                    eax += 1;
+                    *rcx = (int16_t)fill;
+                    rcx = rcx + a;                   /* next row */
+                } while (eax != esi);
+            }
+        } while (rdi != r13);
+    }
+
+    /* region 4 : right vertical bar — `right` columns starting at the
+     * window's right edge (offx+w-1), full frame height. */
+    if (right > 0) {
+        int64_t rbp = (int64_t)(w - 1) - (int64_t)a * top;  /* topmost row, col offx+w-1 */
+        int16_t *r9p = r12 + rbp;
+        int32_t r8d = bottom + (top + h);                   /* h+top+bottom */
+        int16_t *rdx_end = r9p + (int64_t)right;            /* r9_start + right */
+        do {
+            r9p = r9p + 1;                                  /* next column right */
+            if (r8d > 0) {
+                int16_t *rcx = r9p;
+                int32_t eax = 0;
+                do {
+                    eax += 1;
+                    *rcx = (int16_t)fill;
+                    rcx = rcx + a;                          /* next row */
+                } while (eax != r8d);
+            }
+        } while (rdx_end != r9p);
+    }
+}
