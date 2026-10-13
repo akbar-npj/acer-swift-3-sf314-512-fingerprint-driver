@@ -408,4 +408,16 @@ int      cr_malloc_aligned16(void **out, size_t size);       /* 0x1800100c0 */
 void    *cr_image_get_dp(const void *defs, uint32_t idx);    /* 0x18004a890 */
 void     cr_image_buf_desc(const void *ctx, void *out);      /* 0x18004ab90 */
 
+/* ---- batch 48: object constructors / flag-driven destructors ------------- */
+void     cr_free_obj_28_8(void *obj);                        /* 0x18000ee40 */
+uint8_t  cr_meta_set_slot(const void *defs, uint32_t idx,
+                          int key, int value);               /* 0x1800303d0 */
+uint64_t cr_obj_init_58(void *obj);                          /* 0x180046b80 */
+void     cr_alloc_handle(void **out);                        /* 0x18002ad90 */
+int      cr_alloc_400(void **out);                           /* 0x18003fb70 */
+int      cr_image_alloc_u8(int *desc, int w, int h);         /* 0x18001d820 */
+int      cr_image_alloc_s16(int *desc, int w, int h);        /* 0x18003d790 */
+void     cr_free_obj_flags(void *obj);                       /* 0x18000f570 */
+int      cr_bitmap_alloc(uint32_t *desc, uint32_t w, uint32_t h);  /* 0x180029750 */
+
 #endif /* FPC_BEP_H */

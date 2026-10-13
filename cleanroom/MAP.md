@@ -321,6 +321,25 @@ and (where the input is shared) pointer identity — not raw pointer values.
 | `0x18004a890` | `fpc_image_data_get_dp_buffer` | `cr_image_get_dp` | `void *fn(const void *defs, u32 idx)`: if `defs && idx < 0x16`, fetch slot `idx` from the table at `defs+0x10` and return it only if `cr_buf_is_debug_class(p)`; else NULL. |
 | `0x18004ab90` | `fpc_image_data_init_buffers` | `cr_image_buf_desc` | `void fn(const void *ctx, void *out)`: `p = ctx ? *(u8**)(ctx+0x18) : NULL`; if `p` is a pixels buffer (`cr_buf_is_pixels`), write `out+0x00 (i16) = (i16)*(u32*)(p+0x0c)`, `out+0x08 (ptr) = p+0x10`, `out+0x10 (i16) = (i16)(*(u32*)(p+0x04) >> 1)`, `out+0x14 (i32) = 1`; otherwise `out+0x00 = 0`, `out+0x08 = NULL`, `out+0x10 = 0`, `out+0x14 = 1`. |
 
+### Batch 48 — object constructors / flag-driven destructors
+
+The second wave of non-leaf functions.  These build or tear down the BEP object
+tree on top of `cr_malloc_aligned16` / `cr_sized_free`.  Same difftest strategy
+as batch 47: compare guard behaviour, NULL-ing, scalar fields, and allocator
+side effects, never raw pointer values.
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18000ee40` | `fpc_bio_bep_sw23_04faa0a17d` | `cr_free_obj_28_8` | `void fn(void *obj)`: always `cr_sized_free((void**)(obj+0x28))`; then, only if `*(u8*)(obj+0x50) & 1`, also `cr_sized_free((void**)(obj+8))`. No NULL guard (the free helper treats a NULL slot as a no-op). |
+| `0x1800303d0` | `fpc_bio_bep_sw23_8dbe34c690` | `cr_meta_set_slot` | `uint8_t fn(const void *defs, u32 idx, int key, int value)`: `p = cr_image_get_dp(defs, idx)`; if `!p` return `0x6a`; else return `cr_meta_put_i16(p, key, value, true) != 0`. |
+| `0x180046b80` | `fpc_bio_bep_sw23_f56cb91e79` | `cr_obj_init_58` | `uint64_t fn(void *obj)`: `cr_fill(obj, 0, 0x58)`, then redundantly zero the 8-byte slots at +8/+0x28/+0x48 and set `*(u32*)(obj+0x50) = -1`; returns 0. |
+| `0x18002ad90` | `fpc_bio_bep_sw23_76795f570e` | `cr_alloc_handle` | `void fn(void **out)`: `if (cr_malloc_aligned16(out, 0x28)) return;` else `p = *out`; `*(u64*)p=0`, `*(u32*)(p+8)=0`, `*(u8*)(p+0xc)=0`, `*(u64*)(p+0x10)=~0`, `*(u64*)(p+0x18)=~0`, `*(u32*)(p+0x20)=~0`. (+0x0d..0x0f and +0x24..0x27 are left as the allocator returned them.) |
+| `0x18003fb70` | `fpc_bio_bep_sw23_d52eeb3bb9` | `cr_alloc_400` | `int fn(void **out)`: `r = cr_malloc_aligned16(out, 0x38)`; if `r==0` zero the 0x38-byte payload, set `*(u32*)(p+4)=400` and `*(u64*)(p+8)=0`; return `r`. |
+| `0x18001d820` | `fpc_bio_bep_sw23_3943c5f8d0.constprop.8` | `cr_image_alloc_u8` | `int fn(int *desc, int w, int h)`: NULL→1; `w<0||h<0`→`0x69`; write `desc[0]=desc[4]=w`, `desc[1]=desc[5]=h`, `desc[2]=desc[3]=desc[6]=desc[7]=0`; `w*h==0`→0; else `cr_malloc_aligned16((void**)(desc+2), (uint32_t)(w*h))` — a byte image. |
+| `0x18003d790` | `fpc_bio_bep_sw23_c8dcdadf31` | `cr_image_alloc_s16` | The int16 twin: identical field writes, but the pixel allocation is `(long long)w * (long long)h * 2` (64-bit product). |
+| `0x18000f570` | `fpc_bio_bep_sw23_05db73508b` | `cr_free_obj_flags` | `void fn(void *obj)`: flag-driven destructor. `f = *(u32*)(obj+0x74)`; `if (f&1) cr_cleanup_ptr8_a(obj+0x10)`; `if (f&2) cr_cleanup_ptr8_b(obj+0x50)`; `if (f&0x100) cr_sized_free((void**)(obj+0x88))`; `if (f&0x200) cr_cleanup_ptr8_clear(obj+0x30)`. The vendor reloads `f` after each free (reproduced verbatim). |
+| `0x180029750` | `fpc_bio_bep_sw23_7346394a98` | `cr_bitmap_alloc` | `int fn(uint32_t *desc, u32 w, u32 h)`: NULL→1; `w<0||h<0`→`0x69`; write `desc[1]=desc[5]=h`, `desc[4]=w`, `desc[0]=(w+0x1f)&~0x1f` (row stride rounded to 32), `desc[2]=desc[3]=desc[6]=desc[7]=0`; `r=(int)(w+0x1f)>>5`; if `h*r==0`→0; else `cr_malloc_aligned16((void**)(desc+2), (long long)r*(long long)(int)h*4)` and zero all `(desc[0]*desc[1])>>5` dwords; on the (unreachable, since `desc[0]` is always 32-aligned) non-aligned branch it frees and returns `0x69`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

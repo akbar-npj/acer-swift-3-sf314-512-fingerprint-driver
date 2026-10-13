@@ -3297,6 +3297,244 @@ static void test_tree_helpers(void)
     }
 }
 
+/* ---- batch 48: object constructors / flag-driven destructors ------------ */
+static void test_tree_ctors(void)
+{
+    v_i_ppz vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+    v_v_p   vsfree  = (v_v_p)fn_at(RVA(0x18003bf40));
+
+    /* --- cr_free_obj_28_8 (0x18000ee40) ------------------------------------ */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x18000ee40));
+        begin("cr_free_obj_28_8");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x58], oc[0x58];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            u8 flag = (u8)(rnd() & 1u);
+            *(u8 *)(ov + 0x50) = flag; *(u8 *)(oc + 0x50) = flag;
+            if (rnd() & 1) {
+                size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                *(void **)(ov + 0x28) = v_sized_alloc(vmalloc, S, sz);
+                *(void **)(oc + 0x28) = c_sized_alloc(S, sz);
+            } else { *(void **)(ov + 0x28) = NULL; *(void **)(oc + 0x28) = NULL; }
+            if (rnd() & 1) {
+                size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                *(void **)(ov + 8) = v_sized_alloc(vmalloc, S, sz);
+                *(void **)(oc + 8) = c_sized_alloc(S, sz);
+            } else { *(void **)(ov + 8) = NULL; *(void **)(oc + 8) = NULL; }
+            v(ov); cr_free_obj_28_8(oc);
+            if (*(void **)(ov + 0x28) != NULL || *(void **)(oc + 0x28) != NULL)
+                mismatch("28-null", (u32)t, (u64)*(void **)(ov + 0x28), (u64)*(void **)(oc + 0x28));
+            if ((*(void **)(ov + 8) != NULL) != (*(void **)(oc + 8) != NULL))
+                mismatch("8-null", (u32)t, *(void **)(ov + 8) != NULL, *(void **)(oc + 8) != NULL);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_obj_28_8\n");
+    }
+
+    /* --- cr_meta_set_slot (0x1800303d0) ------------------------------------ */
+    {
+        typedef uint8_t (WINAPI *v_u8_ppiii)(const void *, u32, int, int);
+        v_u8_ppiii v = (v_u8_ppiii)fn_at(RVA(0x1800303d0));
+        static u8 vdefs[0x10 + 0x16 * 8], cdefs[0x10 + 0x16 * 8];
+        static u8 vst[128], cst[128], vother[64], cother[64];
+        begin("cr_meta_set_slot");
+        int bad = g_fail;
+        for (int t = 0; t < 20000; t++) {
+            memset(vdefs, 0x5A, sizeof vdefs); memset(cdefs, 0x5A, sizeof cdefs);
+            memset(vst, 0, sizeof vst); memset(cst, 0, sizeof cst);
+            u32 cap  = (rnd() % 100u) + 8u;
+            u32 used = rnd() % (cap + 1u);
+            if (used > 90u) used = 90u;
+            for (u32 off = 0; off + 12 <= used; off += 12) {
+                *(u32 *)(vst + 0xc + off) = rnd() % 6u;
+                *(u32 *)(vst + 0xc + off + 4) = 4;
+                *(u32 *)(vst + 0xc + off + 8) = rnd();
+            }
+            memcpy(cst, vst, sizeof vst);
+            /* debug-class tag: 0, 9, 11, 13 all satisfy cr_buf_is_debug_class */
+            u32 ty = (rnd() & 1u) ? 0u : (9u + 2u * (rnd() % 3u));
+            *(u32 *)(vst + 0) = ty; *(u32 *)(vst + 4) = cap; *(u32 *)(vst + 8) = used;
+            *(u32 *)(cst + 0) = ty; *(u32 *)(cst + 4) = cap; *(u32 *)(cst + 8) = used;
+            memset(vother, 0x33, sizeof vother); memset(cother, 0x33, sizeof cother);
+
+            u32 idx = rnd() % 24u;            /* includes out-of-range */
+            int kind = (int)(rnd() % 3u);     /* 0 null, 1 non-debug, 2 store */
+            void *vp = NULL, *cp = NULL;
+            if (kind == 1) {
+                *(u32 *)vother = 1u + (rnd() % 8u);
+                *(u32 *)cother = *(u32 *)vother;
+                vp = vother; cp = cother;
+            } else if (kind == 2) { vp = vst; cp = cst; }
+            if (idx < 0x16) {
+                *(void **)(vdefs + 0x10 + idx * 8) = vp;
+                *(void **)(cdefs + 0x10 + idx * 8) = cp;
+            }
+            int key = (int)rnd(), val = (int)rnd();
+            uint8_t rv = v(vdefs, idx, key, val);
+            uint8_t rc = cr_meta_set_slot(cdefs, idx, key, val);
+            if (rv != rc) mismatch("mss-ret", (u32)t, rv, rc);
+            if (memcmp(vst, cst, sizeof vst) != 0) mismatch("mss-store", (u32)t, 0, 0);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_meta_set_slot\n");
+    }
+
+    /* --- cr_obj_init_58 (0x180046b80) -------------------------------------- */
+    {
+        typedef uint64_t (WINAPI *v_u64_p)(void *);
+        v_u64_p v = (v_u64_p)fn_at(RVA(0x180046b80));
+        begin("cr_obj_init_58");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            u8 ov[0x58], oc[0x58];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            uint64_t rv = v(ov);
+            uint64_t rc = cr_obj_init_58(oc);
+            if (rv != rc) mismatch("init58-ret", (u32)t, rv, rc);
+            if (memcmp(ov, oc, sizeof ov) != 0) mismatch("init58", (u32)t, 0, 0);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_obj_init_58\n");
+    }
+
+    /* --- cr_alloc_handle (0x18002ad90) ------------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x18002ad90));
+        begin("cr_alloc_handle");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            void *ov = (void *)0xdead, *oc = (void *)0xdead;
+            v(&ov); cr_alloc_handle(&oc);
+            if ((ov == NULL) != (oc == NULL))
+                mismatch("ah-null", (u32)t, ov != NULL, oc != NULL);
+            if (ov) {
+                /* only compare the bytes the function writes: +0x00..+0x0c and
+                 * +0x10..+0x23 (0x0d..0x0f / 0x24..0x27 stay allocator garbage) */
+                if (memcmp(ov, oc, 0x0d) != 0) mismatch("ah-0", (u32)t, 0, 0);
+                if (memcmp((u8 *)ov + 0x10, (u8 *)oc + 0x10, 0x14) != 0)
+                    mismatch("ah-1", (u32)t, 0, 0);
+                vsfree(&ov); cr_sized_free(&oc);
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_alloc_handle\n");
+    }
+
+    /* --- cr_alloc_400 (0x18003fb70) ---------------------------------------- */
+    {
+        v_pp v = (v_pp)fn_at(RVA(0x18003fb70));
+        begin("cr_alloc_400");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            void *ov = (void *)0xdead, *oc = (void *)0xdead;
+            int rv = v(&ov); int rc = cr_alloc_400(&oc);
+            if (rv != rc) mismatch("a400-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0) {
+                if (memcmp(ov, oc, 0x38) != 0) mismatch("a400", (u32)t, 0, 0);
+                vsfree(&ov); cr_sized_free(&oc);
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_alloc_400\n");
+    }
+
+    /* --- cr_image_alloc_u8 / _s16 (0x18001d820, 0x18003d790) --------------- */
+    {
+        typedef int (WINAPI *v_i_pii)(int *, int, int);
+        static const char *nm[2] = { "cr_image_alloc_u8", "cr_image_alloc_s16" };
+        v_i_pii vf[2] = { (v_i_pii)fn_at(RVA(0x18001d820)),
+                          (v_i_pii)fn_at(RVA(0x18003d790)) };
+        int (*cf[2])(int *, int, int) = { cr_image_alloc_u8, cr_image_alloc_s16 };
+        for (int k = 0; k < 2; k++) {
+            begin(nm[k]);
+            int bad = g_fail;
+            for (int t = 0; t < 8000; t++) {
+                int va[8], ca[8];
+                memset(va, 0x5A, sizeof va); memset(ca, 0x5A, sizeof ca);
+                int w = (int)(rnd() % 64u), h = (int)(rnd() % 64u);
+                if (rnd() % 8u == 0) w = -(int)(rnd() % 4u);
+                if (rnd() % 8u == 0) h = -(int)(rnd() % 4u);
+                int rv = vf[k](va, w, h);
+                int rc = cf[k](ca, w, h);
+                if (rv != rc)
+                    mismatch("ia-ret", ((u64)(u32)w << 32) | (u32)h, (u32)rv, (u32)rc);
+                if (memcmp(va, ca, 8) != 0 ||
+                    memcmp((u8 *)va + 0x0c, (u8 *)ca + 0x0c, 0x14) != 0)
+                    mismatch("ia-fields", (u32)t, 0, 0);
+                if ((*(void **)(va + 2) != NULL) != (*(void **)(ca + 2) != NULL))
+                    mismatch("ia-ptr", (u32)t, *(void **)(va + 2) != NULL,
+                             *(void **)(ca + 2) != NULL);
+                if (rv == 0 && *(void **)(va + 2)) {   /* valid only on success */
+                    if (((uintptr_t)*(void **)(va + 2) & 0xf) ||
+                        ((uintptr_t)*(void **)(ca + 2) & 0xf))
+                        mismatch("ia-align", (u32)t, 0, 0);
+                    vsfree((void **)(va + 2)); cr_sized_free((void **)(ca + 2));
+                }
+            }
+            if (g_fail == bad) end(); else printf("  FAIL %s\n", nm[k]);
+        }
+    }
+
+    /* --- cr_free_obj_flags (0x18000f570) ----------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x18000f570));
+        static const int sl[4] = { 0x18, 0x58, 0x88, 0x38 };
+        begin("cr_free_obj_flags");
+        int bad = g_fail;
+        for (int t = 0; t < 6000; t++) {
+            u8 ov[0x98], oc[0x98];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            u32 fl = rnd() & 0x3ffu;
+            *(u32 *)(ov + 0x74) = fl; *(u32 *)(oc + 0x74) = fl;
+            for (int i = 0; i < 4; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + sl[i]) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + sl[i]) = c_sized_alloc(S, sz);
+                } else { *(void **)(ov + sl[i]) = NULL; *(void **)(oc + sl[i]) = NULL; }
+            }
+            v(ov); cr_free_obj_flags(oc);
+            for (int i = 0; i < 4; i++)
+                if ((*(void **)(ov + sl[i]) != NULL) != (*(void **)(oc + sl[i]) != NULL))
+                    mismatch("fof", (u32)i, *(void **)(ov + sl[i]) != NULL,
+                             *(void **)(oc + sl[i]) != NULL);
+            if (*(u32 *)(ov + 0x74) != *(u32 *)(oc + 0x74))
+                mismatch("fof-flags", (u32)t, *(u32 *)(ov + 0x74), *(u32 *)(oc + 0x74));
+        }
+        v(NULL); cr_free_obj_flags(NULL);
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_obj_flags\n");
+    }
+
+    /* --- cr_bitmap_alloc (0x180029750) ------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_ppuu)(u32 *, u32, u32);
+        v_i_ppuu v = (v_i_ppuu)fn_at(RVA(0x180029750));
+        begin("cr_bitmap_alloc");
+        int bad = g_fail;
+        for (int t = 0; t < 6000; t++) {
+            u32 va[8], ca[8];
+            memset(va, 0x5A, sizeof va); memset(ca, 0x5A, sizeof ca);
+            int w = (int)(rnd() % 200u), h = (int)(rnd() % 40u);
+            if (rnd() % 10u == 0) w = -(int)(rnd() % 4u);
+            if (rnd() % 10u == 0) h = -(int)(rnd() % 4u);
+            int rv = v(va, (u32)w, (u32)h);
+            int rc = cr_bitmap_alloc(ca, (u32)w, (u32)h);
+            if (rv != rc)
+                mismatch("ba-ret", ((u64)(u32)w << 32) | (u32)h, (u32)rv, (u32)rc);
+            if (va[0] != ca[0] || va[1] != ca[1] || va[3] != ca[3] ||
+                va[4] != ca[4] || va[5] != ca[5] || va[6] != ca[6] || va[7] != ca[7])
+                mismatch("ba-fields", (u32)t, 0, 0);
+            if ((*(void **)(va + 2) != NULL) != (*(void **)(ca + 2) != NULL))
+                mismatch("ba-ptr", (u32)t, 0, 0);
+            if (rv == 0 && *(void **)(va + 2)) {   /* valid only on success */
+                int r = (int)(((u32)w + 0x1fu) >> 5);
+                size_t nb = (size_t)r * (size_t)h * 4;
+                if (nb > 0 && memcmp(*(void **)(va + 2), *(void **)(ca + 2), nb) != 0)
+                    mismatch("ba-zero", (u32)t, 0, 0);
+                vsfree((void **)(va + 2)); cr_sized_free((void **)(ca + 2));
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_alloc\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3552,6 +3790,8 @@ int main(int argc, char **argv)
     test_corr_kbank();
     printf("\n== object-tree lifecycle helpers + image-data accessors ==\n");
     test_tree_helpers();
+    printf("\n== object constructors / flag-driven destructors ==\n");
+    test_tree_ctors();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
