@@ -431,4 +431,10 @@ int      cr_subview_extend_s16(cr_image *img, int t, int b,
 int      cr_subview_extend_u8(cr_image *img, int t, int b,
                               int l, int r);                 /* 0x180037f10 */
 
+/* ---- batch 50: nested destructor chain ---------------------------------- */
+void     cr_free_8slot_wrap(void **slot);                    /* 0x18003fcd0 */
+void     cr_obj_destroy(void *obj);                          /* 0x18001c680 */
+void     cr_wrap_destroy(void **slot);                       /* 0x180044ce0 */
+void     cr_wrap_destroy2(void **slot);                      /* 0x180043a10 */
+
 #endif /* FPC_BEP_H */

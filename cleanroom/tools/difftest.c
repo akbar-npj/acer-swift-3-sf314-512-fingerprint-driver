@@ -3699,6 +3699,196 @@ static void test_tree_higher(void)
     }
 }
 
+/* ---- batch 50: nested destructor chain --------------------------------- */
+/* The clean-room allocator (cr_malloc) is a normal SysV function, while the
+ * vendor one is an ms_abi (WINAPI) DLL function.  The builders therefore take
+ * a plain SysV allocator so the same code drives both sides; v_alloc bridges
+ * to the vendor function through the ms_abi-typed pointer. */
+static v_i_ppz g_vmalloc;
+static int v_alloc(void **o, size_t n) { return g_vmalloc(o, n); }
+
+static void *sized_alloc_via(int (*alloc)(void **, size_t), size_t S, int sz)
+{
+    void *b = NULL;
+    alloc(&b, S);
+    memset(b, 0, S);
+    ((uint8_t *)b)[sz - 1] = (uint8_t)sz;
+    return (uint8_t *)b + sz;
+}
+
+/* Build an 8-slot object (>= 0x58-byte payload) with randomly populated,
+ * independently sized sub-slots, using the supplied allocator. */
+static void *build_8slot(int (*alloc)(void **, size_t))
+{
+    size_t S = 0x80; int sz = 0x18;
+    void *b = NULL;
+    alloc(&b, S);
+    memset(b, 0, S);
+    ((uint8_t *)b)[sz - 1] = (uint8_t)sz;
+    void *obj = (uint8_t *)b + sz;
+    static const int sl[8] = { 0x00,0x28,0x38,0x08,0x18,0x10,0x48,0x50 };
+    for (int i = 0; i < 8; i++) {
+        if (rnd() & 1) {
+            size_t S2 = 2 + rnd() % 64u; int sz2 = 1 + (int)(rnd() % (u32)S2);
+            *(void **)((uint8_t *)obj + sl[i]) = sized_alloc_via(alloc, S2, sz2);
+        } else {
+            *(void **)((uint8_t *)obj + sl[i]) = NULL;
+        }
+    }
+    return obj;
+}
+
+/* Build a 0x58-byte object for cr_free_obj_28_8 / cr_obj_destroy: flag byte at
+ * +0x50, sized slots at +0x28 and +8, and (optionally) an 8-slot object at
+ * +0x48 for the cr_free_8slot_wrap half of cr_obj_destroy. */
+static void *build_obj58(int (*alloc)(void **, size_t), int with8slot)
+{
+    size_t S = 0x80; int sz = 0x18;
+    void *b = NULL;
+    alloc(&b, S);
+    memset(b, 0, S);
+    ((uint8_t *)b)[sz - 1] = (uint8_t)sz;
+    void *obj = (uint8_t *)b + sz;
+    *(uint8_t *)((uint8_t *)obj + 0x50) = (uint8_t)(rnd() & 1u);
+    if (rnd() & 1) {
+        size_t S2 = 2 + rnd() % 64u; int sz2 = 1 + (int)(rnd() % (u32)S2);
+        *(void **)((uint8_t *)obj + 0x28) = sized_alloc_via(alloc, S2, sz2);
+    } else {
+        *(void **)((uint8_t *)obj + 0x28) = NULL;
+    }
+    if (rnd() & 1) {
+        size_t S2 = 2 + rnd() % 64u; int sz2 = 1 + (int)(rnd() % (u32)S2);
+        *(void **)((uint8_t *)obj + 8) = sized_alloc_via(alloc, S2, sz2);
+    } else {
+        *(void **)((uint8_t *)obj + 8) = NULL;
+    }
+    if (with8slot && (rnd() & 1))
+        *(void **)((uint8_t *)obj + 0x48) = build_8slot(alloc);
+    else
+        *(void **)((uint8_t *)obj + 0x48) = NULL;
+    return obj;
+}
+
+/* Build the outer object for cr_wrap_destroy2: a sized block whose +8 slot
+ * holds (optionally) a full 0x58 object for the inner cr_wrap_destroy. */
+static void *build_outer_for_wrap2(int (*alloc)(void **, size_t))
+{
+    size_t S = 0x80; int sz = 0x18;
+    void *b = NULL;
+    alloc(&b, S);
+    memset(b, 0, S);
+    ((uint8_t *)b)[sz - 1] = (uint8_t)sz;
+    void *outer = (uint8_t *)b + sz;
+    if (rnd() & 1)
+        *(void **)((uint8_t *)outer + 8) = build_obj58(alloc, 1);
+    else
+        *(void **)((uint8_t *)outer + 8) = NULL;
+    return outer;
+}
+
+static void test_tree_nested(void)
+{
+    g_vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+
+    /* --- cr_free_8slot_wrap (0x18003fcd0) ---------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x18003fcd0));
+        begin("cr_free_8slot_wrap");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            int kind = (int)(rnd() % 3u);     /* 0 NULL slot, 1 NULL *slot, 2 object */
+            void *vslot = NULL, *cslot = NULL;
+            if (kind == 2) {
+                u32 sv = rng_state;           /* same random structure both sides */
+                vslot = build_8slot(v_alloc);
+                rng_state = sv;
+                cslot = build_8slot(cr_malloc);
+            }
+            void *vsp = (kind == 0) ? NULL : &vslot;
+            void *csp = (kind == 0) ? NULL : &cslot;
+            v(vsp); cr_free_8slot_wrap((void **)csp);
+            if (kind == 0)
+                continue;
+            if (vslot != NULL || cslot != NULL)
+                mismatch("f8w-null", (u32)t, (u64)vslot, (u64)cslot);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_8slot_wrap\n");
+    }
+
+    /* --- cr_obj_destroy (0x18001c680) -------------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x18001c680));
+        begin("cr_obj_destroy");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u32 sv = rng_state;               /* same random structure both sides */
+            void *vobj = build_obj58(v_alloc, 1);
+            rng_state = sv;
+            void *cobj = build_obj58(cr_malloc, 1);
+            /* capture the flag byte (cr_obj_destroy must not touch it) */
+            u8 vf = *(u8 *)((u8 *)vobj + 0x50);
+            v(vobj); cr_obj_destroy(cobj);
+            if (*(void **)((u8 *)vobj + 0x28) != NULL ||
+                *(void **)((u8 *)cobj + 0x28) != NULL)
+                mismatch("od-28", (u32)t, 0, 0);
+            if (*(void **)((u8 *)vobj + 0x48) != NULL ||
+                *(void **)((u8 *)cobj + 0x48) != NULL)
+                mismatch("od-48", (u32)t, 0, 0);
+            /* +8 is freed only when the flag byte has bit 0 set */
+            int v8 = (*(void **)((u8 *)vobj + 8) != NULL);
+            int c8 = (*(void **)((u8 *)cobj + 8) != NULL);
+            if ((vf & 1u) ? (v8 || c8) : (v8 != c8))
+                mismatch("od-8", (u32)t, (u64)v8, (u64)c8);
+            if (*(u8 *)((u8 *)vobj + 0x50) != *(u8 *)((u8 *)cobj + 0x50))
+                mismatch("od-flag", (u32)t,
+                         *(u8 *)((u8 *)vobj + 0x50), *(u8 *)((u8 *)cobj + 0x50));
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_obj_destroy\n");
+    }
+
+    /* --- cr_wrap_destroy (0x180044ce0) ------------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x180044ce0));
+        begin("cr_wrap_destroy");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            int kind = (int)(rnd() & 1u);     /* 0 NULL *slot, 1 full object */
+            void *vslot = NULL, *cslot = NULL;
+            if (kind == 1) {
+                u32 sv = rng_state;           /* same random structure both sides */
+                vslot = build_obj58(v_alloc, 1);
+                rng_state = sv;
+                cslot = build_obj58(cr_malloc, 1);
+            }
+            v(&vslot); cr_wrap_destroy(&cslot);
+            if (vslot != NULL || cslot != NULL)
+                mismatch("wd-null", (u32)t, (u64)vslot, (u64)cslot);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_wrap_destroy\n");
+    }
+
+    /* --- cr_wrap_destroy2 (0x180043a10) ------------------------------------ */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x180043a10));
+        begin("cr_wrap_destroy2");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            int kind = (int)(rnd() & 1u);     /* 0 NULL *slot, 1 full object */
+            void *vslot = NULL, *cslot = NULL;
+            if (kind == 1) {
+                u32 sv = rng_state;           /* same random structure both sides */
+                vslot = build_outer_for_wrap2(v_alloc);
+                rng_state = sv;
+                cslot = build_outer_for_wrap2(cr_malloc);
+            }
+            v(&vslot); cr_wrap_destroy2(&cslot);
+            if (vslot != NULL || cslot != NULL)
+                mismatch("wd2-null", (u32)t, (u64)vslot, (u64)cslot);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_wrap_destroy2\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3958,6 +4148,8 @@ int main(int argc, char **argv)
     test_tree_ctors();
     printf("\n== higher-level destructors / accessors ==\n");
     test_tree_higher();
+    printf("\n== nested destructor chain ==\n");
+    test_tree_nested();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -448,3 +448,64 @@ uint8_t cr_meta_get_slot(const void *defs, uint32_t idx, int key, uint32_t *out)
         return 0x6a;
     return cr_meta_get_u32(p, (uint32_t)key, out) != 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003fcd0 — free a sized object held in a slot: tear down its 8 sub-slots
+ * (cr_free_8slot) then release the block itself via the sized allocator.
+ *   void fn(void **slot):
+ *     if (slot) {
+ *         if (*slot) cr_free_8slot(*slot);
+ *         cr_sized_free(slot);
+ *     }
+ * ------------------------------------------------------------------------ */
+void cr_free_8slot_wrap(void **slot)
+{
+    if (slot) {
+        if (*slot)
+            cr_free_8slot(*slot);
+        cr_sized_free(slot);
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001c680 — destroy an object: release the sized slot at obj+0x48 (via
+ * cr_free_8slot_wrap) then free the 28/8-byte object itself.
+ *   void fn(void *obj):
+ *     cr_free_8slot_wrap((void **)((uint8_t *)obj + 0x48));
+ *     cr_free_obj_28_8(obj);
+ * ------------------------------------------------------------------------ */
+void cr_obj_destroy(void *obj)
+{
+    cr_free_8slot_wrap((void **)((uint8_t *)obj + 0x48));
+    cr_free_obj_28_8(obj);
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180044ce0 — destroy a wrapper: if the held object is present, destroy it
+ * (cr_obj_destroy) and release the wrapper slot itself.
+ *   void fn(void **slot):
+ *     if (*slot) { cr_obj_destroy(*slot); cr_sized_free(slot); }
+ * ------------------------------------------------------------------------ */
+void cr_wrap_destroy(void **slot)
+{
+    if (*slot) {
+        cr_obj_destroy(*slot);
+        cr_sized_free(slot);
+    }
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180043a10 — destroy an outer wrapper: if the held object is present,
+ * destroy the inner wrapper at *slot+8 (cr_wrap_destroy) and release the outer
+ * slot itself.
+ *   void fn(void **slot):
+ *     if (*slot) { cr_wrap_destroy((void **)((uint8_t *)*slot + 8));
+ *                  cr_sized_free(slot); }
+ * ------------------------------------------------------------------------ */
+void cr_wrap_destroy2(void **slot)
+{
+    if (*slot) {
+        cr_wrap_destroy((void **)((uint8_t *)*slot + 8));
+        cr_sized_free(slot);
+    }
+}

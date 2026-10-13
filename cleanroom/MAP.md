@@ -351,6 +351,15 @@ side effects, never raw pointer values.
 | `0x1800342d0` | `fpc_bio_bep_sw23_9eab7bca41` | `cr_subview_extend_s16` | `int fn(cr_image *img, int t, int b, int l, int r)`: `w2 = (img->w - l) - r`; `w2 < 0`→`0x69`; `h2 = (img->h - t) - b`; `h2 < 0`→`0x69`; `cr_image_subview(&local, img, l, t, w2, h2)`, then `cr_image_border_extend_s16(&local, t, b, l, r)`; return 0. Effectively "crop `(l,t)`-anchored `(w2,h2)` then pad the border back out". |
 | `0x180037f10` | `fpc_bio_bep_sw23_aefaa44d78.isra.1` | `cr_subview_extend_u8` | The byte-image twin: identical crop + `cr_image_border_extend` (8-bit). |
 
+### Batch 50 — nested destructor chain
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18003fcd0` | `fpc_bio_bep_sw23_d6892b18e4` | `cr_free_8slot_wrap` | `void fn(void **slot)`: if `slot` is NULL return; if `*slot` non-NULL call `cr_free_8slot(*slot)`; then **unconditionally** `cr_sized_free(slot)` (which NULLs `*slot`; a no-op on a NULL `*slot`). |
+| `0x18001c680` | `fpc_bio_bep_sw23_32f906bc87` | `cr_obj_destroy` | `void fn(void *obj)`: `cr_free_8slot_wrap((void**)(obj + 0x48))` then `cr_free_obj_28_8(obj)`. Frees only the owned sub-objects (and NULLs their slots); the object itself is released by the caller. |
+| `0x180044ce0` | `fpc_bio_bep_sw23_ee965c1257.constprop.2` | `cr_wrap_destroy` | `void fn(void **slot)`: if `*slot` non-NULL, `cr_obj_destroy(*slot)` then `cr_sized_free(slot)` (frees the held object and NULLs `*slot`); if `*slot` is NULL, no-op. |
+| `0x180043a10` | `fpc_bio_bep_sw23_e76dc431bf` | `cr_wrap_destroy2` | `void fn(void **slot)`: if `*slot` non-NULL, `cr_wrap_destroy((void**)((uint8_t*)*slot + 8))` then `cr_sized_free(slot)`; if `*slot` is NULL, no-op. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
