@@ -75,12 +75,14 @@ float cr_expf(float x)
     int   k;
     float f;
 
-    if (x > 88.72280121f) {                 /* overflow clamp */
+    if (x > 88.72280121f) {                 /* overflow clamp; NaN -> false */
         k = 0x80;
         f = 0.999961853f;
         goto scale;
     }
-    if (x >= -87.33650208f) {               /* normal path */
+    /* The vendor tests `ucomiss -87.3365, x ; jbe` — jbe is taken when
+     * unordered, so NaN falls into the normal path, not the clamp. */
+    if (!(-87.33650208f > x)) {             /* normal path */
         float q = x / LN2;
         /* round-half-away-from-zero, then truncate (cvttss2si) */
         if (q > 0.0f) k = (int)(q + 0.5f);
@@ -107,7 +109,9 @@ float cr_expf(float x)
     }
 
 scale:
-    return cr_u2f(cr_f2u(f) + (uint32_t)(k * 0x800000));
+    /* vendor: mov eax,k ; shl eax,23 ; add eax,bits(f)  — a 32-bit shift, so
+     * k=INT_MIN (NaN path) contributes 0. Use an unsigned shift to avoid UB. */
+    return cr_u2f(cr_f2u(f) + ((uint32_t)k << 23));
 }
 
 /* ------------------------------------------------------------------------ *

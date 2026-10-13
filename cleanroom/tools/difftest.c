@@ -57,6 +57,10 @@ static void setup_teb(void)
 
 static u8 *g_base;
 
+/* The image is mapped at its preferred base 0x180000000; convert an absolute
+ * vendor VA to the RVA the loader is based on. */
+#define RVA(va) ((u32)((va) - 0x180000000u))
+
 static void *fn_at(u32 rva) { return (void *)(g_base + rva); }
 
 /* ---- result accounting ------------------------------------------------- */
@@ -84,7 +88,7 @@ typedef float (WINAPI *v_ff)(float);
 typedef int   (WINAPI *v_if)(float);
 
 static void test_float_fn(const char *name, u32 rva,
-                          float (*clean)(float), int ret_int)
+                          void *clean, int ret_int)
 {
     begin(name);
     void *p = fn_at(rva);
@@ -95,10 +99,10 @@ static void test_float_fn(const char *name, u32 rva,
         u32 bits = (u32)i;
         float x = cr_u2f(bits);
         if (ret_int) {
-            int v = ((v_if)p)(x), c = (int)clean(x);
+            int v = ((v_if)p)(x), c = ((int (*)(float))clean)(x);
             if (v != c) mismatch("int", bits, (u32)v, (u32)c);
         } else {
-            float v = ((v_ff)p)(x), c = clean(x);
+            float v = ((v_ff)p)(x), c = ((float (*)(float))clean)(x);
             if (cr_f2u(v) != cr_f2u(c)) mismatch("bits", bits, cr_f2u(v), cr_f2u(c));
         }
     }
@@ -112,10 +116,10 @@ static void test_float_fn(const char *name, u32 rva,
     for (size_t i = 0; i < sizeof specials / sizeof specials[0]; i++) {
         float x = specials[i];
         if (ret_int) {
-            int v = ((v_if)p)(x), c = (int)clean(x);
+            int v = ((v_if)p)(x), c = ((int (*)(float))clean)(x);
             if (v != c) mismatch("int-sp", cr_f2u(x), (u32)v, (u32)c);
         } else {
-            float v = ((v_ff)p)(x), c = clean(x);
+            float v = ((v_ff)p)(x), c = ((float (*)(float))clean)(x);
             if (cr_f2u(v) != cr_f2u(c)) mismatch("bits-sp", cr_f2u(x), cr_f2u(v), cr_f2u(c));
         }
     }
@@ -136,9 +140,9 @@ static u32 rnd(void) { rng_state = rng_state * 1103515245u + 12345u; return rng_
 static void test_type_predicates(void)
 {
     struct { const char *name; u32 rva; bool (*clean)(const void *); } fns[] = {
-        { "cr_buf_is_pixels",         0x1800490d0, cr_buf_is_pixels },
-        { "cr_buf_is_metadata_class", 0x180049120, cr_buf_is_metadata_class },
-        { "cr_buf_is_debug_class",    0x1800490f0, cr_buf_is_debug_class },
+        { "cr_buf_is_pixels",         RVA(0x1800490d0), cr_buf_is_pixels },
+        { "cr_buf_is_metadata_class", RVA(0x180049120), cr_buf_is_metadata_class },
+        { "cr_buf_is_debug_class",    RVA(0x1800490f0), cr_buf_is_debug_class },
     };
     for (size_t k = 0; k < sizeof fns / sizeof fns[0]; k++) {
         begin(fns[k].name);
@@ -158,8 +162,8 @@ static void test_type_predicates(void)
 
 static void test_metadata(void)
 {
-    v_meta_put vput = (v_meta_put)fn_at(0x18004b670);
-    v_meta_get vget = (v_meta_get)fn_at(0x18004b4e0);
+    v_meta_put vput = (v_meta_put)fn_at(RVA(0x18004b670));
+    v_meta_get vget = (v_meta_get)fn_at(RVA(0x18004b4e0));
 
     begin("cr_meta_put_u32");
     int bad = g_fail;
@@ -220,8 +224,8 @@ static void test_metadata(void)
 
 static void test_image_slots(void)
 {
-    v_slot vdef = (v_slot)fn_at(0x18004aa70);
-    v_slot vemp = (v_slot)fn_at(0x18004a250);
+    v_slot vdef = (v_slot)fn_at(RVA(0x18004aa70));
+    v_slot vemp = (v_slot)fn_at(RVA(0x18004a250));
 
     begin("cr_image_slot_defined/empty");
     int bad = g_fail;
@@ -264,10 +268,10 @@ int main(int argc, char **argv)
     printf("[+] DllMain -> %d\n\n", ok);
 
     printf("== math kernel ==\n");
-    test_float_fn("cr_sqrtf",         0x180003080, cr_sqrtf,          0);
-    test_float_fn("cr_expf",          0x180002dd0, cr_expf,           0);
-    test_float_fn("cr_roundf_to_int", 0x180003020, cr_roundf_to_int,  1);
-    test_float_fn("cr_floorf_to_int", 0x180002f70, cr_floorf_to_int,  1);
+    test_float_fn("cr_sqrtf",         RVA(0x180003080), (void *)cr_sqrtf,          0);
+    test_float_fn("cr_expf",          RVA(0x180002dd0), (void *)cr_expf,           0);
+    test_float_fn("cr_roundf_to_int", RVA(0x180003020), (void *)cr_roundf_to_int,  1);
+    test_float_fn("cr_floorf_to_int", RVA(0x180002f70), (void *)cr_floorf_to_int,  1);
 
     printf("\n== buffer predicates ==\n");
     test_type_predicates();

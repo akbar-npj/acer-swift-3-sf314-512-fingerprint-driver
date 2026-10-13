@@ -71,6 +71,21 @@ cleanroom/
 └── MAP.md                vendor RVA <-> clean-room name <-> semantics
 ```
 
+## Gotchas discovered while transcribing
+
+- **`jbe`/`ja` are not `<=`/`>`.** The vendor's SSE compares branch on the raw
+  flags. `ucomiss a,b ; jbe` is taken when `CF|ZF`, i.e. **also when unordered
+  (NaN)**. So `if (x >= c)` in C is *wrong* for the branch — the faithful form is
+  `if (!(c > x))`. This bit `cr_expf`: the vendor sends NaN down the *normal*
+  path, not the clamp.
+- **Exponent scaling is a 32-bit shift, not a multiply.** `ldexp` is done as
+  `bits(f) + (k << 23)` with `k` an `int`; for `k = INT_MIN` (the NaN path) the
+  shift yields 0. Use `(uint32_t)k << 23`, never `k * 0x800000` (signed-overflow
+  UB and a different value).
+- **Table-driven seeds must be copied byte-exact.** `cr_sqrtf`'s 256-byte
+  inverse-sqrt seed table lives at `0x180159500`; the difftest confirms parity
+  only because it is reproduced verbatim.
+
 ## Progress
 
 | metric | value |
