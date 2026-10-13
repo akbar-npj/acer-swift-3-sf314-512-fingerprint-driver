@@ -148,6 +148,7 @@ void     cr_orient_pick(uint8_t *arr, uint8_t *flag, int *out,
                         const uint8_t *const *src, const int16_t *coeff,
                         int half, int k);                             /* 0x1800309a0 */
 float    cr_atan2_deg(float a, float b);                              /* 0x1800391b0 */
+void     cr_sincos_f32(float *out_cos, float *out_sin, float x);      /* 0x18000eca0 */
 
 /* ---- batch 7: 272-byte leaves ------------------------------------------ */
 int      cr_matmul_nt(const float *in, int nrows, int K, const float *W,

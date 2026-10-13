@@ -130,6 +130,12 @@ The image descriptor layout (established from these functions):
 | `0x180034190` | `fpc_bio_bep_sw23_9e452a5621.isra.7.constprop.13` | `cr_bitmap_popcount` | total popcount of a bitmap with row stride `a` bits and `w` significant bits per row: sums the `w/32` full words per row, plus (when `w!=a`) the partial word masked to `0xffffffff >> ((a-w)&31)`. |
 | `0x180026fb0` | `fpc_bio_bep_sw23_66bb0714da` | `cr_downsample_mean` | integer-factor block-average downsample: `out[r*ow+c] = (int16)(Σ over f×f block of in / (f*f))` (signed, truncated); returns `0x69` if `ow*f < iw` or `oh*f < ih`, else 0; packed images, no stride/origin. |
 
+### Batch 12 — 384-byte sin/cos leaf
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x18000eca0` | `fpc_bio_bep_sw23_045ad05bbf` | `cr_sincos_f32` | high-accuracy `sin`/`cos` pair (float). Range-reduce `x` by `2π`, split at `π` (sign flip) and `π/2` (branch), evaluate `sin(u)`/`cos(u)` by 8th-order Taylor polynomials, combine through the `√2/2` angle-split identity. Angle arrives in `xmm0`; out-pointers map to `rcx`/`rdx`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
@@ -137,6 +143,7 @@ The image descriptor layout (established from these functions):
 | `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | returns static table pointers — needs the table contents. |
 | `0x18002aeb0` | `fpc_bio_bep_sw23_769acc1eef` | returns a pointer to the static table `DAT_180159ea0` (type 4) — needs the table contents. |
 | `0x180020860` | `fpc_bio_bep_sw23_46f04b866a` | static tables `DAT_180122980` (type 0xc), `DAT_1801598e0` (0xd). |
+| `0x18001c4e0` | `fpc_bio_bep_sw23_3281879ff9` | int16 multi-region border-fill leaf (384 B) — needs exact argument layout confirmed (5–6 args incl. stack). |
 | `0x180012f30` | `fpc_bio_bep_sw23_16c9802c18` | static table `DAT_1801174e0` (type 6) + writes `0x100`. |
 | `0x1800448f0` | `fpc_bio_bep_sw23_eb7a7b573f` | static tables `DAT_180120480` (0), `DAT_18011dd40` (1). |
 | `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued). |

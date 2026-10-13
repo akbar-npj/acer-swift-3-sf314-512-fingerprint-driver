@@ -1363,6 +1363,29 @@ static void test_downsample_mean(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_downsample_mean\n");
 }
 
+/* 0x18000eca0 — sin/cos pair.  The float angle arrives in xmm0. */
+typedef void (WINAPI *v_v_ppf_f)(void *, void *, float);
+
+static void test_sincos_f32(void)
+{
+    begin("cr_sincos_f32");
+    void *p = fn_at(RVA(0x18000eca0));
+    int bad = g_fail;
+
+    for (u64 i = 0; i < 0x100000000ULL; i += 0x10001ULL) {
+        u32 bits = (u32)i;
+        float x = cr_u2f(bits);
+        float vc[2], cc[2];
+        ((v_v_ppf_f)p)(vc, vc + 1, x);
+        ((v_v_ppf_f)cr_sincos_f32)(cc, cc + 1, x);
+        if (cr_f2u(vc[0]) != cr_f2u(cc[0]))
+            mismatch("cos", bits, cr_f2u(vc[0]), cr_f2u(cc[0]));
+        if (cr_f2u(vc[1]) != cr_f2u(cc[1]))
+            mismatch("sin", bits, cr_f2u(vc[1]), cr_f2u(cc[1]));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_sincos_f32\n");
+}
+
 
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
@@ -1603,6 +1626,8 @@ int main(int argc, char **argv)
 
     printf("\n== 336-byte leaf ==\n");
     test_downsample_mean();
+    printf("\n== 384-byte leaf (sincos) ==\n");
+    test_sincos_f32();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

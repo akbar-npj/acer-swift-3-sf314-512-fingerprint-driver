@@ -232,3 +232,60 @@ float cr_atan2_deg(float a, float b)
 
     return r;
 }
+
+/* 0x18000eca0 — high-accuracy sin/cos pair (float).  Reads the angle from
+ * xmm0; the two out pointers map to rcx/rdx.
+ *
+ * Range reduction:  eax = (int)(x / (2*pi));  if (x/(2pi) < 0) eax -= 1;
+ * r = x - (2*eax)*(pi), giving r in [0, 2*pi).  A second split: if r > pi
+ * then r1 = r - pi and S = -1, else r1 = r and S = +1.  Then if r1 > pi/2
+ * (high) the routine works with u = (r1 - pi/2) - pi/4, otherwise (low)
+ * u = r1 - pi/4.  sin(u) and cos(u) are evaluated by 8th-order Taylor
+ * polynomials and combined through the sqrt(2)/2 angle-split identities with
+ * the sign S, yielding cos(x) in *out_cos and sin(x) in *out_sin. */
+void cr_sincos_f32(float *out_cos, float *out_sin, float x)
+{
+    float q = x / 0x1.921fb60000000p+2f;          /* x / (2*pi) */
+    int eax = (int)q;                              /* cvttss2si (truncate) */
+    if (0.0f > q)
+        eax -= 1;                                  /* floor toward -inf */
+
+    float e2 = (float)eax * 2.0f;                  /* 2*eax, exact */
+    float r  = x - e2 * 0x1.921fb60000000p+1f;     /* x - 2*eax*pi */
+
+    float S, r1;
+    if (!(r > 0x1.921fb60000000p+1f)) {            /* jbe: r <= pi (or NaN) */
+        S = 1.0f;
+        r1 = r;
+    } else {
+        r1 = r - 0x1.921fb60000000p+1f;            /* r1 = r - pi */
+        S = -1.0f;
+    }
+
+    int high = (r1 > 0x1.921fb60000000p+0f);        /* r1 > pi/2 */
+    float u;
+    if (high)
+        u = (r1 - 0x1.921fb60000000p+0f) - 0x1.921fb60000000p-1f;  /* (r1-pi/2)-pi/4 */
+    else
+        u = r1 - 0x1.921fb60000000p-1f;            /* r1 - pi/4 */
+
+    float w = u * u;
+
+    /* sin(u)/u - 1  =  (((c6*w - c4)*w + c5)*w - c1)*w */
+    float poly2 = (((0x1.71de3a0000000p-19f * w - 0x1.a01a020000000p-13f) * w
+                    + 0x1.1111120000000p-7f) * w - 0x1.5555560000000p-3f) * w;
+    float sin_u = (poly2 + 1.0f) * u;
+
+    /* cos(u) - 1  =  (((c7*w - c3)*w + c2)*w - c0)*w */
+    float poly0 = (((0x1.a01a020000000p-16f * w - 0x1.6c16c20000000p-10f) * w
+                    + 0x1.5555560000000p-5f) * w - 0x1.0000000000000p-1f) * w;
+    float cos_u = poly0 + 1.0f;
+
+    float P = S * 0x1.6a09e60000000p-1f;          /* S * sqrt(2)/2 */
+    float init = high ? -P : P;                   /* xmm4_init sign */
+    float oc = init * cos_u - P * sin_u;
+    float os = init * sin_u + P * cos_u;
+
+    *out_cos = oc;
+    *out_sin = os;
+}
