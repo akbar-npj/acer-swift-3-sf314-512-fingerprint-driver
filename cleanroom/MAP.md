@@ -340,6 +340,17 @@ side effects, never raw pointer values.
 | `0x18000f570` | `fpc_bio_bep_sw23_05db73508b` | `cr_free_obj_flags` | `void fn(void *obj)`: flag-driven destructor. `f = *(u32*)(obj+0x74)`; `if (f&1) cr_cleanup_ptr8_a(obj+0x10)`; `if (f&2) cr_cleanup_ptr8_b(obj+0x50)`; `if (f&0x100) cr_sized_free((void**)(obj+0x88))`; `if (f&0x200) cr_cleanup_ptr8_clear(obj+0x30)`. The vendor reloads `f` after each free (reproduced verbatim). |
 | `0x180029750` | `fpc_bio_bep_sw23_7346394a98` | `cr_bitmap_alloc` | `int fn(uint32_t *desc, u32 w, u32 h)`: NULL→1; `w<0||h<0`→`0x69`; write `desc[1]=desc[5]=h`, `desc[4]=w`, `desc[0]=(w+0x1f)&~0x1f` (row stride rounded to 32), `desc[2]=desc[3]=desc[6]=desc[7]=0`; `r=(int)(w+0x1f)>>5`; if `h*r==0`→0; else `cr_malloc_aligned16((void**)(desc+2), (long long)r*(long long)(int)h*4)` and zero all `(desc[0]*desc[1])>>5` dwords; on the (unreachable, since `desc[0]` is always 32-aligned) non-aligned branch it frees and returns `0x69`. |
 
+### Batch 49 — higher-level destructors / accessors
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180039390` | `fpc_bio_bep_sw23_b4a9504f57` | `cr_clz_or32` | `int fn(uint32_t x)`: `x ? cr_clz(x) : 0x20` (32). |
+| `0x18003d430` | `fpc_bio_bep_sw23_c7c4fecba2` | `cr_free_8slot` | `void fn(void *obj)`: sized-free the eight owned pointers, in the vendor's order — `+0x00, +0x28, +0x38, +0x08, +0x18, +0x10, +0x48, +0x50`. No NULL guard (each free is a no-op on a NULL slot). |
+| `0x180035740` | `fpc_bio_bep_sw23_a457bca0e1` | `cr_alloc_obj_58` | `int fn(void **out)`: NULL→1; `i = cr_malloc_aligned16(out, 0x58)`; if `i != 0` return `i`; else if `*out == NULL` set `i = 1`; else `i = cr_obj_init_58(*out)` and, if that returns 0, **return 0 without freeing**; otherwise `cr_sized_free(out)`; return `i`. (The 32-bit return was confirmed from the assembly — `MOV EAX, …` only.) |
+| `0x18003a8d0` | `fpc_bio_bep_sw23_b664476fb3` | `cr_meta_get_slot` | `uint8_t fn(const void *defs, u32 idx, int key, u32 *out)`: `p = cr_image_get_dp(defs, idx)`; if `!p` return `0x6a`; else return `cr_meta_get_u32(p, key, out) != 0`. (Its callee `0x18004b3f0` is a thunk to `fpc_metadata_get_uint16`.) |
+| `0x1800342d0` | `fpc_bio_bep_sw23_9eab7bca41` | `cr_subview_extend_s16` | `int fn(cr_image *img, int t, int b, int l, int r)`: `w2 = (img->w - l) - r`; `w2 < 0`→`0x69`; `h2 = (img->h - t) - b`; `h2 < 0`→`0x69`; `cr_image_subview(&local, img, l, t, w2, h2)`, then `cr_image_border_extend_s16(&local, t, b, l, r)`; return 0. Effectively "crop `(l,t)`-anchored `(w2,h2)` then pad the border back out". |
+| `0x180037f10` | `fpc_bio_bep_sw23_aefaa44d78.isra.1` | `cr_subview_extend_u8` | The byte-image twin: identical crop + `cr_image_border_extend` (8-bit). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

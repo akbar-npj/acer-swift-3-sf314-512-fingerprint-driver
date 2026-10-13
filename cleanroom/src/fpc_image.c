@@ -641,3 +641,45 @@ void cr_mirror_extend_s16(cr_image *img, int top, int bottom, int left,
         } while (ctr != end);
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800342d0 — crop a sub-view then extend its border back (int16 image).
+ *   int fn(cr_image *img, int t, int b, int l, int r):
+ *     w2 = (img->w - l) - r;  if (w2 < 0) return 0x69;
+ *     h2 = (img->h - t) - b;  if (h2 < 0) return 0x69;
+ *     cr_image_subview(&local, img, l, t, w2, h2);
+ *     cr_image_border_extend_s16(&local, t, b, l, r);
+ *     return 0;
+ * ------------------------------------------------------------------------ */
+int cr_subview_extend_s16(cr_image *img, int t, int b, int l, int r)
+{
+    int w2 = (img->w - l) - r;
+    if (w2 < 0)
+        return 0x69;
+    int h2 = (img->h - t) - b;
+    if (h2 < 0)
+        return 0x69;
+    cr_image local;
+    cr_image_subview(&local, img, l, t, w2, h2);
+    cr_image_border_extend_s16(&local, t, b, l, r);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180037f10 — the byte-image twin: same crop + border-extend, using the
+ * 8-bit border extend.
+ *   int fn(cr_image *img, int t, int b, int l, int r)
+ * ------------------------------------------------------------------------ */
+int cr_subview_extend_u8(cr_image *img, int t, int b, int l, int r)
+{
+    int w2 = (img->w - l) - r;
+    if (w2 < 0)
+        return 0x69;
+    int h2 = (img->h - t) - b;
+    if (h2 < 0)
+        return 0x69;
+    cr_image local;
+    cr_image_subview(&local, img, l, t, w2, h2);
+    cr_image_border_extend(&local, t, b, l, r);
+    return 0;
+}

@@ -3535,6 +3535,170 @@ static void test_tree_ctors(void)
     }
 }
 
+/* ---- batch 49: higher-level destructors / accessors --------------------- */
+static void test_tree_higher(void)
+{
+    v_i_ppz vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+    v_v_p   vsfree  = (v_v_p)fn_at(RVA(0x18003bf40));
+
+    /* --- cr_clz_or32 (0x180039390) ----------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_u)(uint32_t);
+        v_i_u v = (v_i_u)fn_at(RVA(0x180039390));
+        begin("cr_clz_or32");
+        int bad = g_fail;
+        for (int t = 0; t < 20000; t++) {
+            uint32_t x = (rnd() % 8u == 0) ? 0u : rnd();
+            if (rnd() % 16u == 0) x = 1u << (rnd() % 32u);
+            int rv = v(x), rc = cr_clz_or32(x);
+            if (rv != rc) mismatch("clz32", x, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_clz_or32\n");
+    }
+
+    /* --- cr_free_8slot (0x18003d430) --------------------------------------- */
+    {
+        v_v_p v = (v_v_p)fn_at(RVA(0x18003d430));
+        static const int sl[8] = { 0x00,0x08,0x10,0x18,0x28,0x38,0x48,0x50 };
+        begin("cr_free_8slot");
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            u8 ov[0x58], oc[0x58];
+            memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+            for (int i = 0; i < 8; i++) {
+                if (rnd() & 1) {
+                    size_t S = 2 + rnd() % 64u; int sz = 1 + (int)(rnd() % (u32)S);
+                    *(void **)(ov + sl[i]) = v_sized_alloc(vmalloc, S, sz);
+                    *(void **)(oc + sl[i]) = c_sized_alloc(S, sz);
+                } else { *(void **)(ov + sl[i]) = NULL; *(void **)(oc + sl[i]) = NULL; }
+            }
+            v(ov); cr_free_8slot(oc);
+            for (int i = 0; i < 8; i++)
+                if (*(void **)(ov + sl[i]) != NULL || *(void **)(oc + sl[i]) != NULL)
+                    mismatch("8slot-null", (u32)i,
+                             (u64)*(void **)(ov + sl[i]), (u64)*(void **)(oc + sl[i]));
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_free_8slot\n");
+    }
+
+    /* --- cr_alloc_obj_58 (0x180035740) ------------------------------------- */
+    {
+        typedef int (WINAPI *v_i_pp)(void *);
+        v_i_pp v = (v_i_pp)fn_at(RVA(0x180035740));
+        begin("cr_alloc_obj_58");
+        int bad = g_fail;
+        for (int t = 0; t < 4000; t++) {
+            void *ov = (void *)0xdead, *oc = (void *)0xdead;
+            int rv = v(&ov), rc = cr_alloc_obj_58(&oc);
+            if (rv != rc) mismatch("a58-ret", (u32)t, (u32)rv, (u32)rc);
+            if ((ov == NULL) != (oc == NULL))
+                mismatch("a58-null", (u32)t, ov != NULL, oc != NULL);
+            if (rv == 0 && ov) {
+                if (memcmp(ov, oc, 0x58) != 0) mismatch("a58", (u32)t, 0, 0);
+                vsfree(&ov); cr_sized_free(&oc);
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_alloc_obj_58\n");
+    }
+
+    /* --- cr_meta_get_slot (0x18003a8d0) ------------------------------------ */
+    {
+        typedef uint8_t (WINAPI *v_u8_ppipi)(const void *, u32, int, u32 *);
+        v_u8_ppipi v = (v_u8_ppipi)fn_at(RVA(0x18003a8d0));
+        static u8 vdefs[0x10 + 0x16 * 8], cdefs[0x10 + 0x16 * 8];
+        static u8 vst[128], cst[128], vother[64], cother[64];
+        begin("cr_meta_get_slot");
+        int bad = g_fail;
+        for (int t = 0; t < 20000; t++) {
+            memset(vdefs, 0x5A, sizeof vdefs); memset(cdefs, 0x5A, sizeof cdefs);
+            memset(vst, 0, sizeof vst); memset(cst, 0, sizeof cst);
+            u32 cap  = (rnd() % 100u) + 8u;
+            u32 used = rnd() % (cap + 1u);
+            if (used > 90u) used = 90u;
+            for (u32 off = 0; off + 12 <= used; off += 12) {
+                *(u32 *)(vst + 0xc + off) = rnd() % 6u;
+                *(u32 *)(vst + 0xc + off + 4) = 4;
+                *(u32 *)(vst + 0xc + off + 8) = rnd();
+            }
+            memcpy(cst, vst, sizeof vst);
+            u32 ty = (rnd() & 1u) ? 0u : (9u + 2u * (rnd() % 3u));
+            *(u32 *)(vst + 0) = ty; *(u32 *)(vst + 4) = cap; *(u32 *)(vst + 8) = used;
+            *(u32 *)(cst + 0) = ty; *(u32 *)(cst + 4) = cap; *(u32 *)(cst + 8) = used;
+            memset(vother, 0x33, sizeof vother); memset(cother, 0x33, sizeof cother);
+
+            u32 idx = rnd() % 24u;
+            int kind = (int)(rnd() % 3u);
+            void *vp = NULL, *cp = NULL;
+            if (kind == 1) {
+                *(u32 *)vother = 1u + (rnd() % 8u);
+                *(u32 *)cother = *(u32 *)vother;
+                vp = vother; cp = cother;
+            } else if (kind == 2) { vp = vst; cp = cst; }
+            if (idx < 0x16) {
+                *(void **)(vdefs + 0x10 + idx * 8) = vp;
+                *(void **)(cdefs + 0x10 + idx * 8) = cp;
+            }
+            int key = (int)rnd();
+            u32 ov = 0xdeadbeef, oc = 0xdeadbeef;
+            uint8_t rv = v(vdefs, idx, key, &ov);
+            uint8_t rc = cr_meta_get_slot(cdefs, idx, key, &oc);
+            if (rv != rc) mismatch("msg-ret", (u32)t, rv, rc);
+            if (ov != oc) mismatch("msg-out", (u32)t, ov, oc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_meta_get_slot\n");
+    }
+
+    /* --- cr_subview_extend_s16 / _u8 (0x1800342d0, 0x180037f10) ------------ */
+    {
+        typedef int (WINAPI *v_i_piiiii)(void *, int, int, int, int);
+        static const char *nm[2] = { "cr_subview_extend_s16", "cr_subview_extend_u8" };
+        v_i_piiiii vf[2] = { (v_i_piiiii)fn_at(RVA(0x1800342d0)),
+                             (v_i_piiiii)fn_at(RVA(0x180037f10)) };
+        int (*cf[2])(cr_image *, int, int, int, int) =
+            { cr_subview_extend_s16, cr_subview_extend_u8 };
+        const int BUFW = 128, BUFH = 128;
+        for (int k = 0; k < 2; k++) {
+            begin(nm[k]);
+            int bad = g_fail;
+            for (int t = 0; t < 20000; t++) {
+                unsigned char va[0x20], ca[0x20];
+                int w = 64, h = 64, offx = 32, offy = 32;
+                int tp = (int)(rnd() % 40u), bt = (int)(rnd() % 40u);
+                int lf = (int)(rnd() % 40u), rt = (int)(rnd() % 40u);
+                memset(va, 0, sizeof va); memset(ca, 0, sizeof ca);
+                *(int *)(va + 0) = BUFW;  *(int *)(ca + 0) = BUFW;
+                *(int *)(va + 4) = BUFH;  *(int *)(ca + 4) = BUFH;
+                *(int *)(va + 0x10) = w;  *(int *)(ca + 0x10) = w;
+                *(int *)(va + 0x14) = h;  *(int *)(ca + 0x14) = h;
+                *(int *)(va + 0x18) = offx; *(int *)(ca + 0x18) = offx;
+                *(int *)(va + 0x1c) = offy; *(int *)(ca + 0x1c) = offy;
+                if (k == 0) {
+                    int16_t pv[BUFW * BUFH], pc[BUFW * BUFH];
+                    for (int i = 0; i < BUFW * BUFH; i++) { pv[i] = (int16_t)rnd(); pc[i] = pv[i]; }
+                    *(void **)(va + 8) = pv;  *(void **)(ca + 8) = pc;
+                    int rv = vf[k](va, tp, bt, lf, rt);
+                    int rc = cf[k]((cr_image *)ca, tp, bt, lf, rt);
+                    if (rv != rc) mismatch("se-ret", (u32)t, (u32)rv, (u32)rc);
+                    if (rv == 0)
+                        cmp_buf("se16", (unsigned char *)pv, (unsigned char *)pc,
+                                sizeof pv, (u32)t);
+                } else {
+                    uint8_t pv[BUFW * BUFH], pc[BUFW * BUFH];
+                    for (int i = 0; i < BUFW * BUFH; i++) { pv[i] = (uint8_t)rnd(); pc[i] = pv[i]; }
+                    *(void **)(va + 8) = pv;  *(void **)(ca + 8) = pc;
+                    int rv = vf[k](va, tp, bt, lf, rt);
+                    int rc = cf[k]((cr_image *)ca, tp, bt, lf, rt);
+                    if (rv != rc) mismatch("se-ret", (u32)t, (u32)rv, (u32)rc);
+                    if (rv == 0)
+                        cmp_buf("se8", (unsigned char *)pv, (unsigned char *)pc,
+                                sizeof pv, (u32)t);
+                }
+            }
+            if (g_fail == bad) end(); else printf("  FAIL %s\n", nm[k]);
+        }
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3792,6 +3956,8 @@ int main(int argc, char **argv)
     test_tree_helpers();
     printf("\n== object constructors / flag-driven destructors ==\n");
     test_tree_ctors();
+    printf("\n== higher-level destructors / accessors ==\n");
+    test_tree_higher();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

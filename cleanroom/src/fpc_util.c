@@ -245,3 +245,14 @@ uint64_t cr_type_desc_getter(void *p, char type)
     q[0] = 0x1000000019ULL;
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180039390 — count-leading-zeros with a zero special-case.
+ *   int fn(uint32_t x): x ? cr_clz(x) : 0x20
+ * ------------------------------------------------------------------------ */
+int cr_clz_or32(uint32_t x)
+{
+    if (x != 0)
+        return (int)cr_clz(x);
+    return 0x20;
+}

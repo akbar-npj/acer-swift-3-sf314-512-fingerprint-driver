@@ -379,3 +379,72 @@ int cr_bitmap_alloc(uint32_t *desc, uint32_t w, uint32_t h)
     }
     return 0;
 }
+
+/* ======================================================================== *
+ *  Batch 49 — higher-level destructors / accessors
+ * ======================================================================== */
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003d430 — free the eight sized pointers owned by an object, in the
+ * vendor's order: +0x00, +0x28, +0x38, +0x08, +0x18, +0x10, +0x48, +0x50.
+ *   void fn(void *obj)   (no NULL guard; a NULL slot is a free no-op)
+ * ------------------------------------------------------------------------ */
+void cr_free_8slot(void *obj)
+{
+    cr_sized_free((void **)((uint8_t *)obj + 0x00));
+    cr_sized_free((void **)((uint8_t *)obj + 0x28));
+    cr_sized_free((void **)((uint8_t *)obj + 0x38));
+    cr_sized_free((void **)((uint8_t *)obj + 0x08));
+    cr_sized_free((void **)((uint8_t *)obj + 0x18));
+    cr_sized_free((void **)((uint8_t *)obj + 0x10));
+    cr_sized_free((void **)((uint8_t *)obj + 0x48));
+    cr_sized_free((void **)((uint8_t *)obj + 0x50));
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180035740 — allocate (16-byte aligned, 0x58 bytes) and initialise an
+ * object; on any post-allocation failure free it again.
+ *   int fn(void **out):
+ *     if (!out) return 1;
+ *     i = cr_malloc_aligned16(out, 0x58);
+ *     if (i == 0) {
+ *         if (*out == NULL) i = 1;
+ *         else { i = cr_obj_init_58(*out); if (i == 0) return 0; }
+ *         cr_sized_free(out);
+ *     }
+ *     return i;
+ *   (cr_obj_init_58 always returns 0, so the failure branch is defensive.)
+ * ------------------------------------------------------------------------ */
+int cr_alloc_obj_58(void **out)
+{
+    if (!out)
+        return 1;
+    int i = cr_malloc_aligned16(out, 0x58);
+    if (i == 0) {
+        if (*out == NULL) {
+            i = 1;
+        } else {
+            i = (int)cr_obj_init_58(*out);
+            if (i == 0)
+                return 0;
+        }
+        cr_sized_free(out);
+    }
+    return i;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003a8d0 — read an int16 metadata key from the debug-class buffer held in
+ * slot `idx` of the definition table.
+ *   uint8_t fn(const void *defs, uint32_t idx, int key, uint32_t *out):
+ *     p = cr_image_get_dp(defs, idx);
+ *     if (!p) return 0x6a;
+ *     return cr_meta_get_u32(p, key, out) != 0;
+ * ------------------------------------------------------------------------ */
+uint8_t cr_meta_get_slot(const void *defs, uint32_t idx, int key, uint32_t *out)
+{
+    void *p = cr_image_get_dp(defs, idx);
+    if (!p)
+        return 0x6a;
+    return cr_meta_get_u32(p, (uint32_t)key, out) != 0;
+}

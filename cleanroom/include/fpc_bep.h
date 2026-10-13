@@ -420,4 +420,15 @@ int      cr_image_alloc_s16(int *desc, int w, int h);        /* 0x18003d790 */
 void     cr_free_obj_flags(void *obj);                       /* 0x18000f570 */
 int      cr_bitmap_alloc(uint32_t *desc, uint32_t w, uint32_t h);  /* 0x180029750 */
 
+/* ---- batch 49: higher-level destructors / accessors ---------------------- */
+int      cr_clz_or32(uint32_t x);                            /* 0x180039390 */
+void     cr_free_8slot(void *obj);                           /* 0x18003d430 */
+int      cr_alloc_obj_58(void **out);                        /* 0x180035740 */
+uint8_t  cr_meta_get_slot(const void *defs, uint32_t idx,
+                          int key, uint32_t *out);           /* 0x18003a8d0 */
+int      cr_subview_extend_s16(cr_image *img, int t, int b,
+                               int l, int r);                /* 0x1800342d0 */
+int      cr_subview_extend_u8(cr_image *img, int t, int b,
+                              int l, int r);                 /* 0x180037f10 */
+
 #endif /* FPC_BEP_H */
