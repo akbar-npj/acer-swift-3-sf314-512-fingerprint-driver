@@ -909,3 +909,50 @@ int cr_centroid_affine(int *out, const void *bm, float scale,
     }
     return 0x69;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003b690 — descriptor pool builder.
+ *   void fn(void **hdr, void **ptrs, uint8_t n, const uint32_t *sizes):
+ *   `hdr` is a caller struct {void *base @0; u8 count @8; u8 4 @9}.  Allocates
+ *   one 16-aligned block of `4*n + 0xf + Σ((sizes[i]+0x13)&~0xf)` bytes, stores
+ *   the n u32 sizes verbatim at the front, then lays out n 16-aligned sub-blocks
+ *   of `(sizes[i]+0x13)&~0xf` bytes each; each block ends with a 4-byte trailer
+ *   {u8 i, u8 0, u8 0x30, u8 0x27}.  `ptrs[i]` receives block i's start.  On
+ *   allocation failure nothing else is written (base stays NULL).
+ * ------------------------------------------------------------------------ */
+void cr_pool_builder(void **hdr, void **ptrs, uint8_t n, const uint32_t *sizes)
+{
+    uint32_t N = n;
+    int total = (int)(N * 4u + 0xfu);
+    hdr[0] = NULL;
+    ((uint8_t *)hdr)[8] = n;
+    ((uint8_t *)hdr)[9] = 4;
+    for (uint32_t i = 0; i < N; i++)
+        total += (int)((sizes[i] + 0x13u) & 0xfffffff0u);
+    void *base = NULL;
+    if (cr_malloc_aligned16(&base, (size_t)total) != 0)
+        return;
+    hdr[0] = base;
+    uint8_t *p = (uint8_t *)base;
+    for (uint32_t i = 0; i < N; i++) {
+        p[0] = (uint8_t)(sizes[i] & 0xffu);
+        p[1] = (uint8_t)((sizes[i] >> 8) & 0xffu);
+        p[2] = (uint8_t)((sizes[i] >> 16) & 0xffu);
+        p[3] = (uint8_t)((sizes[i] >> 24) & 0xffu);
+        p += 4;
+    }
+    uint8_t *cur = (uint8_t *)((((uintptr_t)base) + 4u * N + 0xfu) &
+                               ~(uintptr_t)0xfu);
+    if (((uint8_t *)hdr)[8] != 0) {
+        for (uint32_t i = 0; i < N; i++) {
+            uint32_t bs = (sizes[i] + 0x13u) & 0xfffffff0u;
+            ptrs[i] = cur;
+            uint8_t *t = cur + bs - 4;
+            t[0] = (uint8_t)i;
+            t[1] = 0;
+            t[2] = 0x30;
+            t[3] = 0x27;
+            cur += bs;
+        }
+    }
+}

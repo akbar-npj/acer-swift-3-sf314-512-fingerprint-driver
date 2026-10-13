@@ -356,3 +356,23 @@ L2ac:
         return res;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003ce10 — per-pixel orientation map: dst[i] = (atan2(b[i], a[i]) +
+ * 0x400000) >> 23, an 8-bit angle.  `dst` is a u8 image, `a`/`b` int16 images
+ * sharing dst's width/height; all are packed with row stride w.
+ * ------------------------------------------------------------------------ */
+void cr_atan2_image_u8(cr_image *dst, const cr_image *a, const cr_image *b)
+{
+    int w = dst->w, h = dst->h;
+    uint8_t *d = (uint8_t *)dst->data;
+    const int16_t *pa = (const int16_t *)a->data;
+    const int16_t *pb = (const int16_t *)b->data;
+    for (int row = 0; row < h; row++) {
+        for (int col = 0; col < w; col++) {
+            int i = row * w + col;
+            int v = cr_atan2_fixed((int)pb[i], (int)pa[i]);
+            d[i] = (uint8_t)((v + 0x400000) >> 23);
+        }
+    }
+}

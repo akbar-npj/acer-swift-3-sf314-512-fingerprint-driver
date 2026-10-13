@@ -4660,6 +4660,223 @@ static void test_tree_batch53(void)
     }
 }
 
+/* ---- batch 54: ready wrappers (size 192-512) --------------------------- */
+static void test_tree_batch54(void)
+{
+    /* --- cr_atan2_image_u8 (0x18003ce10) ---------------------------------- */
+    {
+        typedef void (WINAPI *v_v_ppp)(void *, const void *, const void *);
+        v_v_ppp v = (v_v_ppp)fn_at(RVA(0x18003ce10));
+        begin("cr_atan2_image_u8");
+        int bad = g_fail;
+        enum { MAXW = 48, MAXH = 24 };
+        int16_t abuf[MAXW * MAXH], bbuf[MAXW * MAXH];
+        u8 dv[MAXW * MAXH], dc[MAXW * MAXH];
+        for (int t = 0; t < 4000; t++) {
+            int w = 1 + (int)(rnd() % MAXW);
+            int h = 1 + (int)(rnd() % MAXH);
+            for (int i = 0; i < w * h; i++) {
+                abuf[i] = (int16_t)rnd();
+                bbuf[i] = (int16_t)rnd();
+            }
+            cr_image da, db, ddv, ddc;
+            cr_image_set(&da, abuf, w, h);
+            cr_image_set(&db, bbuf, w, h);
+            cr_image_set(&ddv, dv, w, h);
+            cr_image_set(&ddc, dc, w, h);
+            memset(dv, 0x5A, sizeof dv);
+            memset(dc, 0x5A, sizeof dc);
+            v(&ddv, &da, &db);
+            cr_atan2_image_u8(&ddc, &da, &db);
+            cmp_buf("at2img", dv, dc, (size_t)w * h, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_atan2_image_u8\n");
+    }
+
+    /* --- cr_gain_normalize_u8 (0x180037ac0) ------------------------------- */
+    {
+        typedef int (WINAPI *v_i_p)(void *);
+        v_i_p v = (v_i_p)fn_at(RVA(0x180037ac0));
+        begin("cr_gain_normalize_u8");
+        int bad = g_fail;
+        enum { MAXW = 64, MAXH = 24 };
+        u8 bv[MAXW * MAXH], bc[MAXW * MAXH];
+        for (int t = 0; t < 4000; t++) {
+            int w = ((int)(rnd() % (MAXW / 8 + 1))) * 8;   /* multiple of 8 */
+            int h = (int)(rnd() % (MAXH + 1));
+            if (w == 0) h = (int)(rnd() % 3);              /* exercise w==0 */
+            for (int i = 0; i < w * h; i++) bv[i] = (u8)rnd();
+            memcpy(bc, bv, (size_t)w * h);
+            cr_image dv, dc;
+            cr_image_set(&dv, bv, w, h);
+            cr_image_set(&dc, bc, w, h);
+            int rv = v(&dv);
+            int rc = cr_gain_normalize_u8(&dc);
+            if (rv != rc) mismatch("gnu8-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0)
+                cmp_buf("gnu8", bv, bc, (size_t)w * h, (u32)t);
+        }
+        /* guard: w not a multiple of 8 */
+        for (int t = 0; t < 200; t++) {
+            int w = 1 + (int)(rnd() % 31);
+            if (w % 8 == 0) continue;
+            int h = 1 + (int)(rnd() % 8);
+            u8 bv2[64], bc2[64];
+            for (int i = 0; i < w * h && i < 64; i++) bv2[i] = bc2[i] = (u8)rnd();
+            cr_image dv, dc;
+            cr_image_set(&dv, bv2, w, h);
+            cr_image_set(&dc, bc2, w, h);
+            int rv = v(&dv);
+            int rc = cr_gain_normalize_u8(&dc);
+            if (rv != rc) mismatch("gnu8-guard", (u32)t, (u32)rv, (u32)rc);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_gain_normalize_u8\n");
+    }
+
+    /* --- cr_gain_normalize_s16 (0x1800175b0) ------------------------------ */
+    {
+        typedef int (WINAPI *v_i_p)(void *);
+        v_i_p v = (v_i_p)fn_at(RVA(0x1800175b0));
+        begin("cr_gain_normalize_s16");
+        int bad = g_fail;
+        enum { MAXW = 64, MAXH = 24 };
+        int16_t bv[MAXW * MAXH], bc[MAXW * MAXH];
+        for (int t = 0; t < 4000; t++) {
+            int w = ((int)(rnd() % (MAXW / 8 + 1))) * 8;
+            int h = (int)(rnd() % (MAXH + 1));
+            for (int i = 0; i < w * h; i++)
+                bv[i] = (int16_t)(int)(rnd() % 0x3fc1u);   /* [0,0x3fc0] */
+            memcpy(bc, bv, sizeof(int16_t) * (size_t)w * h);
+            cr_image dv, dc;
+            cr_image_set(&dv, bv, w, h);
+            cr_image_set(&dc, bc, w, h);
+            int rv = v(&dv);
+            int rc = cr_gain_normalize_s16(&dc);
+            if (rv != rc) mismatch("gns16-ret", (u32)t, (u32)rv, (u32)rc);
+            if (rv == 0)
+                cmp_buf("gns16", (u8 *)bv, (u8 *)bc, sizeof(int16_t) * (size_t)w * h, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_gain_normalize_s16\n");
+    }
+
+    /* --- cr_affine_sample_s16_nn (0x180044040) ---------------------------- */
+    {
+        typedef void (WINAPI *v_v_ppph)(void *, const void *, const float *, int16_t);
+        v_v_ppph v = (v_v_ppph)fn_at(RVA(0x180044040));
+        begin("cr_affine_sample_s16_nn");
+        int bad = g_fail;
+        enum { MAXW = 40, MAXH = 24 };
+        int16_t sbuf[MAXW * MAXH], dv[MAXW * MAXH], dc[MAXW * MAXH];
+        for (int t = 0; t < 4000; t++) {
+            int w = 1 + (int)(rnd() % MAXW);
+            int h = 1 + (int)(rnd() % MAXH);
+            for (int i = 0; i < w * h; i++) sbuf[i] = (int16_t)rnd();
+            float m[6];
+            m[0] = (float)((int)(rnd() % 9) - 4);   /* x_col  */
+            m[1] = (float)((int)(rnd() % 5) - 2);   /* x_row  */
+            m[2] = (float)((int)(rnd() % (2 * w + 4)) - w);
+            m[3] = (float)((int)(rnd() % 9) - 4);   /* y_col  */
+            m[4] = (float)((int)(rnd() % 5) - 2);   /* y_row  */
+            m[5] = (float)((int)(rnd() % (2 * h + 4)) - h);
+            int16_t fill = (int16_t)rnd();
+            cr_image ds, ddv, ddc;
+            cr_image_set(&ds, sbuf, w, h);
+            cr_image_set(&ddv, dv, w, h);
+            cr_image_set(&ddc, dc, w, h);
+            memset(dv, 0x5A, sizeof dv);
+            memset(dc, 0x5A, sizeof dc);
+            v(&ddv, &ds, m, fill);
+            cr_affine_sample_s16_nn(&ddc, &ds, m, fill);
+            cmp_buf("affnn", (u8 *)dv, (u8 *)dc, sizeof(int16_t) * (size_t)w * h, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_affine_sample_s16_nn\n");
+    }
+
+    /* --- cr_weighted_running_avg (0x180040ea0) ---------------------------- */
+    {
+        typedef void (WINAPI *v_v_ppppfp)(int16_t *, int16_t **, const void *,
+                                          const u8 **, float, const int16_t *);
+        v_v_ppppfp v = (v_v_ppppfp)fn_at(RVA(0x180040ea0));
+        begin("cr_weighted_running_avg");
+        int bad = g_fail;
+        enum { MAXN = 256 };
+        int16_t stv[MAXN], stc[MAXN], dstv[MAXN], dstc[MAXN];
+        u8 src[MAXN], imgd[MAXN];
+        for (int t = 0; t < 20000; t++) {
+            int n = 1 + (int)(rnd() % MAXN);
+            int w = 1 + (int)(rnd() % n);
+            int h = (n + w - 1) / w;
+            if (w * h > MAXN) h = MAXN / w;
+            int cnt = w * h;
+            float k = (float)(int)(rnd() % 400u) * 0x1p-7f - 1.5f;
+            int16_t limit = (int16_t)(1 + (int)(rnd() % 0x4000u));
+            for (int i = 0; i < cnt; i++) {
+                stv[i] = stc[i] = (int16_t)(16 + (int)(rnd() % 0x4000u));
+                dstv[i] = dstc[i] = (int16_t)rnd();
+                src[i] = (u8)rnd();
+                imgd[i] = (u8)rnd();
+            }
+            cr_image dimg;
+            cr_image_set(&dimg, imgd, w, h);
+            int16_t *pvd = dstv, *pcd = dstc;
+            const u8 *psv = src, *psc = src;
+            v(stv, &pvd, &dimg, &psv, k, &limit);
+            cr_weighted_running_avg(stc, &pcd, &dimg, &psc, k, &limit);
+            cmp_buf("wra-st", (u8 *)stv, (u8 *)stc, sizeof(int16_t) * cnt, (u32)t);
+            cmp_buf("wra-ds", (u8 *)dstv, (u8 *)dstc, sizeof(int16_t) * cnt, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_weighted_running_avg\n");
+    }
+
+    /* --- cr_pool_builder (0x18003b690) ------------------------------------ */
+    {
+        typedef void (WINAPI *v_v_ppbp)(void **, void **, uint8_t, const uint32_t *);
+        typedef void (WINAPI *v_v_p)(void *);
+        v_v_ppbp v = (v_v_ppbp)fn_at(RVA(0x18003b690));
+        v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+        begin("cr_pool_builder");
+        int bad = g_fail;
+        enum { MAXN = 8, MAXSZ = 200 };
+        uint32_t sizes[MAXN];
+        for (int t = 0; t < 3000; t++) {
+            int n = (int)(rnd() % (MAXN + 1));
+            for (int i = 0; i < n; i++) sizes[i] = rnd() % MAXSZ;
+            u8 hbuf[16], cbuf[16];
+            void *pv[MAXN], *pc[MAXN];
+            memset(hbuf, 0x5A, sizeof hbuf);
+            memset(cbuf, 0x5A, sizeof cbuf);
+            memset(pv, 0x5A, sizeof pv);
+            memset(pc, 0x5A, sizeof pc);
+            v((void **)hbuf, pv, (uint8_t)n, sizes);
+            cr_pool_builder((void **)cbuf, pc, (uint8_t)n, sizes);
+            u8 *hb = *(u8 **)hbuf, *cb = *(u8 **)cbuf;
+            if ((hb == NULL) != (cb == NULL)) {
+                mismatch("pb-null", (u32)t, hb ? 1 : 0, cb ? 1 : 0);
+                continue;
+            }
+            if (hbuf[8] != cbuf[8] || hbuf[9] != cbuf[9])
+                mismatch("pb-hdr", (u32)t, hbuf[8] * 256u + hbuf[9],
+                         cbuf[8] * 256u + cbuf[9]);
+            if (!hb) continue;
+            cmp_buf("pb-sizes", hb, cb, 4u * (size_t)n, (u32)t);
+            for (int i = 0; i < n; i++) {
+                long dv2 = (long)((u8 *)pv[i] - hb);
+                long dc2 = (long)((u8 *)pc[i] - cb);
+                if (dv2 != dc2) mismatch("pb-off", (u32)(t * 8 + i), (u32)dv2, (u32)dc2);
+                uint32_t bs = (sizes[i] + 0x13u) & 0xfffffff0u;
+                if (memcmp((u8 *)pv[i] + bs - 4, (u8 *)pc[i] + bs - 4, 4) != 0)
+                    mismatch("pb-tr", (u32)(t * 8 + i), ((u8 *)pv[i])[bs - 4],
+                             ((u8 *)pc[i])[bs - 4]);
+            }
+            void *vp = hb;
+            vsfree(&vp);
+            void *cp = cb;
+            cr_sized_free(&cp);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_pool_builder\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -4927,6 +5144,8 @@ int main(int argc, char **argv)
     test_tree_batch52();
     printf("\n== batch 53: ready wrappers (size 160-500) ==\n");
     test_tree_batch53();
+    printf("\n== batch 54: ready wrappers (size 192-512) ==\n");
+    test_tree_batch54();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -676,3 +676,169 @@ void cr_box_mean_edge(float *out, const float *in, int n, uint32_t w)
         } while (p2 != endp);
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180037ac0 — ridge gain normalisation of a u8 image.
+ *   int fn(cr_image *img):  guard (w & 7) != 0 -> 0x69.
+ *   Phase 1: acc[k] += (0xff - p) for every pixel whose column % 8 == k
+ *            (w is a multiple of 8, so the vendor's running counter == col%8).
+ *   Phase 2: u4 = (acc[7]+acc[0])*3, u14 = acc[1..6];
+ *            gain = (u14 << sh) / ((u4 << sh) >> 15), sh = min(clz(u4)-1,
+ *            clz(u14)-1) & 31, default 0x8000 when u4 <= 0.  Then, per group of
+ *            8 columns, only lanes 0 and 7 are rewritten:
+ *            v = ((0xff - p) * gain) >> 15; p = ~v (clamped to 0 when v>=0xff).
+ * ------------------------------------------------------------------------ */
+int cr_gain_normalize_u8(cr_image *img)
+{
+    uint32_t w = (uint32_t)img->w;
+    if ((w & 7u) != 0)
+        return 0x69;
+    int h = img->h;
+    uint8_t *data = (uint8_t *)img->data;
+    int acc[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    if (h > 0) {
+        for (int row = 0; row < h; row++) {
+            uint8_t *p = data + (size_t)row * w;
+            if ((int)w > 0) {
+                for (uint32_t col = 0; col < w; col++)
+                    acc[col & 7u] += 0xff - (int)p[col];
+            }
+        }
+        uint32_t u4 = (uint32_t)(acc[7] + acc[0]) * 3u;
+        int gain = 0x8000;
+        if ((int)u4 > 0) {
+            uint32_t u14 = (uint32_t)(acc[2] + acc[1] + acc[3] +
+                                      acc[4] + acc[5] + acc[6]);
+            int c1 = (int)cr_clz_or32(u4) - 1;
+            int c2 = (int)cr_clz_or32(u14) - 1;
+            int sh = (c1 < c2) ? c1 : c2;
+            unsigned shu = (unsigned)sh & 0x1fu;
+            gain = (int)((uint32_t)u14 << shu) /
+                   ((int)((uint32_t)u4 << shu) >> 15);
+        }
+        if ((int)w > 0) {
+            int w8 = (int)((w - 1u) >> 3) + 1;
+            for (int row = 0; row < h; row++) {
+                uint8_t *base = data + (size_t)row * w;
+                for (int k = 0; k < w8; k++) {
+                    uint8_t *p = base + k * 8;
+                    int v = (int)((uint32_t)(0xff - (int)p[0]) *
+                                  (uint32_t)gain) >> 15;
+                    uint8_t r = (uint8_t)~v;
+                    if (v >= 0xff)
+                        r = 0;
+                    p[0] = r;
+                    v = (int)((uint32_t)(0xff - (int)p[7]) *
+                              (uint32_t)gain) >> 15;
+                    r = (uint8_t)~v;
+                    if (v >= 0xff)
+                        r = 0;
+                    p[7] = r;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800175b0 — int16 twin of cr_gain_normalize_u8.
+ *   Base 0x3fc0, shift 12, default gain 0x1000, and u4 = acc[1..6] / 3
+ *   (signed division).  Phase 2 writes lanes 0 and 7 of each 8-sample group:
+ *   v = ((0x3fc0 - p) * gain) >> 12; p = (int16)(0x3fc0 - v), clamped to 0
+ *   when v >= 0x3fc0.
+ * ------------------------------------------------------------------------ */
+int cr_gain_normalize_s16(cr_image *img)
+{
+    uint32_t w = (uint32_t)img->w;
+    if ((w & 7u) != 0)
+        return 0x69;
+    int h = img->h;
+    int16_t *data = (int16_t *)img->data;
+    int acc[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    if (h > 0) {
+        for (int row = 0; row < h; row++) {
+            int16_t *p = data + (size_t)row * w;
+            if ((int)w > 0) {
+                for (uint32_t col = 0; col < w; col++)
+                    acc[col & 7u] += 0x3fc0 - (int)p[col];
+            }
+        }
+        uint32_t u5 = (uint32_t)(acc[7] + acc[0]);
+        int gain = 0x1000;
+        if ((int)u5 > 0) {
+            uint32_t u4 = (uint32_t)((acc[2] + acc[1] + acc[3] +
+                                      acc[4] + acc[5] + acc[6]) / 3);
+            int c1 = (int)cr_clz_or32(u5) - 1;
+            int c2 = (int)cr_clz_or32(u4) - 1;
+            int sh = (c1 < c2) ? c1 : c2;
+            unsigned shu = (unsigned)sh & 0x1fu;
+            gain = (int)((uint32_t)u4 << shu) /
+                   ((int)((uint32_t)u5 << shu) >> 12);
+        }
+        if ((int)w > 0) {
+            int w8 = (int)((w - 1u) >> 3) + 1;
+            for (int row = 0; row < h; row++) {
+                int16_t *base = data + (size_t)row * w;
+                for (int k = 0; k < w8; k++) {
+                    int16_t *p = base + k * 8;
+                    int v = (int)((uint32_t)(0x3fc0 - (int)p[0]) *
+                                  (uint32_t)gain) >> 12;
+                    int r = 0x3fc0 - v;
+                    if (v >= 0x3fc0)
+                        r = 0;
+                    p[0] = (int16_t)r;
+                    v = (int)((uint32_t)(0x3fc0 - (int)p[7]) *
+                              (uint32_t)gain) >> 12;
+                    r = 0x3fc0 - v;
+                    if (v >= 0x3fc0)
+                        r = 0;
+                    p[7] = (int16_t)r;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180040ea0 — weighted running average with saturation state.
+ *   void fn(int16_t *state, int16_t **dstp, const cr_image *img,
+ *           const uint8_t **srcp, float k, const int16_t *limit):
+ *     n = img->w * img->h;  for each i:
+ *       fs = src[i]/255;  f5 = state[i]*2^-4 + fs;
+ *       f4 = (limit < f5) ? limit : f5;               // MINSS
+ *       if (f4 > 0) {
+ *         state[i] = roundf(f4*16);
+ *         dst[i] = roundf(((dst[i]*2^-6 * (f4-fs)) + fs*(img[i]*k)) / f4 * 64),
+ *                  clamped to 0x7fff;
+ *       }
+ * ------------------------------------------------------------------------ */
+void cr_weighted_running_avg(int16_t *state, int16_t **dstp,
+                             const cr_image *img, const uint8_t **srcp,
+                             float k, const int16_t *limit)
+{
+    int16_t *dst = *dstp;
+    const uint8_t *src = *srcp;
+    const uint8_t *imgdata = (const uint8_t *)img->data;
+    int n = img->w * img->h;
+    if (n <= 0)
+        return;
+    float lf = (float)(int)*limit;
+    for (int i = 0; i < n; i++) {
+        float fs = (float)src[i] / 255.0f;
+        float f5 = (float)(int)state[i] * 0.0625f + fs;
+        float f4 = (lf < f5) ? lf : f5;
+        if (f4 > 0.0f) {
+            state[i] = (int16_t)cr_roundf_to_int(f4 * 16.0f);
+            float a = (float)(int)dst[i] * 0.015625f;
+            float b = a * (f4 - fs);
+            float c = (float)(int)imgdata[i] * k;
+            float d = fs * c;
+            int t = cr_roundf_to_int(((b + d) / f4) * 64.0f);
+            if (t > 0x7fff)
+                t = 0x7fff;
+            dst[i] = (int16_t)t;
+        }
+    }
+}

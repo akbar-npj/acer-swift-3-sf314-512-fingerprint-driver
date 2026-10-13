@@ -402,6 +402,17 @@ side effects, never raw pointer values.
 | `0x180012260` | `fpc_bio_bep_sw23_15363dfc49` | `cr_atan2_fixed` | Fixed-point atan2: octant reduction (iVar7 base `0x8000000`/`0xc8000000`/`+0x10000000`/`+0x20000000`), normalise `uVar6` by `clz-1`, `q=num/den`, then a Q15 polynomial `a4*-0x1ce + a2*-0xd46 + q*0x28bc + a3*0x657 + base`. Domain is 16-bit inputs (the vendor IDIV faults beyond). |
 | `0x1800335e0` | `fpc_bio_bep_sw23_9b7f284e32` | `cr_box_mean_edge` | Moving-average box filter with edge replication: `w<2` → copy; `half=lroundf(w*0.5f)`; `out[0..half-1]=Σin[0..w-1]/w`; sliding `out[k]=(in[k]-in[k-w])*inv+out[k-1]` for `k=half..iVar3`; then replicate `out[iVar3]` to the tail. |
 
+### Batch 54 — ready wrappers (size 192–512)
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18003ce10` | `fpc_bio_bep_sw23_c5b206e5b7` | `cr_atan2_image_u8` | Per-pixel orientation map: `dst[i] = (u8)((cr_atan2_fixed(b[i], a[i]) + 0x400000) >> 23)`; `dst` is u8, `a`/`b` int16, all packed with row stride `dst->w`. |
+| `0x180037ac0` | `fpc_bio_bep_sw23_ad2e23e159` | `cr_gain_normalize_u8` | Ridge gain normalisation (guard `w&7`): phase 1 sums `(0xff-p)` per column mod 8; gain `= (Σacc[1..6] << sh) / ((3*(acc[7]+acc[0]) << sh) >> 15)`, `sh=min(clz-1)&31`, default 0x8000; phase 2 rewrites **only lanes 0 and 7** of each 8-column group: `v=((0xff-p)*gain)>>15; p=~v` (0 if `v>=0xff`). |
+| `0x1800175b0` | `fpc_bio_bep_sw23_2464d11c20` | `cr_gain_normalize_s16` | int16 twin: base 0x3fc0, shift 12, default gain 0x1000, `u4 = Σacc[1..6]/3` (signed); phase 2 `v=((0x3fc0-p)*gain)>>12; p=(int16)(0x3fc0-v)` (0 if `v>=0x3fc0`). |
+| `0x180044040` | `fpc_bio_bep_sw23_e8ff948c05.isra.1` | `cr_affine_sample_s16_nn` | Nearest-neighbour int16 affine resample: Q20 map `{x_col,x_row,x_org,y_col,y_row,y_org}`, accumulators start at `(int)(org*2^20)+0x80000`, out-of-bounds dst pixels take `fill`. |
+| `0x180040ea0` | `fpc_bio_bep_sw23_dbf0b0038b` | `cr_weighted_running_avg` | `fs=src[i]/255; f5=state[i]*2^-4+fs; f4=min(limit,f5)`; if `f4>0`: `state[i]=roundf(f4*16)`, `dst[i]=roundf(((dst[i]*2^-6*(f4-fs))+fs*(img[i]*k))/f4*64)` clamped 0x7fff. |
+| `0x18003b690` | `fpc_bio_bep_sw23_bb6f7bbe81` | `cr_pool_builder` | Build a descriptor pool: alloc `4n+0xf+Σ((sizes[i]+0x13)&~0xf)`, store the n u32 sizes at the front, then n 16-aligned sub-blocks each ending in a trailer `{u8 i, 0, 0x30, 0x27}`; `ptrs[i]` = block start; `hdr = {base, u8 n, u8 4}`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

@@ -480,4 +480,17 @@ int      cr_atan2_fixed(int p1, int p2);                     /* 0x180012260 */
 void     cr_box_mean_edge(float *out, const float *in, int n,
                           uint32_t w);                       /* 0x1800335e0 */
 
+/* ---- batch 54: ready wrappers (size 192-512) ---------------------------- */
+void     cr_atan2_image_u8(cr_image *dst, const cr_image *a,
+                           const cr_image *b);               /* 0x18003ce10 */
+int      cr_gain_normalize_u8(cr_image *img);                /* 0x180037ac0 */
+int      cr_gain_normalize_s16(cr_image *img);               /* 0x1800175b0 */
+void     cr_affine_sample_s16_nn(cr_image *dst, const cr_image *src,
+                                 const float *m, int16_t fill); /* 0x180044040 */
+void     cr_weighted_running_avg(int16_t *state, int16_t **dstp,
+                                 const cr_image *img, const uint8_t **srcp,
+                                 float k, const int16_t *limit); /* 0x180040ea0 */
+void     cr_pool_builder(void **hdr, void **ptrs, uint8_t n,
+                         const uint32_t *sizes);             /* 0x18003b690 */
+
 #endif /* FPC_BEP_H */

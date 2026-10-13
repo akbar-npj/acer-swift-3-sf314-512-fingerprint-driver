@@ -44,3 +44,49 @@ void cr_affine_transform(float *out, const float *pts, const float *scores)
                + pts[(long long)k * 3 + 1] * T[16 + i]
                + pts[(long long)k * 3 + 2];
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180044040 — nearest-neighbour int16 affine resample with OOB fill.
+ *   void fn(cr_image *dst, const cr_image *src, const float *m, int16_t fill):
+ *   `m` is a Q20 affine map {x_col, x_row, x_org, y_col, y_row, y_org} (the
+ *   same layout as cr_affine_map).  Both accumulators start at
+ *   `(int)(m[2]*2^20) + 0x80000` (origin only), step by the per-column deltas
+ *   for each output column and by the per-row deltas for each output row.
+ *   A dst pixel whose src coords (acc >> 20) are out of [0,w)x[0,h) is set to
+ *   `fill`; otherwise it copies src[y*src->a + x + src->offx + src->a*src->offy].
+ * ------------------------------------------------------------------------ */
+void cr_affine_sample_s16_nn(cr_image *dst, const cr_image *src,
+                             const float *m, int16_t fill)
+{
+    const int16_t *sdata = (const int16_t *)src->data;
+    int16_t *ddata = (int16_t *)dst->data;
+    int sw = src->w, sh = src->h, ss = src->a;
+    int dw = dst->w, dh = dst->h, ds = dst->a;
+    long soff = src->offx + ss * src->offy;
+    int16_t *drowbase = ddata + dst->offy * ds + dst->offx;
+    const float sc = 0x1p-20f;
+    uint32_t xstep = (uint32_t)(int)(m[0] / sc);   /* per column */
+    uint32_t ystep = (uint32_t)(int)(m[3] / sc);   /* per column */
+    uint32_t xrow = (uint32_t)(int)(m[1] / sc);    /* per row    */
+    uint32_t yrow = (uint32_t)(int)(m[4] / sc);    /* per row    */
+    uint32_t xacc_row = (uint32_t)((int)(m[2] / sc) + 0x80000);
+    uint32_t yacc_row = (uint32_t)((int)(m[5] / sc) + 0x80000);
+    int rowoff = 0;
+    for (int r = 0; r < dh; r++) {
+        int16_t *drow = drowbase + rowoff;
+        uint32_t xacc = xacc_row, yacc = yacc_row;
+        for (int c = 0; c < dw; c++) {
+            int x = ((int)xacc) >> 20;
+            int y = ((int)yacc) >> 20;
+            if (x >= 0 && x < sw && y >= 0 && y < sh)
+                drow[c] = sdata[(long)y * ss + x + soff];
+            else
+                drow[c] = fill;
+            xacc += xstep;
+            yacc += ystep;
+        }
+        xacc_row += xrow;
+        yacc_row += yrow;
+        rowoff += ds;
+    }
+}
