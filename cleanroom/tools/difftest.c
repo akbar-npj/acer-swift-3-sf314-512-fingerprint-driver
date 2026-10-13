@@ -1522,6 +1522,31 @@ static void test_bitmap_border_set(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_border_set\n");
 }
 
+/* ---- batch 21: 8-neighbour 3x3 Laplacian ------------------------------- */
+
+/* 0x1800169b0 — Laplacian of one row from three input rows, 4-wide vectorised
+ * in two passes.  The three rows are separate contiguous int16 arrays. */
+static void test_laplacian_3x3(void)
+{
+    typedef void (WINAPI *fn_t)(void *, const void *, const void *,
+                                const void *, int);
+    fn_t v = (fn_t)fn_at(RVA(0x1800169b0));
+    begin("cr_laplacian_3x3");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        int16_t A[128], C[128], B[128], ov[128], oc[128];
+        int w = 4 + (int)(rnd() % 61u);   /* 4..64 */
+        for (int i = 0; i < 128; i++) {
+            A[i] = (int16_t)rnd(); C[i] = (int16_t)rnd(); B[i] = (int16_t)rnd();
+        }
+        memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+        v(ov, A, C, B, w);
+        cr_laplacian_3x3(oc, A, C, B, w);
+        cmp_buf("lap3", (unsigned char *)ov, (unsigned char *)oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_laplacian_3x3\n");
+}
+
 /* ---- batch 11: 336-byte leaf ------------------------------------------- */
 
 /* 0x180026fb0 — integer-factor block-average downsample (byte -> int16). */
@@ -2022,6 +2047,8 @@ int main(int argc, char **argv)
     test_splat_bilinear();
     printf("\n== bitmap border set ==\n");
     test_bitmap_border_set();
+    printf("\n== 3x3 Laplacian ==\n");
+    test_laplacian_3x3();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

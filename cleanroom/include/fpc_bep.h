@@ -245,4 +245,8 @@ void     cr_splat_bilinear(const float *w, float *bufA, float *bufB,
 int      cr_bitmap_border_set(cr_image *d, int left, int top, int right,
                               int bottom, int value);                    /* 0x180017ac0 */
 
+/* ---- batch 21: 8-neighbour 3x3 Laplacian --------------------------------- */
+void     cr_laplacian_3x3(int16_t *out, const int16_t *A, const int16_t *C,
+                          const int16_t *B, int w);                      /* 0x1800169b0 */
+
 #endif /* FPC_BEP_H */

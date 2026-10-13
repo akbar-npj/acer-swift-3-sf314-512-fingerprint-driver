@@ -165,3 +165,46 @@ void cr_splat_bilinear(const float *w, float *bufA, float *bufB,
         y += y0;
     }
 }
+
+/* 0x1800169b0 — 8-neighbour 3x3 Laplacian of a single row.  out[i] is the
+ * Laplacian centred on C[i+1]:
+ *     8*C[i+1] - (A[i]+A[i+1]+A[i+2] + C[i]+C[i+2] + B[i]+B[i+1]+B[i+2])
+ * where C is the centre row and A/B the neighbouring rows.  The vendor writes
+ * it as a two-pass 4-wide vectorised loop: pass 1 covers the bulk columns
+ * [0, w-4), pass 2 the tail [w-4, w) (with an output-pointer adjustment of
+ * -((-w)&3) shorts so the last window lands flush at column w).  Arithmetic is
+ * 32-bit; the stored value is the low 16 bits. */
+void cr_laplacian_3x3(int16_t *out, const int16_t *A, const int16_t *C,
+                      const int16_t *B, int w)
+{
+    int pass = 2;
+    int start = 0;
+    int end = w - 4;
+    int outadj = -((-w) & 3);
+    int16_t *op = out;
+
+    do {
+        if (start < end) {
+            int iters = ((end - 1 - start) >> 2) + 1;
+            const int16_t *a = A + start;
+            const int16_t *c = C + start;
+            const int16_t *b = B + start;
+            for (int k = 0; k < iters; k++) {
+                for (int r = 0; r < 4; r++) {
+                    op[k * 4 + r] = (int16_t)(8 * c[r + 1]
+                        - (a[r] + a[r + 1] + a[r + 2]
+                         + c[r] + c[r + 2]
+                         + b[r] + b[r + 1] + b[r + 2]));
+                }
+                a += 4; c += 4; b += 4;
+            }
+            op += iters * 4;
+        }
+        op += outadj;
+        if (pass == 1)
+            break;
+        pass = 1;
+        start = w - 4;
+        end = w;
+    } while (1);
+}

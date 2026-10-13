@@ -188,6 +188,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x180017ac0` | `fpc_bio_bep_sw23_267120cd30` | `cr_bitmap_border_set` | `int fn(cr_image *d, int left, int top, int right, int bottom, int value)`. Sets a border frame of a packed bitmap to all-ones (`value!=0`) or all-zeros. Guard: the descriptor's 8-byte `(a,b)` must equal `(w,h)` (**duplicate dimension fields** — `b==h`, not `b==0`), `(offx,offy)==0`, and `w` a multiple of 32; else returns `0x69`. Fills the whole first `top` and last `bottom` rows, then the left `left` bits and right `right` bits of every row (partial edge words masked by `0xffffffff << (left&31)` / `0xffffffff >> (right&31)`). Returns 0. |
 
+### Batch 21 — 8-neighbour 3x3 Laplacian
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x1800169b0` | `fpc_bio_bep_sw23_1fe4634733` | `cr_laplacian_3x3` | `void fn(int16_t *out, const int16_t *A, const int16_t *C, const int16_t *B, int w)`. 8-neighbour 3x3 Laplacian of one row: `out[i] = 8*C[i+1] - (A[i]+A[i+1]+A[i+2] + C[i]+C[i+2] + B[i]+B[i+1]+B[i+2])`, where `C` is the centre row and `A`/`B` the neighbours. Two-pass 4-wide vectorised loop (bulk `[0,w-4)`, tail `[w-4,w)`); the tail pass offsets its output pointer by `-((-w)&3)` shorts. 32-bit arithmetic, low 16 bits stored. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
