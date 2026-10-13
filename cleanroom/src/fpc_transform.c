@@ -673,3 +673,132 @@ next_row:
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180032830 — 15x15 separable box filter on an int16 image (divide by 15).
+ *   Args (ms_abi): rcx = base (int16*), edx = width W, r8d = height H.
+ *   `out = (sum*0x1111 + 0x8000) >> 16` approximates `sum / 15` (0x1111*15 =
+ *   0xFFFF).  Four in-place passes:
+ *     1. horizontal 15-tap running sum -> cols 0..W-15 of every row;
+ *     2. vertical 15-tap running sum   -> rows 7..H-8, cols 7..W-8
+ *        (the pass reads columns W-15..0 and writes 7 cols/rows to the right);
+ *     3. horizontal edge replication: for rows 7..H-8 copy col 7 into cols
+ *        0..6 and col W-8 into cols W-7..W-1;
+ *     4. vertical edge replication: for every column copy row 7 into rows
+ *        0..6 and row H-8 into rows H-7..H-1.
+ *   The result is an order-dependent in-place transform; the transcription
+ *   below preserves the exact pointer walk of each pass.
+ * ------------------------------------------------------------------------ */
+static int16_t cr_div15_s16(int32_t sum)
+{
+    uint32_t t = (uint32_t)sum * 0x1111u + 0x8000u;
+    return (int16_t)(t >> 16);
+}
+
+void cr_boxsum15_s16(int16_t *base, int W, int H)
+{
+    int rem = W - 15;
+
+    /* pass 1: horizontal 15-tap box sum */
+    if (H > 0) {
+        int16_t *p = base + 1;
+        int rows = 0;
+        do {
+            int prev = p[-1];
+            int32_t sum = prev;
+            int16_t *q = p;
+            do {
+                sum += *q;
+                q++;
+            } while (p + 0xe != q);
+            if (rem > 0) {
+                int16_t *r = p - 1;
+                while (1) {
+                    int16_t *r2 = r + 1;
+                    int32_t v = sum * 0x1111;
+                    sum = sum - (prev - r[0xf]);
+                    *r = (int16_t)((uint32_t)(v + 0x8000) >> 16);
+                    if (p + (W - 0x10) == r2) break;
+                    prev = *r2;
+                    r = r2;
+                }
+            }
+            rows++;
+            p[(W - 0xe) - 2] = cr_div15_s16(sum);
+            p = p + W;
+        } while (H != rows);
+    }
+
+    /* pass 2: vertical 15-tap box sum */
+    if (rem >= 0) {
+        long long st = W;
+        int16_t *p = base + (rem + W);      /* row 1, col W-15 */
+        int16_t *end = base + (W - 1);
+        int16_t *q2;
+        do {
+            int prev = p[-st];
+            int32_t sum = prev;
+            int16_t *q = p;
+            int cnt = 0xe;
+            do {
+                sum += *q;
+                q += st;
+                cnt--;
+            } while (cnt != 0);
+            int i;
+            if (H < 0x10) {
+                i = 7;
+            } else {
+                q = p;
+                i = 0;
+                while (1) {
+                    int32_t v = sum * 0x1111;
+                    sum = sum - (prev - q[W * 0xf - st]);
+                    q[(W + 1) * 7 - st] =
+                        (int16_t)((uint32_t)(v + 0x8000) >> 16);
+                    if (i + 1 == H - 0xf) break;
+                    prev = *q;
+                    q = q + st;
+                    i++;
+                }
+                i = i + 8;
+            }
+            q2 = p - 1;
+            p[(i * W + 7) - st] = cr_div15_s16(sum);
+            p = q2;
+        } while (end != q2);
+    }
+
+    /* pass 3: horizontal edge replication over rows 7..H-8 */
+    if (H > 0xe) {
+        int16_t *r9  = base + 7 * W + 7;    /* row 7, col 7 */
+        int16_t *r11 = base + 8 * W - 8;    /* row 7, col W-8 */
+        for (int r = 7; r != H - 7; r++) {
+            int16_t *dst = r9 - 7;          /* row r, col 0 */
+            int16_t left  = *r9;
+            int16_t right = *r11;
+            for (int c = 0; c < 7; c++)
+                dst[c] = left;
+            for (int c = 0; c < 7; c++)
+                dst[W - 7 + c] = right;
+            r9 += W;
+            r11 += W;
+        }
+    }
+
+    /* pass 4: vertical edge replication over every column */
+    if (W > 0) {
+        int16_t *r9  = base + 7 * W;        /* row 7, col 0 */
+        int16_t *r10 = base + (H - 8) * W;  /* row H-8, col 0 */
+        int16_t *stop = base + 8 * W;       /* row 8, col 0 */
+        for (; r9 != stop; r9++, r10++) {
+            int16_t top = *r9;
+            int16_t bot = *r10;
+            int16_t *dst = r9 - 7 * W;      /* row 0, col c */
+            for (int c = 0; c < 7; c++)
+                dst[c * W] = top;
+            for (int c = 0; c < 7; c++)
+                dst[(H - 7 + c) * W] = bot;
+        }
+    }
+}

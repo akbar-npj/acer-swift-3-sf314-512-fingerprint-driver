@@ -2323,6 +2323,29 @@ static void test_box_sum_excl(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_box_sum_excl\n");
 }
 
+/* 0x180032830 — 15x15 separable box filter on an int16 image. */
+static void test_boxsum15_s16(void)
+{
+    typedef void (WINAPI *v_v_pii)(void *, int, int);
+    v_v_pii v = (v_v_pii)fn_at(RVA(0x180032830));
+    begin("cr_boxsum15_s16");
+    int bad = g_fail;
+    enum { MAXW = 48, MAXH = 48 };
+    int16_t bufv[MAXW * MAXH], bufc[MAXW * MAXH];
+    for (int t = 0; t < 20000; t++) {
+        int W = 15 + (int)(rnd() % (MAXW - 14));
+        int H = 15 + (int)(rnd() % (MAXH - 14));
+        int n = W * H;
+        for (int i = 0; i < n; i++) bufv[i] = (int16_t)rnd();
+        memcpy(bufc, bufv, sizeof(int16_t) * n);
+        v(bufv, W, H);
+        cr_boxsum15_s16(bufc, W, H);
+        cmp_buf("box15", (unsigned char *)bufv, (unsigned char *)bufc,
+                sizeof(int16_t) * n, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_boxsum15_s16\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2459,6 +2482,8 @@ int main(int argc, char **argv)
     test_mirror_extend_s16();
     printf("\n== box sum excluding an index list ==\n");
     test_box_sum_excl();
+    printf("\n== separable 15x15 box filter (int16) ==\n");
+    test_boxsum15_s16();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

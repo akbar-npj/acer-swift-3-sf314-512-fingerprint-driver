@@ -249,6 +249,12 @@ The image descriptor layout (established from these functions):
 |---|---|---|---|
 | `0x18000d040` | `fpc_bep_template_serialize` | `cr_box_sum_excl` | `void fn(int width, int height, const uint8_t *data, const uint16_t *count, const uint16_t *const *indices, int win, int idx, int *out_count, float *out_sum)`. Window `[cy-hw,cy+hw] x [cx-hw,cx+hw]` (`hw=win>>1`, `cy=idx/width`, `cx=idx%width`, clamped to the image). For every pixel whose linear index `r*width+c` is **not** among the `*count` u16 entries of `*indices`, add the byte to `*out_sum` (as float) and bump `*out_count`. `*count==0` sums everything. Both outputs zeroed up front. (The vendor symbol name is noise.) |
 
+### Batch 31 — 15x15 separable box filter (int16) + edge replication
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x180032830` | `fpc_bio_bep_sw23_97ae28484f` | `cr_boxsum15_s16` | `void fn(int16_t *base, int W, int H)`. Four in-place passes producing `(sum*0x1111+0x8000)>>16` (≈ `sum/15`): (1) horizontal 15-tap running sum into cols `0..W-15` of every row; (2) vertical 15-tap running sum, reading columns `W-15..0` right-to-left and writing 7 columns/rows to the right, so the result lands at rows `7..H-8`, cols `7..W-8`; (3) horizontal edge replication over rows `7..H-8` (col 7 → cols 0..6, col W-8 → cols W-7..W-1); (4) vertical edge replication over every column (row 7 → rows 0..6, row H-8 → rows H-7..H-1). The top-left 8x8 block ends up constant. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
