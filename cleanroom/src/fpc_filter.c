@@ -196,6 +196,29 @@ void cr_tri9_filter(float *in, float *out, int n)
     }
 }
 
+/* Shared core for the two reflect-101-padded int16 FIR leaves (0x180030fc0
+ * column-wise, 0x180040560 row-wise).  Filters `n` gathered samples:
+ *   dst[j*dstride] = (int16)(( Σ_{k=0}^{K-1} coef[k]*buf[refl(j-H+k)]
+ *                              + 0x4000 ) >> 15)
+ * with BORDER_REFLECT_101 (refl(i) = -i for i<0, 2*(n-1)-i for i>=n).  The
+ * accumulation is integer and order-independent, so the vendor's split into a
+ * descending "left" pass, a plain middle pass and a descending "right" pass is
+ * bit-identical to this closed form. */
+static void fir_reflect_line(int16_t *dst, int dstride, const int16_t *buf,
+                             const int16_t *coef, int K, int H, int n)
+{
+    for (int j = 0; j < n; j++) {
+        uint32_t s = 0;
+        for (int k = 0; k < K; k++) {
+            int idx = j - H + k;
+            if (idx < 0) idx = -idx;
+            else if (idx >= n) idx = 2 * (n - 1) - idx;
+            s += (uint32_t)((int32_t)coef[k] * (int32_t)buf[idx]);
+        }
+        dst[j * dstride] = (int16_t)((int32_t)(s + 0x4000u) >> 15);
+    }
+}
+
 /* ------------------------------------------------------------------------ *
  * 0x180030fc0 (.isra.6) — reflect-101-padded int16 FIR down each column.
  *
@@ -208,10 +231,7 @@ void cr_tri9_filter(float *in, float *out, int n)
  *       K = clamp(p4, 0, L-1);  H = K >> 1;
  *       out[c + j*W] = (int16)(( Σ_{k=0}^{K-1} coef[k]*buf[refl(j-H+k)]
  *                                + 0x4000 ) >> 15)        for j = 0..L-1
- *   with BORDER_REFLECT_101 padding: refl(i) = -i for i<0, 2*(L-1)-i for
- *   i>=L, else i.  (The vendor splits this into a descending "left" pass, a
- *   plain middle pass and a descending "right" pass; since the accumulation is
- *   integer and order-independent, the closed form is bit-identical.)
+ *   with BORDER_REFLECT_101 padding.
  *   The vendor uses a 256-short stack buffer, so L must be <= 256.
  *   Returns 0; a non-positive W makes it a no-op.
  * ------------------------------------------------------------------------ */
@@ -230,16 +250,41 @@ int cr_fir_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
     for (int c = 0; c < W; c++) {
         for (int i = 0; i < L; i++)
             buf[i] = in[c + i * W];
-        for (int j = 0; j < L; j++) {
-            uint32_t s = 0;
-            for (int k = 0; k < K; k++) {
-                int idx = j - H + k;
-                if (idx < 0) idx = -idx;
-                else if (idx >= L) idx = 2 * (L - 1) - idx;
-                s += (uint32_t)((int32_t)coef[k] * (int32_t)buf[idx]);
-            }
-            out[c + j * W] = (int16_t)((int32_t)(s + 0x4000u) >> 15);
-        }
+        fir_reflect_line(out + c, W, buf, coef, K, H, L);
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180040560 — the row-wise twin of 0x180030fc0: the same reflect-101 FIR but
+ *   applied along contiguous rows (stride 1) and run over R rows.
+ *
+ *   Args (ms_abi): rcx = out (int16*), rdx = in (int16*), r8 = coef (int16*),
+ *   r9d = p4 (kernel length request), [rsp+0x20] = W (row length),
+ *   [rsp+0x28] = R (row count).
+ *
+ *   For each row r (0..R-1), with buf[i] = in[r*W + i]:
+ *       K = clamp(p4, 0, W-1);  H = K >> 1;
+ *       out[r*W + j] = (int16)(( Σ_{k=0}^{K-1} coef[k]*buf[refl(j-H+k)]
+ *                                + 0x4000 ) >> 15)        for j = 0..W-1
+ *   Returns 0; a non-positive R makes it a no-op.
+ * ------------------------------------------------------------------------ */
+int cr_fir_reflect_rows(int16_t *out, const int16_t *in, const int16_t *coef,
+                        int p4, int W, int R)
+{
+    int K = p4;
+    if (K < 0) K = 0;
+    if (K > W - 1) K = W - 1;
+    int H = K >> 1;
+
+    if (R <= 0)
+        return 0;
+
+    int16_t buf[256];
+    for (int r = 0; r < R; r++) {
+        for (int i = 0; i < W; i++)
+            buf[i] = in[r * W + i];
+        fir_reflect_line(out + r * W, 1, buf, coef, K, H, W);
     }
     return 0;
 }

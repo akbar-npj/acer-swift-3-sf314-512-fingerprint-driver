@@ -129,9 +129,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **108** (30.4% of functions, 26,224 B = 15.47% of bytes) |
+| rewritten + parity-verified | **109** (30.7% of functions, 27,200 B = 16.05% of bytes) |
 
-Thirty-eight batches done so far:
+Thirty-nine batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -170,6 +170,7 @@ Thirty-eight batches done so far:
 36. 32–112-byte leaves: small descriptor / table-pointer getters (9 functions)
 37. 832-byte leaf: 9-tap triangular (Bartlett) filter over the 9 lines of an n×9 float buffer (1 function)
 38. 928-byte leaf: reflect-101-padded int16 FIR down each column (1 function)
+39. 976-byte leaf: row-wise twin of the reflect-101 column FIR (1 function)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

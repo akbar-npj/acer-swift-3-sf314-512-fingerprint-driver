@@ -362,4 +362,8 @@ void     cr_tri9_filter(float *in, float *out, int n);                   /* 0x18
 int      cr_fir_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
                         int p4, int W, int L);                           /* 0x180030fc0 */
 
+/* ---- batch 39: row-wise twin of the reflect-101 column FIR ---------------- */
+int      cr_fir_reflect_rows(int16_t *out, const int16_t *in,
+                             const int16_t *coef, int p4, int W, int R); /* 0x180040560 */
+
 #endif /* FPC_BEP_H */
