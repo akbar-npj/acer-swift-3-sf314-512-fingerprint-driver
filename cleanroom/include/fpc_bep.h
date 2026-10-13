@@ -112,4 +112,18 @@ void     cr_image_threshold_mark(cr_image *img, const cr_image *src,
                                  int16_t thr);                       /* 0x180033ae0 */
 void     cr_image_mark_nonpos(cr_image *img, const cr_image *src);   /* 0x1800182b0 */
 
+/* ---- rect fills / bitmap ops / misc leaves (batch 4) ------------------- */
+void     cr_rect_fill_u8(cr_image *img, uint8_t val);                 /* 0x1800465a0 */
+void     cr_rect_fill_u16(cr_image *img, uint16_t val);               /* 0x18001d700 */
+void     cr_rect_fill_f32(cr_image *img, float val);                  /* 0x18001edb0 */
+void     cr_bitmap_clear_rect(cr_image *img, int y0, int y1, int x0, int x1); /* 0x180037fb0 */
+void     cr_bitmap_set_from_image(cr_image *bm, const cr_image *src); /* 0x180023bb0 */
+void     cr_bitmap_unpack(cr_image *dst, const cr_image *src);        /* 0x180041cc0 */
+void     cr_classify_mark(const float *vals, uint8_t *const *base,
+                          const uint16_t *count,
+                          const uint16_t *const *indices);            /* 0x180041bb0 */
+uint64_t cr_copy_or_relu(void *dst, const void *src, int n, int mode);/* 0x180030270 */
+void     cr_array_rotate(uint64_t *a, int n);                         /* 0x18001d7b0 */
+uint64_t cr_type_desc_getter(void *p, char type);                     /* 0x18003d8f0 */
+
 #endif /* FPC_BEP_H */

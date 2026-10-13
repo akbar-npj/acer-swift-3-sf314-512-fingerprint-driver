@@ -62,6 +62,21 @@ The image descriptor layout (established from these functions):
 | `0x180034490` | `fpc_bio_bep_sw23_a0bbe17d94` | `cr_image_set_pitch` | like `cr_image_set` but the first width word is a 32-aligned stride: `a = (w+31) & ~31`. |
 | `0x180036460` | `fpc_bio_bep_sw23_a8929aa58a` | `cr_image_set` | **byte-identical duplicate** of `0x18003b250` (3rd copy). |
 
+### Batch 4 — rect fills / bitmap ops / misc leaves
+
+| vendor RVA | vendor symbol | clean-room name | actual semantics |
+|---|---|---|---|
+| `0x1800465a0` | `fpc_bio_bep_sw23_f2c350625f.part.1` | `cr_rect_fill_u8` | fill the `w x h` block at `(offx,offy)` (stride `a`) with a byte. |
+| `0x18001d700` | `fpc_bio_bep_sw23_38215f32ef` | `cr_rect_fill_u16` | same, 16-bit elements; value arrives in `dx` (integer arg). |
+| `0x18001edb0` | `fpc_bio_bep_sw23_3d13ea8103` | `cr_rect_fill_f32` | same, 32-bit **float** elements (`movss [..],xmm1`); the value is a float arg. |
+| `0x180037fb0` | `fpc_bio_bep_sw23_af53e5058d` | `cr_bitmap_clear_rect` | clear the bits of `[y0,y1) x [x0,x1)`; bit idx `(offy+y)*a + (offx+x)`. |
+| `0x180023bb0` | `fpc_bio_bep_sw23_5637713915` | `cr_bitmap_set_from_image` | set bitmap bits where the source image byte has `(b & 0xe) != 0`. |
+| `0x180041cc0` | `fpc_bio_bep_sw23_e285f0085a` | `cr_bitmap_unpack` | expand a bitmap into dst bytes: `bit ? 0xff : 0x00`. |
+| `0x180041bb0` | `fpc_bio_bep_sw23_e218884414` | `cr_classify_mark` | for indices where the pixel tag is 8: `v<=0 -> 1`, `v>=255 -> 0x10` (NaN -> 0x10). |
+| `0x180030270` | `fpc_bio_bep_sw23_8ca6f25abc` | `cr_copy_or_relu` | mode 0: word copy; mode 1: `maxss(v,0)` ReLU (NaN -> 0); else `0x69`. |
+| `0x18001d7b0` | `fpc_bio_bep_sw23_38df1c2726` | `cr_array_rotate` | rotate the head of a u64 array about pivot `(n>>1)-1`. |
+| `0x18003d8f0` | `fpc_bio_bep_sw23_c9c1caf0a0.constprop.2` | `cr_type_desc_getter` | init a 32-byte descriptor; type 2 -> byte 0x10, type 4 -> 4, tag `0x1_00000019`; else 1. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

@@ -62,8 +62,12 @@ rewritten, the whole clean-room pipeline must reproduce those same images.
 ```
 cleanroom/
 ├── include/fpc_bep.h     types + clean-room prototypes
-├── src/fpc_math.c        math kernel (sqrtf, expf, round/floor)
+├── src/fpc_math.c        math kernel (sqrtf, expf, round/floor/ldexp/lround)
 ├── src/fpc_buffer.c      buffer / metadata / image-slot helpers
+├── src/fpc_util.c        util kernel (mem, prng, clz, sincos, dot, rotate)
+├── src/fpc_image.c       image-descriptor leaves
+├── src/fpc_rect.c        rectangle fills (u8/u16/f32)
+├── src/fpc_bitmap.c      bitmap clear/set/unpack
 ├── tools/difftest.c      differential test vs the vendor DLL
 ├── Makefile              make / make check
 ├── REACHABLE.md          inventory of all 355 reachable functions
@@ -85,6 +89,17 @@ cleanroom/
 - **Table-driven seeds must be copied byte-exact.** `cr_sqrtf`'s 256-byte
   inverse-sqrt seed table lives at `0x180159500`; the difftest confirms parity
   only because it is reproduced verbatim.
+- **Prototypes must match the vendor's argument *position*, including floats.**
+  GCC's `ms_abi` assigns XMM registers *positionally*: a `float` at argument
+  index *i* lands in `xmm_i` (not "the i-th float in xmm0..3"). So
+  `fpc_bio_bep_sw23_3d13ea8103` — whose float is the 2nd argument and whose
+  body does `movss [..],xmm1` — must be declared `void (*)(void*, float)`, not
+  `(void*, float, float)`. Getting this wrong makes the vendor read a stale
+  register (symptom: it silently fills with 0). Same class of bug as
+  `0x180016720`'s flag being the 2nd arg in `dl`, and `0x18001b990`'s phase
+  being the 3rd arg in `r8d`.
+- **`maxss` is not `if (v <= 0) v = 0`.** `maxss xmm0, 0` returns `0.0` for NaN
+  as well as for `v <= 0`; the faithful form is `(v > 0.0f) ? v : 0.0f`.
 
 ## Progress
 
@@ -93,12 +108,13 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **35** (9.9% of functions, 2,528 B = 1.49% of bytes) |
+| rewritten + parity-verified | **45** (12.7% of functions, 3,744 B = 2.21% of bytes) |
 
-Three batches done so far:
+Four batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
+4. rect fills + bitmap ops + misc leaves (10 functions)
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

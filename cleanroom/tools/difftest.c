@@ -264,6 +264,15 @@ typedef int      (WINAPI *v_i_plii)(uint64_t *, int, int);
 typedef uint32_t (WINAPI *v_u_i)(uint32_t);
 typedef void     (WINAPI *v_v_ipp)(int32_t *, int32_t *, uint32_t);
 typedef float    (WINAPI *v_f_ppi)(const float *, const float *, int);
+typedef void     (WINAPI *v_v_pb)(void *, uint8_t);
+typedef void     (WINAPI *v_v_pw)(void *, uint16_t);
+typedef void     (WINAPI *v_v_pf)(void *, float);
+typedef void     (WINAPI *v_v_piiii)(void *, int, int, int, int);
+typedef void     (WINAPI *v_v_pfpp)(const float *, uint8_t *const *,
+                                    const uint16_t *, const uint16_t *const *);
+typedef uint64_t (WINAPI *v_u64_ppii)(void *, const void *, int, int);
+typedef void     (WINAPI *v_v_pli)(uint64_t *, int);
+typedef uint64_t (WINAPI *v_u64_pc)(void *, char);
 
 /* compare a whole buffer; report the first differing byte */
 static void cmp_buf(const char *what, const unsigned char *a, const unsigned char *b, size_t n, u32 seed)
@@ -514,6 +523,200 @@ static void test_dot_f32(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_dot_f32\n");
 }
 
+/* ---- batch 4: rect fills, bitmap ops, misc leaves ---------------------- */
+
+/* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
+static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
+{
+    *(int   *)(d + 0x00) = stride;
+    *(void **)(d + 0x08) = data;
+    *(int   *)(d + 0x10) = w;
+    *(int   *)(d + 0x14) = h;
+    *(int   *)(d + 0x18) = offx;
+    *(int   *)(d + 0x1c) = offy;
+}
+
+static void test_rect_fills(void)
+{
+    v_v_pb  v8  = (v_v_pb) fn_at(RVA(0x1800465a0));
+    v_v_pw  v16 = (v_v_pw) fn_at(RVA(0x18001d700));
+    v_v_pf  v32 = (v_v_pf)fn_at(RVA(0x18001edb0));
+    const char *nm[3] = { "cr_rect_fill_u8", "cr_rect_fill_u16", "cr_rect_fill_f32" };
+
+    for (int kind = 0; kind < 3; kind++) {
+        begin(nm[kind]);
+        int bad = g_fail;
+        for (int t = 0; t < 8000; t++) {
+            unsigned char dv[0x20], dc[0x20], pv[8192], pc[8192];
+            int stride = (int)(rnd() % 40u) + 1;
+            int w = (int)(rnd() % 20u), h = (int)(rnd() % 20u);
+            int offx = (int)(rnd() % 8u), offy = (int)(rnd() % 8u);
+            for (size_t i = 0; i < sizeof pv; i++) {
+                unsigned char b = (unsigned char)rnd(); pv[i] = b; pc[i] = b;
+            }
+            mk_image(dv, pv, stride, w, h, offx, offy);
+            mk_image(dc, pc, stride, w, h, offx, offy);
+            uint32_t val = rnd();
+            if (kind == 0)      { v8 (dv, (uint8_t)val);  cr_rect_fill_u8 ((cr_image *)dc, (uint8_t)val); }
+            else if (kind == 1) { v16(dv, (uint16_t)val); cr_rect_fill_u16((cr_image *)dc, (uint16_t)val); }
+            else {
+                /* full float bit-pattern coverage (incl. denormals/NaN) */
+                float f = cr_u2f(val);
+                v32(dv, f);
+                cr_rect_fill_f32((cr_image *)dc, f);
+            }
+            cmp_buf("rect", pv, pc, sizeof pv, (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL %s\n", nm[kind]);
+    }
+}
+
+static void test_bitmap_ops(void)
+{
+    v_v_piiii vclr = (v_v_piiii)fn_at(RVA(0x180037fb0));
+    v_v_pp    vset = (v_v_pp)fn_at(RVA(0x180023bb0));
+    v_v_pp    vunp = (v_v_pp)fn_at(RVA(0x180041cc0));
+
+    begin("cr_bitmap_clear_rect");
+    int bad = g_fail;
+    for (int t = 0; t < 8000; t++) {
+        unsigned char dv[0x20], dc[0x20], wv[512], wc[512];
+        int stride = (int)(rnd() % 64u) + 1;
+        int offx = (int)(rnd() % 4u), offy = (int)(rnd() % 4u);
+        int y0 = (int)(rnd() % 16u), y1 = (int)(rnd() % 16u);
+        int x0 = (int)(rnd() % 32u), x1 = (int)(rnd() % 32u);
+        for (size_t i = 0; i < sizeof wv; i++) {
+            unsigned char b = (unsigned char)rnd(); wv[i] = b; wc[i] = b;
+        }
+        mk_image(dv, wv, stride, 0, 0, offx, offy);
+        mk_image(dc, wc, stride, 0, 0, offx, offy);
+        vclr(dv, y0, y1, x0, x1);
+        cr_bitmap_clear_rect((cr_image *)dc, y0, y1, x0, x1);
+        cmp_buf("clr", wv, wc, sizeof wv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_clear_rect\n");
+
+    begin("cr_bitmap_set_from_image");
+    bad = g_fail;
+    for (int t = 0; t < 8000; t++) {
+        unsigned char bv[0x20], bc[0x20], sv[0x20];
+        unsigned char wv[512], wc[512], sb[256];
+        int stride = (int)(rnd() % 64u) + 1;
+        int offx = (int)(rnd() % 4u), offy = (int)(rnd() % 4u);
+        int w = (int)(rnd() % 16u), h = (int)(rnd() % 16u);
+        for (size_t i = 0; i < sizeof wv; i++) {
+            unsigned char b = (unsigned char)rnd(); wv[i] = b; wc[i] = b;
+        }
+        for (size_t i = 0; i < sizeof sb; i++) sb[i] = (unsigned char)rnd();
+        mk_image(bv, wv, stride, 0, 0, offx, offy);
+        mk_image(bc, wc, stride, 0, 0, offx, offy);
+        mk_image(sv, sb, 0, w, h, 0, 0);
+        vset(bv, sv);
+        cr_bitmap_set_from_image((cr_image *)bc, (const cr_image *)sv);
+        cmp_buf("bset", wv, wc, sizeof wv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_set_from_image\n");
+
+    begin("cr_bitmap_unpack");
+    bad = g_fail;
+    for (int t = 0; t < 8000; t++) {
+        unsigned char dv[0x20], dc[0x20], sv[0x20];
+        unsigned char pv[512], pc[512], wv[512];
+        int stride = (int)(rnd() % 32u) + 1;
+        int w = (int)(rnd() % 16u), h = (int)(rnd() % 16u);
+        int soff = (int)(rnd() % 4u);
+        for (size_t i = 0; i < sizeof pv; i++) {
+            unsigned char b = (unsigned char)rnd(); pv[i] = b; pc[i] = b;
+        }
+        for (size_t i = 0; i < sizeof wv; i++) wv[i] = (unsigned char)rnd();
+        mk_image(dv, pv, stride, w, h, 0, 0);
+        mk_image(dc, pc, stride, w, h, 0, 0);
+        mk_image(sv, wv, 32, 0, 0, soff, soff);
+        vunp(dv, sv);
+        cr_bitmap_unpack((cr_image *)dc, (const cr_image *)sv);
+        cmp_buf("unp", pv, pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_unpack\n");
+}
+
+static void test_classify_mark(void)
+{
+    v_v_pfpp v = (v_v_pfpp)fn_at(RVA(0x180041bb0));
+    begin("cr_classify_mark");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        float vals[64];
+        unsigned char bv[64], bc[64];
+        uint16_t idx[64];
+        for (int i = 0; i < 64; i++) {
+            vals[i] = cr_u2f(rnd());
+            unsigned char b = (unsigned char)((rnd() % 4u == 0) ? 8 : (rnd() & 0xff));
+            bv[i] = bc[i] = b;
+            idx[i] = (uint16_t)(rnd() % 64u);
+        }
+        uint16_t count = (uint16_t)(rnd() % 64u);
+        unsigned char *basev = bv, *basec = bc;
+        const uint16_t *ip = idx;
+        v(vals, &basev, &count, &ip);
+        cr_classify_mark(vals, &basec, &count, &ip);
+        cmp_buf("classify", bv, bc, sizeof bv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_classify_mark\n");
+}
+
+static void test_copy_or_relu(void)
+{
+    v_u64_ppii v = (v_u64_ppii)fn_at(RVA(0x180030270));
+    begin("cr_copy_or_relu");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        unsigned char sv[256], dv[256], dc[256];
+        for (size_t i = 0; i < sizeof sv; i++) sv[i] = (unsigned char)rnd();
+        memset(dv, 0x5A, sizeof dv); memset(dc, 0x5A, sizeof dc);
+        int n = (int)(rnd() % 40u) - 3;
+        int mode = (int)(rnd() % 4u) - 1;
+        uint64_t rv = v(dv, sv, n, mode);
+        uint64_t rc = cr_copy_or_relu(dc, sv, n, mode);
+        if (rv != rc) mismatch("cor-ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("cor", dv, dc, sizeof dv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_copy_or_relu\n");
+}
+
+static void test_array_rotate(void)
+{
+    v_v_pli v = (v_v_pli)fn_at(RVA(0x18001d7b0));
+    begin("cr_array_rotate");
+    int bad = g_fail;
+    for (int t = 0; t < 20000; t++) {
+        uint64_t av[64], ac[64];
+        for (int i = 0; i < 64; i++) { av[i] = ((uint64_t)rnd() << 32) | rnd(); ac[i] = av[i]; }
+        int n = (int)(rnd() % 40u) + 3;      /* n >= 3 keeps indices in range */
+        v(av, n);
+        cr_array_rotate(ac, n);
+        cmp_buf("rot", (unsigned char *)av, (unsigned char *)ac, sizeof av, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_array_rotate\n");
+}
+
+static void test_type_desc(void)
+{
+    v_u64_pc v = (v_u64_pc)fn_at(RVA(0x18003d8f0));
+    begin("cr_type_desc_getter");
+    int bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        unsigned char pv[32], pc[32];
+        memset(pv, 0xAB, sizeof pv); memset(pc, 0xAB, sizeof pc);
+        char ty = (char)rnd();
+        int isnull = (rnd() % 8u) == 0;
+        uint64_t rv = v(isnull ? NULL : pv, ty);
+        uint64_t rc = cr_type_desc_getter(isnull ? NULL : pc, ty);
+        if (rv != rc) mismatch("desc-ret", (u8)ty, (u32)rv, (u32)rc);
+        if (!isnull) cmp_buf("desc", pv, pc, sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_type_desc_getter\n");
+}
+
 /* Build a random image descriptor + pixel buffer, run one function on the
  * vendor copy and the clean-room copy, and compare the whole descriptor and
  * the pixel buffer. */
@@ -679,6 +882,7 @@ int main(int argc, char **argv)
     int ok = dmain(g_base, 1, NULL);
     printf("[+] DllMain -> %d\n\n", ok);
 
+
     printf("== math kernel ==\n");
     test_float_fn("cr_sqrtf",         RVA(0x180003080), (void *)cr_sqrtf,          0);
     test_float_fn("cr_expf",          RVA(0x180002dd0), (void *)cr_expf,           0);
@@ -709,6 +913,14 @@ int main(int argc, char **argv)
 
     printf("\n== image leaves ==\n");
     test_image_leaves();
+
+    printf("\n== rect fills / bitmap ops ==\n");
+    test_rect_fills();
+    test_bitmap_ops();
+    test_classify_mark();
+    test_copy_or_relu();
+    test_array_rotate();
+    test_type_desc();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

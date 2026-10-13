@@ -132,3 +132,32 @@ uint32_t cr_image_set_pitch(cr_image *img, void *data, int w, int h)
     img->data = data;
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180041bb0 — reclassify marked image pixels from a float value array.
+ *   For each index k in indices[0..*count):
+ *     pc = *base + k;
+ *     if (*pc != 8) continue;               // only pixels already tagged 8
+ *     v = vals[k];
+ *     if (v <= 0.0f)          *pc = 0x01;
+ *     else if (!(v < 255.0f)) *pc = 0x10;   // NaN also lands here
+ *   (255.0f is the vendor constant at 0x18008c6b0.)
+ * ------------------------------------------------------------------------ */
+void cr_classify_mark(const float *vals, uint8_t *const *base,
+                      const uint16_t *count, const uint16_t *const *indices)
+{
+    uint32_t cnt = *count;
+    if (cnt == 0)
+        return;
+    for (uint32_t i = 0; i < cnt; i++) {
+        uint16_t k = (*indices)[i];
+        uint8_t *pc = *base + k;
+        if (*pc != 8)
+            continue;
+        float v = vals[k];
+        if (v <= 0.0f)
+            *pc = 0x01;
+        else if (!(v < 255.0f))
+            *pc = 0x10;
+    }
+}

@@ -167,3 +167,81 @@ float cr_dot_f32(const float *a, const float *b, int n)
             acc += a[i] * b[i];
     return acc;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180030270 — copy n 32-bit words, or copy-with-ReLU when mode == 1.
+ *   mode==0 -> word copy; mode==1 -> clamp negative floats to 0; else 0x69.
+ *   n <= 0 is a no-op (returns 0).
+ * ------------------------------------------------------------------------ */
+uint64_t cr_copy_or_relu(void *dst, const void *src, int n, int mode)
+{
+    if (mode == 0) {
+        if (n > 0)
+            for (int i = 0; i < n; i++)
+                ((uint32_t *)dst)[i] = ((const uint32_t *)src)[i];
+        return 0;
+    }
+    if (mode != 1)
+        return 0x69u;
+    if (n > 0)
+        for (int i = 0; i < n; i++) {
+            float v = ((const float *)src)[i];
+            /* vendor: maxss xmm0, xmm1(=0) -> (v > 0.0) ? v : 0.0, and 0.0 on NaN */
+            v = (v > 0.0f) ? v : 0.0f;
+            ((float *)dst)[i] = v;
+        }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001d7b0 — rotate the first elements of a u64 array (n selects the
+ * pivot `i = (n>>1) - 1`).  Transcribed exactly; n >= 3 keeps indices in range.
+ * ------------------------------------------------------------------------ */
+void cr_array_rotate(uint64_t *a, int n)
+{
+    uint64_t saved = a[0];
+    int i = (n >> 1) - 1;
+    uint32_t u = (uint32_t)(i * 2);
+    a[0] = a[2];
+    if (i == 2) {
+        a[2] = a[4];
+        a[4] = saved;
+        uint64_t t = a[1];
+        a[1] = a[3];
+        a[3] = a[5];
+        a[5] = t;
+        return;
+    }
+    a[u] = saved;
+    uint64_t t = a[1];
+    a[1] = a[3];
+    a[(int)(u + 1)] = t;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003d8f0 (constprop.2) — initialise a 32-byte type descriptor.
+ *   NULL -> 1.  Zeroes the object; for type 2 sets a marker byte 0x10, for
+ *   type 4 sets 4, both also storing the u64 tag 0x1_00000019; else -> 1.
+ *   (The non-constprop sibling also stores a static table pointer; that copy
+ *   is deferred — see MAP.md.)
+ * ------------------------------------------------------------------------ */
+uint64_t cr_type_desc_getter(void *p, char type)
+{
+    if (p == NULL)
+        return 1;
+    uint64_t *q = (uint64_t *)p;
+    q[0] = 0;
+    ((uint8_t *)p)[8] = 0;
+    q[2] = 0;
+    q[3] = 0;
+    if (type == 2) {
+        ((uint8_t *)p)[8] = 0x10;
+        q[0] = 0x1000000019ULL;
+        return 0;
+    }
+    if (type != 4)
+        return 1;
+    ((uint8_t *)p)[8] = 4;
+    q[0] = 0x1000000019ULL;
+    return 0;
+}

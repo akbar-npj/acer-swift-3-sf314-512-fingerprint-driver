@@ -11,7 +11,7 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | total `.text` size | 169488 bytes (165.5 KiB) |
 | leaf functions (no in-tree callees) | 118 |
 | max call depth from root | 11 |
-| **rewritten + parity-verified** | **35** (9.9% of funcs, 2528 B = 1.49% of bytes) |
+| **rewritten + parity-verified** | **45** (12.7% of funcs, 3744 B = 2.21% of bytes) |
 
 > The embedded symbol names are adversarial and must not be trusted: the
 > function named `FpcSin` is `sqrtf`, `FpcCos` is `expf`, `FpcMalloc` is
@@ -57,7 +57,17 @@ of `fpc_enclave.dll` into a call graph (`fpwork/callgraph.py`).
 | 33 | `cr_image_mark_nonpos` | `0x1800182b0` | `fpc_bio_bep_sw23_27c8bbdf12` | 80 | **done** |
 | 34 | `cr_image_set_pitch` | `0x180034490` | `fpc_bio_bep_sw23_a0bbe17d94` | 80 | **done** |
 | 35 | `cr_image_set (dup of 3b250)` | `0x180036460` | `fpc_bio_bep_sw23_a8929aa58a` | 64 | **done** |
-| … | 320 more | | | | pending |
+| 36 | `cr_rect_fill_u8` | `0x1800465a0` | `fpc_bio_bep_sw23_f2c350625f.part.1` | 112 | **done** |
+| 37 | `cr_rect_fill_u16` | `0x18001d700` | `fpc_bio_bep_sw23_38215f32ef` | 128 | **done** |
+| 38 | `cr_rect_fill_f32` | `0x18001edb0` | `fpc_bio_bep_sw23_3d13ea8103` | 128 | **done** |
+| 39 | `cr_bitmap_clear_rect` | `0x180037fb0` | `fpc_bio_bep_sw23_af53e5058d` | 112 | **done** |
+| 40 | `cr_bitmap_set_from_image` | `0x180023bb0` | `fpc_bio_bep_sw23_5637713915` | 128 | **done** |
+| 41 | `cr_bitmap_unpack` | `0x180041cc0` | `fpc_bio_bep_sw23_e285f0085a` | 128 | **done** |
+| 42 | `cr_classify_mark` | `0x180041bb0` | `fpc_bio_bep_sw23_e218884414` | 112 | **done** |
+| 43 | `cr_copy_or_relu` | `0x180030270` | `fpc_bio_bep_sw23_8ca6f25abc` | 128 | **done** |
+| 44 | `cr_array_rotate` | `0x18001d7b0` | `fpc_bio_bep_sw23_38df1c2726` | 112 | **done** |
+| 45 | `cr_type_desc_getter` | `0x18003d8f0` | `fpc_bio_bep_sw23_c9c1caf0a0.constprop.2` | 112 | **done** |
+| … | 310 more | | | | pending |
 
 ## Rewrite frontier — 118 leaf functions
 
@@ -108,19 +118,19 @@ tested in isolation. Sorted by size (smallest first).
 | `0x18003b800` | `fpc_bio_bep_sw23_bbdc68c33d` | 80 | 1 |  **done** |
 | `0x180017960` | `fpc_bio_bep_sw23_25c6d755fa` | 96 | 1 |  |
 | `0x1800356e0` | `fpc_bio_bep_sw23_a45214d052.part.7` | 96 | 1 |  |
-| `0x18001d7b0` | `fpc_bio_bep_sw23_38df1c2726` | 112 | 1 |  |
+| `0x18001d7b0` | `fpc_bio_bep_sw23_38df1c2726` | 112 | 1 |  **done** |
 | `0x180028de0` | `fpc_bio_bep_sw23_702329d57c` | 112 | 1 |  |
 | `0x18002d4e0` | `fpc_bio_bep_sw23_7c99980763` | 112 | 1 |  |
-| `0x180037fb0` | `fpc_bio_bep_sw23_af53e5058d` | 112 | 2 |  |
-| `0x18003d8f0` | `fpc_bio_bep_sw23_c9c1caf0a0.constprop.2` | 112 | 1 |  |
-| `0x180041bb0` | `fpc_bio_bep_sw23_e218884414` | 112 | 1 |  |
-| `0x1800465a0` | `fpc_bio_bep_sw23_f2c350625f.part.1` | 112 | 4 |  |
+| `0x180037fb0` | `fpc_bio_bep_sw23_af53e5058d` | 112 | 2 |  **done** |
+| `0x18003d8f0` | `fpc_bio_bep_sw23_c9c1caf0a0.constprop.2` | 112 | 1 |  **done** |
+| `0x180041bb0` | `fpc_bio_bep_sw23_e218884414` | 112 | 1 |  **done** |
+| `0x1800465a0` | `fpc_bio_bep_sw23_f2c350625f.part.1` | 112 | 4 |  **done** |
 | `0x18004b4e0` | `fpc_metadata_get_uint16` | 112 | 3 | **done** |
-| `0x18001d700` | `fpc_bio_bep_sw23_38215f32ef` | 128 | 1 |  |
-| `0x18001edb0` | `fpc_bio_bep_sw23_3d13ea8103` | 128 | 3 |  |
-| `0x180023bb0` | `fpc_bio_bep_sw23_5637713915` | 128 | 2 |  |
-| `0x180030270` | `fpc_bio_bep_sw23_8ca6f25abc` | 128 | 3 |  |
-| `0x180041cc0` | `fpc_bio_bep_sw23_e285f0085a` | 128 | 1 |  |
+| `0x18001d700` | `fpc_bio_bep_sw23_38215f32ef` | 128 | 1 |  **done** |
+| `0x18001edb0` | `fpc_bio_bep_sw23_3d13ea8103` | 128 | 3 |  **done** |
+| `0x180023bb0` | `fpc_bio_bep_sw23_5637713915` | 128 | 2 |  **done** |
+| `0x180030270` | `fpc_bio_bep_sw23_8ca6f25abc` | 128 | 3 |  **done** |
+| `0x180041cc0` | `fpc_bio_bep_sw23_e285f0085a` | 128 | 1 |  **done** |
 | `0x180003080` | `FpcSin` | 144 | 7 | **done** |
 | `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | 144 | 1 |  |
 | `0x1800491e0` | `fpc_buffer_pixels_check_size` | 144 | 1 |  |
