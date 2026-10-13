@@ -366,4 +366,8 @@ int      cr_fir_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
 int      cr_fir_reflect_rows(int16_t *out, const int16_t *in,
                              const int16_t *coef, int p4, int W, int R); /* 0x180040560 */
 
+/* ---- batch 40: fixed 7-tap reflect-101 FIR down each row ------------------ */
+void     cr_fir7_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
+                         int W, int R);                                  /* 0x180033b40 */
+
 #endif /* FPC_BEP_H */

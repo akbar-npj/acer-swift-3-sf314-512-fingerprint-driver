@@ -196,25 +196,35 @@ void cr_tri9_filter(float *in, float *out, int n)
     }
 }
 
-/* Shared core for the two reflect-101-padded int16 FIR leaves (0x180030fc0
- * column-wise, 0x180040560 row-wise).  Filters `n` gathered samples:
- *   dst[j*dstride] = (int16)(( Σ_{k=0}^{K-1} coef[k]*buf[refl(j-H+k)]
+/* BORDER_REFLECT_101 index fold (period 2*(n-1)); single-fold is enough when
+ * the caller's range stays within one period, but the fixed-tap variant below
+ * can exceed it for small n, so fold periodically. */
+static int refl101(int i, int n)
+{
+    if (n <= 1)
+        return 0;
+    int period = 2 * (n - 1);
+    i %= period;
+    if (i < 0) i += period;
+    if (i >= n) i = period - i;
+    return i;
+}
+
+/* Shared core for the reflect-101-padded int16 FIR leaves (0x180030fc0
+ * column-wise, 0x180040560 row-wise, 0x180033b40 fixed 7-tap).  Filters `n`
+ * gathered samples:
+ *   dst[j*dstride] = (int16)(( Σ_{k=0}^{K-1} coef[k]*buf[refl101(j-H+k,n)]
  *                              + 0x4000 ) >> 15)
- * with BORDER_REFLECT_101 (refl(i) = -i for i<0, 2*(n-1)-i for i>=n).  The
- * accumulation is integer and order-independent, so the vendor's split into a
- * descending "left" pass, a plain middle pass and a descending "right" pass is
+ * The accumulation is integer and order-independent, so the vendor's split into
+ * a descending "left" pass, a plain middle pass and a descending "right" pass is
  * bit-identical to this closed form. */
 static void fir_reflect_line(int16_t *dst, int dstride, const int16_t *buf,
                              const int16_t *coef, int K, int H, int n)
 {
     for (int j = 0; j < n; j++) {
         uint32_t s = 0;
-        for (int k = 0; k < K; k++) {
-            int idx = j - H + k;
-            if (idx < 0) idx = -idx;
-            else if (idx >= n) idx = 2 * (n - 1) - idx;
-            s += (uint32_t)((int32_t)coef[k] * (int32_t)buf[idx]);
-        }
+        for (int k = 0; k < K; k++)
+            s += (uint32_t)((int32_t)coef[k] * (int32_t)buf[refl101(j - H + k, n)]);
         dst[j * dstride] = (int16_t)((int32_t)(s + 0x4000u) >> 15);
     }
 }
@@ -287,4 +297,34 @@ int cr_fir_reflect_rows(int16_t *out, const int16_t *in, const int16_t *coef,
         fir_reflect_line(out + r * W, 1, buf, coef, K, H, W);
     }
     return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180033b40 — fixed 7-tap reflect-101 FIR down each row.
+ *
+ *   Args (ms_abi): rcx = out (int16*), rdx = in (int16*), r8 = coef (int16*),
+ *   r9d = W (row length), [rsp+0x20] = R (row count).
+ *
+ *   For each row r (0..R-1):
+ *       out[r*W + j] = (int16)(( Σ_{k=0}^{6} coef[k]*in[r*W + refl101(j-3+k,W)]
+ *                                + 0x4000 ) >> 15)        for j = 0..W-1
+ *   i.e. the same reflect-101 FIR as the two leaves above but with a fixed
+ *   7-tap kernel (centre H=3).  The vendor unrolls it two outputs at a time
+ *   with a parity-dependent tail; since the accumulation is integer and
+ *   order-independent the closed form is bit-identical.
+ *
+ *   NOTE: the kernel is fixed at K=7 (the twins clamp K to n-1), so the
+ *   window spans more than one BORDER_REFLECT_101 period when W < 4.  In that
+ *   degenerate case the vendor's single-fold edge passes overlap and read into
+ *   the neighbouring row (verified with an index-map probe); the closed form
+ *   below is the well-defined reflect-101 and matches the vendor for all
+ *   W >= 4, the domain in which a 7-tap reflected filter is meaningful.
+ * ------------------------------------------------------------------------ */
+void cr_fir7_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
+                     int W, int R)
+{
+    if (R <= 0)
+        return;
+    for (int r = 0; r < R; r++)
+        fir_reflect_line(out + r * W, 1, in + r * W, coef, 7, 3, W);
 }

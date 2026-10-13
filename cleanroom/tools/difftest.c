@@ -2759,6 +2759,38 @@ static void test_fir_reflect_rows(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir_reflect_rows\n");
 }
 
+/* ---- batch 40: fixed 7-tap reflect-101 FIR down each row ---------------- *
+ * The vendor uses a fixed K=7 kernel (unlike the twins, which clamp K to
+ * n-1), so a 7-wide window needs W >= 4 to stay within one BORDER_REFLECT_101
+ * period.  For W <= 3 the vendor's single-fold edge passes overlap and read
+ * into the neighbouring row (an artifact of the unrolled tail, verified with
+ * the `probe7` index-map probe); that domain is not a well-defined filter and
+ * is excluded here.  For W >= 4 the closed-form refl101 matches exactly. */
+static void test_fir7_reflect(void)
+{
+    typedef void (WINAPI *v_v_pppii)(int16_t *, const int16_t *,
+                                     const int16_t *, int, int);
+    v_v_pppii v = (v_v_pppii)fn_at(RVA(0x180033b40));
+    begin("cr_fir7_reflect");
+    int bad = g_fail;
+    enum { MAXW = 200, MAXR = 40 };
+    int16_t inv[MAXW * MAXR], coefv[7], outv[MAXW * MAXR], outc[MAXW * MAXR];
+    for (int t = 0; t < 20000; t++) {
+        int W = 4 + (int)(rnd() % (MAXW - 3));    /* row length, W >= 4 */
+        int R = (int)(rnd() % (MAXR + 1));        /* row count, incl. 0 */
+        if (t % 8 == 0) R = 0;                    /* force the no-op path */
+        for (int i = 0; i < 7; i++) coefv[i] = (int16_t)rnd();
+        for (int i = 0; i < W * MAXR; i++) inv[i] = (int16_t)rnd();
+        memset(outv, 0x5A, sizeof outv);
+        memset(outc, 0x5A, sizeof outc);
+        v(outv, inv, coefv, W, R);
+        cr_fir7_reflect(outc, inv, coefv, W, R);
+        cmp_buf("out", (unsigned char *)outv, (unsigned char *)outc,
+                sizeof(int16_t) * W * R, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fir7_reflect\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -2779,6 +2811,30 @@ int main(int argc, char **argv)
     int (WINAPI *dmain)(void *, u32, void *) = (void *)(g_base + opt->AddressOfEntryPoint);
     int ok = dmain(g_base, 1, NULL);
     printf("[+] DllMain -> %d\n\n", ok);
+
+    if (argc > 2 && strcmp(argv[2], "probe7") == 0) {
+        /* Empirically recover the vendor's tap -> input index map for
+         * 0x180033b40: with coef[k]=32767 and in[i]=i, out[j] == index. */
+        typedef void (WINAPI *v_v_pppii)(int16_t *, const int16_t *,
+                                         const int16_t *, int, int);
+        v_v_pppii v = (v_v_pppii)fn_at(RVA(0x180033b40));
+        int16_t in[512], out[512], coef[7];
+        for (int i = 0; i < 512; i++) in[i] = (int16_t)i;
+        for (int W = 1; W <= 10; W++) {
+            printf("W=%d:", W);
+            for (int k = 0; k < 7; k++) {
+                for (int i = 0; i < 7; i++) coef[i] = 0;
+                coef[k] = 32767;
+                for (int i = 0; i < W; i++) out[i] = -12345;
+                v(out, in, coef, W, 1);
+                printf(" k%d[", k);
+                for (int j = 0; j < W; j++) printf("%s%d", j ? "," : "", out[j]);
+                printf("]");
+            }
+            printf("\n");
+        }
+        return 0;
+    }
 
 
     printf("== math kernel ==\n");
@@ -2913,6 +2969,8 @@ int main(int argc, char **argv)
     test_fir_reflect();
     printf("\n== reflect-101-padded row FIR ==\n");
     test_fir_reflect_rows();
+    printf("\n== fixed 7-tap reflect-101 row FIR ==\n");
+    test_fir7_reflect();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
