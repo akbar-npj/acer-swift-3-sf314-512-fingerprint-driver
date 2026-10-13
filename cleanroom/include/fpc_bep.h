@@ -373,4 +373,7 @@ void     cr_fir7_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
 /* ---- batch 41: in-place separable box mean (3x3 / 5x5) on a float image --- */
 int      cr_box_mean_f32(void *img1, void *img2, int mode);              /* 0x18002c600 */
 
+/* ---- batch 42: stack-based Hoare quicksort over 8-byte records ------------ */
+int      cr_sort_records(void *recs, int n, int key_type, int dir);      /* 0x18003bf90 */
+
 #endif /* FPC_BEP_H */

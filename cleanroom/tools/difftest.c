@@ -2829,6 +2829,71 @@ static void test_box_mean(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_box_mean_f32\n");
 }
 
+/* ---- batch 42: stack-based Hoare quicksort over 8-byte records ---------- */
+static void test_sort_records(void)
+{
+    typedef int (WINAPI *v_i_piii)(void *, int, int, int);
+    v_i_piii v = (v_i_piii)fn_at(RVA(0x18003bf90));
+    begin("cr_sort_records");
+    int bad = g_fail;
+    enum { MAXN = 64 };
+    struct rec { uint32_t v, k; } rv[MAXN], rc[MAXN];
+    for (int t = 0; t < 20000; t++) {
+        int n = (int)(rnd() % (MAXN + 1));
+        int kt = (int)(rnd() % 2);
+        int dir = (int)(rnd() % 2);
+        for (int i = 0; i < n; i++) {
+            rv[i].v = rnd();
+            if (kt == 1) {
+                /* finite float keys (many duplicates); NaN would make the
+                 * vendor's partition non-terminating, so avoid it */
+                if (t % 5 == 0) {
+                    float f = (float)(int32_t)rnd() * 1e-3f;
+                    memcpy(&rv[i].k, &f, 4);
+                } else {
+                    float f = (float)((int)(rnd() % 17) - 8);
+                    memcpy(&rv[i].k, &f, 4);
+                }
+            } else {
+                rv[i].k = (t % 5 == 0)
+                              ? rnd()
+                              : (uint32_t)(int32_t)((int)(rnd() % 17) - 8);
+            }
+            rc[i] = rv[i];
+        }
+        int retv = v(rv, n, kt, dir);
+        int retc = cr_sort_records(rc, n, kt, dir);
+        if (retv != retc) mismatch("ret", (u32)t, (u32)retv, (u32)retc);
+        cmp_buf("rec", (unsigned char *)rv, (unsigned char *)rc,
+                sizeof(rv[0]) * n, (u32)t);
+    }
+    /* invalid selectors -> 0x69 */
+    for (int kt = -1; kt <= 3; kt++)
+        for (int dir = -1; dir <= 3; dir++) {
+            if ((kt == 0 || kt == 1) && (dir == 0 || dir == 1)) continue;
+            struct rec a[2] = {{1, 1}, {2, 2}}, b[2] = {{1, 1}, {2, 2}};
+            int rv = v(a, 2, kt, dir);
+            int rc = cr_sort_records(b, 2, kt, dir);
+            if (rv != rc) mismatch("guard-ret", (u32)(kt * 8 + dir),
+                                   (u32)rv, (u32)rc);
+        }
+    /* n >= 0x100001 is a no-op returning 1 */
+    {
+        struct rec *big = malloc(sizeof(struct rec) * 0x100001u);
+        if (big) {
+            big[0].v = 7; big[0].k = 9;
+            big[0x100000u].v = 3; big[0x100000u].k = 1;
+            int rv = v(big, 0x100001, 0, 0);
+            if (rv != 1) mismatch("big-ret", 0, (u32)rv, 1);
+            if (big[0].v != 7 || big[0].k != 9 ||
+                big[0x100000u].v != 3 || big[0x100000u].k != 1)
+                mismatch("big-untouched", 0, 0, 1);
+            free(big);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_sort_records\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {
@@ -3041,6 +3106,8 @@ int main(int argc, char **argv)
     test_fir7_reflect();
     printf("\n== in-place separable box mean (3x3 / 5x5) ==\n");
     test_box_mean();
+    printf("\n== stack-based Hoare quicksort (8-byte records) ==\n");
+    test_sort_records();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
