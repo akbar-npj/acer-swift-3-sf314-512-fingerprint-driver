@@ -1504,6 +1504,127 @@ int cr_row_fir_vfir(uint8_t *out, cr_fir_row_ctx *ctx,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180019080 — two-scale (n=9 / n=15) band-pass difference, byte output.
+ *   int fn(cr_image *out, const cr_image *in, const cr_bandpass_cfg *cfg)
+ *
+ * Builds an n=9 and an n=15 FIR context (cr_fir_ctx_init_i8 from cfg->sigma9 /
+ * cfg->sigma15 and the sign-extended cfg->flag) then streams both over every
+ * source row with cr_row_fir_vfir into buf1 / buf2.  For each row it stores the
+ * normalised difference of the two filtered rows into out->data:
+ *     d = (int16_t)(buf1[col] - buf2[col]);
+ *     maxd = max |d| over the row;   scale = maxd ? 0x1fc00 / maxd : 0x400;
+ *     out[row*w + col] = (uint8_t)((d * scale) >> 10);
+ * buf3[row] holds each row's maxd and maxall the global maximum.  When maxall
+ * is non-zero a second pass re-scales every output byte row by row:
+ *     s2 = buf3[row] ? (buf3[row] << 10) / maxall : 0x400;
+ *     out[...] = (uint8_t)((((int8_t)out[...] * s2) >> 10) + 128);
+ * Workspace (buf1 = out->w bytes, buf2 = out->w bytes, buf3 = out->h int16) is
+ * freed in reverse order on every exit path.
+ * ------------------------------------------------------------------------ */
+int cr_bandpass_diff_i8(cr_image *out, const cr_image *in,
+                        const cr_bandpass_cfg *cfg)
+{
+    cr_fir_row_ctx ctx9, ctx15;
+    int r;
+
+    r = cr_fir_ctx_init_i8(&ctx9, in, cfg->sigma9, 9, (int)(int8_t)cfg->flag);
+    if (r != 0)
+        return r;
+
+    r = cr_fir_ctx_init_i8(&ctx15, in, cfg->sigma15, 15,
+                           (int)(int8_t)cfg->flag);
+    if (r != 0) {
+        cr_free_slot8(&ctx9);
+        return r;
+    }
+
+    uint8_t *buf1 = NULL, *buf2 = NULL;
+    int16_t *buf3 = NULL;
+
+    r = cr_malloc_aligned16((void **)&buf1, (size_t)(intptr_t)out->w);
+    if (r != 0) {
+        cr_free_slot8(&ctx9);
+        cr_free_slot8(&ctx15);
+        return r;
+    }
+    r = cr_malloc_aligned16((void **)&buf2, (size_t)(intptr_t)out->w);
+    if (r != 0) {
+        cr_free_slot8(&ctx9);
+        cr_free_slot8(&ctx15);
+        cr_sized_free((void **)&buf1);
+        return r;
+    }
+    r = cr_malloc_aligned16((void **)&buf3, (size_t)((intptr_t)out->h * 2));
+    if (r != 0) {
+        cr_free_slot8(&ctx9);
+        cr_free_slot8(&ctx15);
+        cr_sized_free((void **)&buf1);
+        cr_sized_free((void **)&buf2);
+        return r;
+    }
+
+    int w = in->w;
+    int h = in->h;
+    int maxall = 0;
+
+    if (h > 0) {
+        uint8_t *od = (uint8_t *)out->data;
+        for (int row = 0; row < h; row++, od += w) {
+            r = cr_row_fir_vfir(buf1, &ctx9, in, row);
+            if (r == 0)
+                r = cr_row_fir_vfir(buf2, &ctx15, in, row);
+            if (r != 0) {
+                cr_free_slot8(&ctx9);
+                cr_free_slot8(&ctx15);
+                cr_sized_free((void **)&buf1);
+                cr_sized_free((void **)&buf2);
+                cr_sized_free((void **)&buf3);
+                return r;
+            }
+
+            int maxd = 0;
+            for (int col = 0; col < w; col++) {
+                int d = (int)buf1[col] - (int)buf2[col];
+                if (d < 0) d = -d;
+                if (maxd < d) maxd = d;
+            }
+            buf3[row] = (int16_t)maxd;
+            if (maxall < maxd) maxall = maxd;
+
+            int scale = 0x400;
+            if (maxd != 0) scale = 0x1fc00 / maxd;
+            for (int col = 0; col < w; col++) {
+                int d = (int16_t)((int)buf1[col] - (int)buf2[col]);
+                od[col] = (uint8_t)((int32_t)((uint32_t)d * (uint32_t)scale)
+                                    >> 10);
+            }
+        }
+    }
+
+    if (maxall != 0) {
+        uint8_t *od = (uint8_t *)out->data;
+        for (int row = 0, coloff = 0; row < h; row++, coloff += w) {
+            int md = buf3[row];
+            int s2 = 0x400;
+            if (md != 0) s2 = (int)((int64_t)md << 10) / maxall;
+            for (int col = 0; col < w; col++) {
+                int v = (int8_t)od[coloff + col];
+                v = (int32_t)((uint32_t)v * (uint32_t)s2) >> 10;
+                v += 128;
+                od[coloff + col] = (uint8_t)v;
+            }
+        }
+    }
+
+    cr_free_slot8(&ctx9);
+    cr_free_slot8(&ctx15);
+    cr_sized_free((void **)&buf1);
+    cr_sized_free((void **)&buf2);
+    cr_sized_free((void **)&buf3);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x18003e7a0 — bilinear orientation-field sampler.
  *   int fn(const cr_angle_field *d, int px, int py):
  *     Each byte of the field is an angle phase; the (cos,sin) vector is

@@ -595,6 +595,18 @@ int      cr_fir_ctx_init(cr_fir_row_ctx *ctx, const cr_image *img,
                          float sigma, int n, int flag);          /* 0x180021700 */
 int      cr_fir_ctx_init_i8(cr_fir_row_ctx *ctx, const cr_image *img,
                             float sigma, int n, int flag);       /* 0x18003a6b0 */
+
+/* Two-scale band-pass config for cr_bandpass_diff_i8 (0x180019080): the two
+ * FIR sigmas and the (sign-extended) flag handed to cr_fir_ctx_init_i8. */
+typedef struct {
+    float   sigma9;    /* +0x00 */
+    float   sigma15;   /* +0x04 */
+    int32_t _pad;      /* +0x08 */
+    int8_t  flag;      /* +0x0c */
+} cr_bandpass_cfg;
+
+int      cr_bandpass_diff_i8(cr_image *out, const cr_image *in,
+                             const cr_bandpass_cfg *cfg);        /* 0x180019080 */
 int      cr_row_fir_i16(int16_t *out, cr_fir_row_ctx *ctx,
                         const cr_image *img, int target);        /* 0x18002af00 */
 int      cr_row_fir_i8(uint8_t *out, cr_fir_row_ctx *ctx,

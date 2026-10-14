@@ -1725,6 +1725,49 @@ static void test_stretch_14bit(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_stretch_14bit\n");
 }
 
+/* ---- batch 71: two-scale band-pass difference (0x180019080) ------------ */
+static void test_bandpass_diff_i8(void)
+{
+    typedef int (WINAPI *v_bp)(void *, const void *, const void *);
+    v_bp v = (v_bp)fn_at(RVA(0x180019080));
+    begin("cr_bandpass_diff_i8");
+    int bad = g_fail;
+
+    enum { MAXW = 64, MAXH = 40, NP = MAXW * MAXH };
+    static uint8_t inbuf[NP], ov[NP], oc[NP];
+    static cr_image iv, ovv, ovc;
+    static cr_bandpass_cfg cfg;
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 4 * (4 + (int)(rnd() % 13));   /* 16..64, multiple of 4 */
+        int h = 16 + (int)(rnd() % 24);        /* 16..39 */
+        if (rnd() % 5 == 0) w = 4 * (1 + (int)(rnd() % 3));  /* 4..12 */
+        if (rnd() % 5 == 0) h = 4 + (int)(rnd() % 12);       /* 4..15 */
+
+        for (int i = 0; i < NP; i++) inbuf[i] = (uint8_t)rnd();
+        for (int i = 0; i < NP; i++) { ov[i] = (uint8_t)rnd(); oc[i] = ov[i]; }
+
+        cr_image_set(&iv, inbuf, w, h);
+        if (rnd() % 6 == 0) iv.a = w + 1;       /* break a==w invariant */
+        if (rnd() % 6 == 0) iv.offx = 1;        /* break offset invariant */
+
+        cr_image_set(&ovv, ov, w, h);
+        cr_image_set(&ovc, oc, w, h);
+
+        cfg.sigma9  = 0.5f + (float)(rnd() % 200) / 100.0f;
+        cfg.sigma15 = 0.5f + (float)(rnd() % 200) / 100.0f;
+        cfg._pad    = 0;
+        cfg.flag    = (int8_t)((rnd() % 4 == 0) ? (int)(rnd() % 256) : 0);
+
+        int rv = v(&ovv, &iv, &cfg);
+        int rc = cr_bandpass_diff_i8(&ovc, &iv, &cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv != 0) continue;
+        cmp_buf("out", ov, oc, (size_t)(w * h), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bandpass_diff_i8\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7406,6 +7449,7 @@ int main(int argc, char **argv)
     test_resize_pair_18000();
     test_hist_percentiles();
     test_stretch_14bit();
+    test_bandpass_diff_i8();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
