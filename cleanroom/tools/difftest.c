@@ -1960,6 +1960,39 @@ static void test_fir_ctx_init(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir_ctx_init\n");
 }
 
+/* 0x180035be0 — stream a 7-tap vertical FIR over src into dst. */
+static void test_fir7_image_u8(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, float);
+    fn_t v = (fn_t)fn_at(RVA(0x180035be0));
+    begin("cr_fir7_image_u8");
+    int bad = g_fail;
+
+    enum { MAXW = 32, MAXH = 32, NP = MAXW * MAXH };
+    static u8 sbuf[NP], dbv[NP], dbc[NP];
+    static cr_image sv, sc, dv, dc;
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 7 + (int)(rnd() % (MAXW - 7));   /* >= 7 for the 7-tap ctx */
+        int h = 7 + (int)(rnd() % (MAXH - 7));
+        float sigma = (float)(rnd() % 1000) / 500.0f;
+
+        for (int i = 0; i < NP; i++) sbuf[i] = (u8)rnd();
+        memset(dbv, 0xAA, sizeof dbv); memset(dbc, 0xAA, sizeof dbc);
+
+        cr_image_set(&sv, sbuf, w, h);
+        cr_image_set(&sc, sbuf, w, h);
+        cr_image_set(&dv, dbv, w, h);
+        cr_image_set(&dc, dbc, w, h);
+
+        int rv = v(&dv, &sv, sigma);
+        int rc = cr_fir7_image_u8(&dc, &sc, sigma);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", dbv, dbc, sizeof dbv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fir7_image_u8\n");
+}
+
 /* ---- batch 68: byte-output streaming-FIR ctx initialiser ---------------- */
 static void test_fir_ctx_init_i8(void)
 {
@@ -8526,6 +8559,7 @@ int main(int argc, char **argv)
     test_bio_get_ctx();
     test_ctx_find_node();
     test_fir_ctx_init();
+    test_fir7_image_u8();
     test_fir_ctx_init_i8();
     test_fft_real_n();
     test_obj_init_12fe0();

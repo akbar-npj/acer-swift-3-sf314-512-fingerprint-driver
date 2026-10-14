@@ -1831,3 +1831,52 @@ int cr_bilinear_angle_sample(const cr_angle_field *d, int px, int py)
     int ang = cr_atan2_fixed(sin_i, cos_i);
     return (ang + 0x400000) >> 23;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180035be0 — stream a 7-tap vertical FIR over `src` into `dst`.
+ *   int fn(cr_image *dst, const cr_image *src, float sigma):
+ *     require dst and src to share (a,b,w,h,offx,offy), dst.a == dst.w,
+ *     dst.b == dst.h and dst.offx == dst.offy == 0, else return 0x69.
+ *     r = cr_fir_ctx_init(&ctx, src, sigma, 7, 0); if (r) return r;
+ *     for (row = 0; row < src.h; row++) {
+ *       r = cr_row_fir_i8(dst->data + row * src.w, &ctx, src, row);
+ *       if (r) { cr_sized_free(&ctx.base); return r; }
+ *     }
+ *     cr_sized_free(&ctx.base);
+ *     return 0;
+ * ------------------------------------------------------------------------ */
+int cr_fir7_image_u8(cr_image *dst, const cr_image *src, float sigma)
+{
+    if (dst->a != src->a || dst->b != src->b)
+        return 0x69;
+    if (dst->w != src->w || dst->h != src->h)
+        return 0x69;
+    if (src->offx != dst->offx || src->offy != dst->offy)
+        return 0x69;
+    if (dst->a != dst->w || dst->b != dst->h)
+        return 0x69;
+    if (dst->offx != 0 || dst->offy != 0)
+        return 0x69;
+
+    cr_fir_row_ctx ctx;
+    int r = cr_fir_ctx_init(&ctx, src, sigma, 7, 0);
+    if (r != 0)
+        return r;
+
+    int w = src->w;
+    int h = src->h;
+
+    if (h > 0) {
+        uint8_t *d = (uint8_t *)dst->data;
+        for (int row = 0; row < h; row++) {
+            r = cr_row_fir_i8(d + (long long)row * w, &ctx, src, row);
+            if (r != 0) {
+                cr_sized_free(&ctx.base);
+                return r;
+            }
+        }
+    }
+
+    cr_sized_free(&ctx.base);
+    return 0;
+}
