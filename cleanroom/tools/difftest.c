@@ -2183,6 +2183,54 @@ static void test_hist_percentiles_u8(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_masked_hist_percentiles_u8\n");
 }
 
+/* 0x180011020 — in-place contrast stretch of a u8 image using a mask bitmap. */
+static void test_stretch_u8_mode(void)
+{
+    typedef int (WINAPI *v_stretch)(void *, const void *, float, float, int);
+    v_stretch v = (v_stretch)fn_at(RVA(0x180011020));
+    begin("cr_stretch_u8_mode");
+    int bad = g_fail;
+
+    enum { MAXW = 32, MAXH = 32, NP = MAXW * MAXH, MAXW_WORDS = 512 };
+    static uint8_t  pv[NP], pc[NP];
+    static uint32_t bits[MAXW_WORDS];
+    static unsigned char iv[0x20], ic[0x20], bmv[0x20], bmc[0x20];
+
+    for (int t = 0; t < 20000; t++) {
+        int w = (int)(rnd() % MAXW);
+        int h = (int)(rnd() % MAXH);
+        int total = w * h;
+        int mode = (int)(rnd() % 6);
+        int offx = (int)(rnd() % 6);
+        int offy = (int)(rnd() % 6);
+        int stride_bits = (2 + (int)(rnd() % 3)) * 32;   /* 64..128 bits */
+
+        for (int i = 0; i < NP; i++) { uint8_t b = (uint8_t)rnd(); pv[i] = b; pc[i] = b; }
+        if ((rnd() & 3) == 0 && total > 0) {             /* sometimes force min == max */
+            uint8_t c = (uint8_t)rnd();
+            for (int i = 0; i < total; i++) { pv[i] = c; pc[i] = c; }
+        }
+        for (int i = 0; i < MAXW_WORDS; i++) bits[i] = rnd();
+        if ((rnd() % 8) == 0)                            /* sometimes force count == 0 */
+            for (int i = 0; i < MAXW_WORDS; i++) bits[i] = 0;
+
+        float f_lo = (float)(rnd() % 201) / 200.0f;      /* 0.0 .. 1.0 */
+        float f_hi = (float)(rnd() % 201) / 200.0f;
+
+        mk_image(iv,  pv,   w, w, h, 0, 0);
+        mk_image(ic,  pc,   w, w, h, 0, 0);
+        mk_image(bmv, bits, stride_bits, w, h, offx, offy);
+        mk_image(bmc, bits, stride_bits, w, h, offx, offy);
+
+        int rv = v(iv, bmv, f_lo, f_hi, mode);
+        int rc = cr_stretch_u8_mode((cr_image *)ic, (const cr_image *)bmc,
+                                    f_lo, f_hi, mode);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("px", pv, pc, NP, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_stretch_u8_mode\n");
+}
+
 /* ---- batch 70: in-place 14-bit contrast stretch (0x1800281a0) ---------- */
 static void test_stretch_14bit(void)
 {
@@ -8375,6 +8423,7 @@ int main(int argc, char **argv)
     test_resize_pair_18000();
     test_hist_percentiles();
     test_hist_percentiles_u8();
+    test_stretch_u8_mode();
     test_stretch_14bit();
     test_bandpass_diff_i8();
     test_bandpass_dispatch();

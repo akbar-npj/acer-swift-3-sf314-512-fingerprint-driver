@@ -668,6 +668,59 @@ int cr_masked_hist_percentiles_u8(int *out_lo, int *out_hi, int *out_count,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180011020 — in-place contrast stretch of a u8 image using a mask bitmap.
+ *   int fn(cr_image *img, const cr_image *bitmap,
+ *          float frac_lo, float frac_hi, int mode):
+ *     mode 0 -> return 0 (no-op)
+ *     mode 1 -> lo/hi/count = cr_masked_minmax(img, bitmap)
+ *     mode 2 -> lo/hi/count = cr_masked_hist_percentiles_u8(img, bitmap,
+ *                                          frac_lo, frac_hi, 512); then clamp
+ *                                          hi to <= 0xff and lo to >= 0
+ *     other  -> return 0x69
+ *     If count > 0, lo < hi and w*h > 0, remap every byte of img->data with
+ *        v -> clamp(((v - lo) * (0x7f8000 / (hi - lo))) >> 15, 0, 255).
+ *     The vendor derives the scale once and truncates the product with a 32-bit
+ *     signed multiply followed by an arithmetic >>15, so we mirror that.
+ * ------------------------------------------------------------------------ */
+int cr_stretch_u8_mode(cr_image *img, const cr_image *bitmap,
+                       float frac_lo, float frac_hi, int mode)
+{
+    uint8_t m = (uint8_t)mode;
+    int lo = 0, hi = 0, count = 0;
+
+    if (m != 0) {
+        if (m == 1) {
+            cr_masked_minmax(&lo, &hi, &count, img, bitmap);
+        } else if (m == 2) {
+            int r = cr_masked_hist_percentiles_u8(&lo, &hi, &count, img, bitmap,
+                                                  frac_lo, frac_hi, 0x200);
+            if (r != 0)
+                return r;
+            hi = (hi < 0x100) ? hi : 0xff;
+            lo = (lo >= 0) ? lo : 0;
+        } else {
+            return 0x69;
+        }
+
+        if (count > 0 && lo < hi && img->w * img->h > 0) {
+            int scale = 0x7f8000 / (hi - lo);
+            uint8_t *d = (uint8_t *)img->data;
+            int n = img->w * img->h;
+
+            for (int i = 0; i < n; i++) {
+                int t = (int)(((int)d[i] - lo) * scale) >> 15;
+                int o;
+                if (t >= 0xff)      o = 0xff;
+                else if (t < 1)     o = 0;
+                else                o = t;
+                d[i] = (uint8_t)o;
+            }
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x1800281a0 — in-place 14-bit contrast stretch of an int16 image.
  *   int fn(cr_image *img, const cr_image *mask, int and_mask,
  *          float frac_lo, float frac_hi, int mode)

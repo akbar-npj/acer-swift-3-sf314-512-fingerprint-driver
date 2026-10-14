@@ -5,7 +5,7 @@ A function is "ready" when it is not yet implemented and every one of its
 in-module callees is implemented.  Inputs (all in this directory):
   * ../reachable.txt  — the 355 target functions (RVA, size, depth, symbol)
   * done.txt          — RVAs already parity-verified
-  * callees.txt       — per-function in-module call targets (from r2)
+  * callees_direct.txt — per-function in-module DIRECT call targets (from r2)
 """
 import os, sys
 
@@ -25,7 +25,7 @@ for ln in open(os.path.join(HERE, 'done.txt')):
         done.add(int(ln, 16))
 
 callees = {}
-for ln in open(os.path.join(HERE, 'callees.txt')):
+for ln in open(os.path.join(HERE, 'callees_direct.txt')):
     p = ln.split()
     if p:
         callees[int(p[0], 16)] = [int(x, 16) for x in p[1:]]
