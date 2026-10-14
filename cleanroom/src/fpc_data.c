@@ -22,6 +22,21 @@ void *cr_bio_init(void)
     return (char *)(*(void **)(g_cr_image_base + 0x16f4c8u)) + 8;
 }
 
+/* 0x180045860 — fetch the bio context pointer into *out.
+ *   int fn(void **out, unsigned flag)
+ * If the low 16 bits of `flag` are non-zero, returns 1 without touching *out.
+ * Otherwise ctx = cr_bio_init(); a NULL ctx returns 1, else *out = *ctx and 0. */
+int cr_bio_get_ctx(void **out, unsigned flag)
+{
+    if ((flag & 0xffffu) != 0)
+        return 1;
+    void *ctx = cr_bio_init();
+    if (!ctx)
+        return 1;
+    *out = *(void **)ctx;
+    return 0;
+}
+
 /* 0x180030340 — calibration/data blob lookup by selector.
  * Transcribed from disassembly: store 0 into both outputs, then switch(sel):
  *   0 -> ptr=0,    len=0,     ret 0

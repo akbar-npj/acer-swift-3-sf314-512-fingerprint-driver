@@ -1327,6 +1327,39 @@ static void test_bio_init(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bio_init\n");
 }
 
+/* ---- batch 68: bio-context fetch ----------------------------------------- */
+static void test_bio_get_ctx(void)
+{
+    typedef int (WINAPI *v_i_ppw)(void **, unsigned);
+    v_i_ppw v = (v_i_ppw)fn_at(RVA(0x180045860));
+    begin("cr_bio_get_ctx");
+    int bad = g_fail;
+
+    static u8 ctx[0x20];
+    void **slot = (void **)(g_base + 0x16f4c8);
+    void *saved = *slot;
+    *(void **)ctx = (void *)(uintptr_t)0x1111222233334444ULL;
+    *(void **)(ctx + 8) = (void *)(uintptr_t)0xAABBCCDDEEFF0011ULL;
+    *slot = ctx;
+
+    void *ov = NULL, *oc = NULL;
+    int rv = v(&ov, 0);
+    int rc = cr_bio_get_ctx(&oc, 0);
+    if (rv != rc) mismatch("ret", 0, (u32)rv, (u32)rc);
+    if (ov != oc) mismatch("out", 0, (u32)(uintptr_t)ov, (u32)(uintptr_t)oc);
+
+    /* flag != 0 must short-circuit to 1 without touching *out */
+    ov = (void *)1; oc = (void *)1;
+    rv = v(&ov, 5);
+    rc = cr_bio_get_ctx(&oc, 5);
+    if (rv != rc) mismatch("ret-nz", 5, (u32)rv, (u32)rc);
+    if (ov != (void *)1 || oc != (void *)1)
+        mismatch("out-nz", 5, (u32)(uintptr_t)ov, (u32)(uintptr_t)oc);
+
+    *slot = saved;
+    if (g_fail == bad) end(); else printf("  FAIL cr_bio_get_ctx\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6882,6 +6915,7 @@ int main(int argc, char **argv)
     test_warp_bilinear_q15();
     test_cordic_atan_q15();
     test_bio_init();
+    test_bio_get_ctx();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
