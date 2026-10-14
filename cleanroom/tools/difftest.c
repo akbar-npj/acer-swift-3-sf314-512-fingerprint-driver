@@ -1230,6 +1230,47 @@ static void test_gauss_deriv_3img(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_3img\n");
 }
 
+/* ---- batch 68: Q15 bilinear warp of an int16 image ---------------------- */
+static void mk_image(unsigned char *d, void *data, int stride, int w, int h,
+                     int offx, int offy);
+static void test_warp_bilinear_q15(void)
+{
+    typedef void (WINAPI *v_v_ppp)(void *, void *, const float *);
+    v_v_ppp v = (v_v_ppp)fn_at(RVA(0x18001fd10));
+    begin("cr_warp_bilinear_q15");
+    int bad = g_fail;
+
+    static int16_t sv[4096], dv[4096], dc[4096];
+    static u8 sd[0x20], ddv[0x20], ddc[0x20];
+
+    for (int t = 0; t < 4000; t++) {
+        int sw = 16 + (int)(rnd() % 17u);        /* 16..32 */
+        int sh = 16 + (int)(rnd() % 17u);
+        int dw = 16 + (int)(rnd() % 17u);
+        int dh = 16 + (int)(rnd() % 17u);
+        int offx = (t & 1) ? (int)(rnd() % 3u) : 0;
+        int offy = (t & 1) ? (int)(rnd() % 3u) : 0;
+
+        for (int i = 0; i < 4096; i++) sv[i] = (int16_t)rnd();
+        for (int i = 0; i < 4096; i++) { dv[i] = 0x5A5A; dc[i] = 0x5A5A; }
+
+        float coef[6];
+        for (int i = 0; i < 6; i++)
+            coef[i] = (float)((int)(rnd() % 2001u) - 1000) / 100.0f;  /* -10..10 */
+
+        mk_image(sd,  sv,  sw, sw, sh, 0, 0);
+        mk_image(ddv, dv, dw, dw, dh, offx, offy);
+        mk_image(ddc, dc, dw, dw, dh, offx, offy);
+
+        v(ddv, sd, coef);
+        cr_warp_bilinear_q15((cr_image *)ddc, (const cr_image *)sd, coef);
+
+        cmp_buf("dst", (const unsigned char *)dv, (const unsigned char *)dc,
+                (u32)(dw * dh * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_warp_bilinear_q15\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6782,6 +6823,7 @@ int main(int argc, char **argv)
     test_feature_qualify();
     test_obj_init_17ca0();
     test_gauss_deriv_3img();
+    test_warp_bilinear_q15();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

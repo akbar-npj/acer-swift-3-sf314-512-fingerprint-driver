@@ -269,6 +269,8 @@ void     cr_affine_sample_u8(cr_image *dst, const cr_image *src,
                              const cr_affine_map *s);                     /* 0x18002ca30 */
 void     cr_polyphase_fir4(uint8_t *out, const uint8_t *in,
                            const int16_t *coef, int nbytes, int ncoef);   /* 0x18000ee70 */
+void     cr_warp_bilinear_q15(cr_image *dst, const cr_image *src,
+                              const float *coef);                         /* 0x18001fd10 */
 
 /* ---- batch 19: 464-byte bilinear splat --------------------------------- */
 void     cr_splat_bilinear(const float *w, float *bufA, float *bufB,

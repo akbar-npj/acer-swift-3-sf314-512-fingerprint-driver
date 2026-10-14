@@ -73,6 +73,88 @@ void cr_affine_sample_u8(cr_image *dst, const cr_image *src,
     } while (ri != h);
 }
 
+/* 0x18001fd10 — Q15 bilinear warp of an int16 image with ldexp-scaled steps.
+ *   void fn(cr_image *dst, const cr_image *src, const float *coef, uint32_t _)
+ *
+ * `coef` holds {x_col, x_row, x_org, y_col, y_row, y_org} as floats (the same
+ * layout as cr_affine_map).  The vendor scales each axis by
+ *     sx = (2*src->w - 2) * 2^-24 ,  sy = (2*src->h - 2) * 2^-24
+ * (built with cr_ldexpf), truncates the six quotients toward zero to ints and
+ * uses them as the Q15 grid steps:
+ *     x = x_org + row*x_row + col*x_col   (likewise y)
+ * Each 32-bit coordinate is first reduced to its low 24 bits, folded into a
+ * triangle (v > 0x7fffff -> 0xffffff - v) and then shifted right 9 and scaled
+ * by (2*n - 2) to split into an integer part (>>15) and a 15-bit fraction.
+ * The source window origin is src->data + (src->offy*src->a + src->offx) with
+ * row stride src->a; the destination is dst->w x dst->h int16 starting at
+ * dst->data + (dst->offy*dst->a + dst->offx).  A non-positive dst->h is a
+ * no-op; a non-positive dst->w skips the inner loop (as in the vendor). */
+void cr_warp_bilinear_q15(cr_image *dst, const cr_image *src,
+                          const float *coef)
+{
+    int dw = dst->w, dh = dst->h;
+    int sstride = src->a;
+    const int16_t *sbase = (const int16_t *)src->data
+        + ((long long)src->offy * sstride + src->offx);
+    int16_t *dbase = (int16_t *)dst->data
+        + ((long long)dst->offy * dst->a + dst->offx);
+
+    float sx = cr_ldexpf((float)(2 * src->w - 2), -24);
+    float sy = cr_ldexpf((float)(2 * src->h - 2), -24);
+    int xscale = 2 * src->w - 2;
+    int yscale = 2 * src->h - 2;
+
+    int xcol = (int)(coef[0] / sx);
+    int xrow = (int)(coef[1] / sx);
+    int x0   = (int)(coef[2] / sx);
+    int ycol = (int)(coef[3] / sy);
+    int yrow = (int)(coef[4] / sy);
+    int y0   = (int)(coef[5] / sy);
+
+    if (dh <= 0)
+        return;
+
+    int ri = 0;
+    int rowoff = 0;
+    do {
+        if (dw > 0) {
+            int16_t *dp = dbase + rowoff;
+            int x = x0, y = y0;
+            do {
+                int xm = x & 0xffffff;
+                int xv = xm;
+                if (xv > 0x7fffff) xv = 0xffffff - xv;
+                xv = (xv >> 9) * xscale;
+                int xf = xv & 0x7fff, xi = xv >> 15;
+
+                int ym = y & 0xffffff;
+                int yv = ym;
+                if (yv > 0x7fffff) yv = 0xffffff - yv;
+                yv = (yv >> 9) * yscale;
+                int yf = yv & 0x7fff, yi = yv >> 15;
+
+                int idx = yi * sstride + xi;
+                int w00 = ((0x8000 - xf) * (0x8000 - yf)) >> 15;
+                int w10 = ((0x8000 - yf) * xf) >> 15;
+                int w01 = ((0x8000 - xf) * yf) >> 15;
+                int w11 = (xf * yf) >> 15;
+                int v = w00 * sbase[idx]
+                      + w01 * sbase[idx + sstride]
+                      + w10 * sbase[idx + 1]
+                      + w11 * sbase[idx + sstride + 1];
+                x = xm + xcol;
+                y = ym + ycol;
+                *dp = (int16_t)(v >> 15);
+                dp++;
+            } while (dp != dbase + rowoff + dw);
+        }
+        ri++;
+        x0 += xrow;
+        rowoff += dw;
+        y0 += yrow;
+    } while (ri != dh);
+}
+
 /* 0x18000ee70 — 4-phase FIR.  The input is treated as a stream of 4-byte
  * groups; for each group at byte offset 4*p the four output bytes are
  *     out[4p+r] = (int8_t)((0x4000 + sum_{j=0}^{2*iters} in[4p+r+j]*coef[j]) >> 15)
