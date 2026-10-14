@@ -420,6 +420,96 @@ void cr_bitmap_erode(cr_image *dst, const cr_image *src, int count)
     } while (count != it);
 }
 
+/* 0x18003cb30 — replicate-extend the border of a packed bitmap.
+ *   void fn(cr_image *bm, int left, int top, int right, int bottom)
+ *
+ * `bm` is a packed bitmap (a = row stride in bits, offx/offy origin, w x h
+ * content rectangle [offx, offx+w) x [offy, offy+h)).  The surrounding border is
+ * filled by edge replication:
+ *   - `left`   columns [offx, offx+left-1]        <- column offx+left
+ *   - `right`  columns [offx+w-right, offx+w-1]   <- column offx+w-right-1
+ *   - `top`    rows    [offy, offy+top-1]         <- row offy+top
+ *   - `bottom` rows    [offy+h-bottom, offy+h-1]  <- row offy+h-bottom-1
+ * The horizontal fills cover the middle rows [top, h-bottom) first; the vertical
+ * fills then copy those (already extended) rows into the top/bottom bands.  Each
+ * destination bit under mask = cr_bitmask_range(...) is replaced by the source
+ * bit for the horizontal passes, and by the same-column source word bit for the
+ * vertical passes (dst = (dst ^ srcword) & mask ^ dst). */
+void cr_bitmap_extend_border(cr_image *bm, int left, int top, int right,
+                             int bottom)
+{
+    int a = bm->a;                       /* row stride, in bits */
+    int w = bm->w, h = bm->h;
+    int offx = bm->offx, offy = bm->offy;
+    uint32_t *data = (uint32_t *)bm->data;
+    int sw = ((a >= 0) ? a : a + 0x1f) >> 5;
+    uint32_t *base = data + (long long)offy * sw;
+
+    /* --- left columns, middle rows --- */
+    if ((left >> 5) >= 0) {
+        for (int wc = 0; wc != (left >> 5) + 1; wc++) {
+            uint32_t mask = cr_bitmask_range(wc, offx, offx - 1 + left);
+            if (top < h - bottom) {
+                uint32_t *d = base + (long long)top * sw + wc;
+                for (int r = top; r != h - bottom; r++, d += sw) {
+                    uint32_t bit = (data[((offy + r) * a + offx + left) >> 5]
+                                    >> ((offx + left) & 31)) & 1u;
+                    *d = (-bit ^ *d) & mask ^ *d;
+                }
+            }
+        }
+    }
+
+    /* --- right columns, middle rows --- */
+    {
+        int col = (w - right) + -1;
+        int wc = col >> 5;
+        if (wc < sw) {
+            uint32_t *d = base + (long long)top * sw + wc;
+            do {
+                uint32_t mask = cr_bitmask_range(wc, offx + w - right,
+                                                 offx + w - 1);
+                if (top < h - bottom) {
+                    uint32_t *p = d;
+                    for (int r = top; r != h - bottom; r++, p += sw) {
+                        int cc = offx + col;
+                        uint32_t bit = (data[((offy + r) * a + cc) >> 5]
+                                        >> (cc & 31)) & 1u;
+                        *p = (-bit ^ *p) & mask ^ *p;
+                    }
+                }
+                wc++;
+                d++;
+            } while (sw != wc);
+        }
+    }
+
+    /* --- top/bottom rows, full content width --- */
+    {
+        int lo = offx >> 5;
+        int hi = (offx + w) >> 5;
+        uint32_t *p = base + lo;
+        while (lo < hi) {
+            int hb = h - bottom;
+            uint32_t mask = cr_bitmask_range(lo, offx, offx + w - 1);
+            uint32_t src = p[(long long)top * sw];
+            if (top > 0) {
+                uint32_t *q = p;
+                for (int r = 0; r < top; r++, q += sw)
+                    *q = (*q ^ src) & mask ^ *q;
+            }
+            src = p[(long long)(hb - 1) * sw];
+            if (hb < h) {
+                uint32_t *q = p + (long long)hb * sw;
+                for (int r = hb; r < h; r++, q += sw)
+                    *q = (*q ^ src) & mask ^ *q;
+            }
+            lo++;
+            p++;
+        }
+    }
+}
+
 /*
  * 0x18002ddd0 — centroid of the set bits in a bitmap, clamped to a window.
  *

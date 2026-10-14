@@ -4683,6 +4683,43 @@ static void test_grid_insert(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_grid_insert\n");
 }
 
+/* 0x18003cb30 — replicate-extend the border of a packed bitmap. */
+static void test_bitmap_extend_border(void)
+{
+    typedef void (WINAPI *fn_t)(void *, int, int, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x18003cb30));
+    begin("cr_bitmap_extend_border");
+    int bad = g_fail;
+    enum { MAXW = 32, MAXH = 32, NWORDS = 1024 };
+    static uint32_t bv[NWORDS], bc[NWORDS];
+    static cr_image dv, dc;
+    for (int t = 0; t < 20000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int offx = (int)(rnd() % 9u);
+        int offy = (int)(rnd() % 9u);
+        int k = (offx + w + 31) / 32 + 1;         /* extra word of slack */
+        int a = 32 * k;                           /* stride in bits */
+        /* NOTE: bottom == h (or top == h) makes the vendor read row -1 / row h,
+         * which is outside the bitmap buffer and therefore depends on whatever
+         * precedes it in memory; keep the bands strictly inside the content so
+         * the comparison is deterministic. */
+        int left   = (int)(rnd() % (unsigned)w);
+        int right  = (int)(rnd() % (unsigned)w);
+        int top    = (int)(rnd() % (unsigned)h);
+        int bottom = (int)(rnd() % (unsigned)h);
+        for (int i = 0; i < NWORDS; i++) bv[i] = rnd();
+        memcpy(bc, bv, sizeof bv);
+        cr_image_set(&dv, bv, w, h); dv.a = a; dv.offx = offx; dv.offy = offy;
+        cr_image_set(&dc, bc, w, h); dc.a = a; dc.offx = offx; dc.offy = offy;
+        v(&dv, left, top, right, bottom);
+        cr_bitmap_extend_border(&dc, left, top, right, bottom);
+        cmp_buf("bmborder", (const unsigned char *)bv,
+                (const unsigned char *)bc, sizeof bv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_extend_border\n");
+}
+
 /* 0x18002ddd0 — centroid of set bits in a bitmap, clamped to a window. */
 static void test_bitmap_centroid(void)
 {
@@ -8243,6 +8280,7 @@ int main(int argc, char **argv)
     test_grid_insert();
     printf("\n== bitmap set-bit centroid ==\n");
     test_bitmap_centroid();
+    test_bitmap_extend_border();
     printf("\n== descriptor / table-pointer getters ==\n");
     test_desc_getters();
     printf("\n== 9-tap triangular filter (n x 9) ==\n");
