@@ -1773,3 +1773,60 @@ int cr_feature_qualify(void *a1, void *a3, float k)
     *(uint8_t *)(p1 + 8) = 1;
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001f2f0 — separable box SUM of a byte image (window k, edge-clamped).
+ *   int fn(void **dst_buf, const cr_image *src, int k):
+ *     tmp = malloc(w*h);
+ *     half = (k - 1) / 2;
+ *     tmp[r][c] = (uint8_t) Σ_{d=-half..half} src[r][clamp(c+d, 0, w-1)];
+ *     (*dst_buf)[r][c] = (uint8_t) Σ_{d=-half..half} tmp[clamp(r+d, 0, h-1)][c];
+ *     free(tmp); return status;
+ *   `dst_buf` points at the destination data pointer (the caller passes
+ *   &img->data, so src and dst alias; the intermediate tmp makes it safe).
+ *   Both passes truncate to a byte (mod 256).  The vendor's pointer walk is
+ *   only well defined for w >= k+1 and h >= k+1 (smaller sizes read/write past
+ *   the row), which the difftest respects.
+ * ------------------------------------------------------------------------ */
+int cr_box_sum_u8(void **dst_buf, const cr_image *src, int k)
+{
+    int w = src->w, h = src->h;
+    void *tmp = NULL;
+    int r = cr_malloc_aligned16(&tmp, (size_t)(int)(h * w));
+    if (r != 0)
+        return r;
+
+    int half = (k - 1) / 2;
+    const uint8_t *sp = (const uint8_t *)src->data;
+    uint8_t *dp = (uint8_t *)*dst_buf;
+    uint8_t *tp = (uint8_t *)tmp;
+
+    for (int row = 0; row < h; row++) {
+        for (int c = 0; c < w; c++) {
+            int s = 0;
+            for (int d = -half; d <= half; d++) {
+                int cc = c + d;
+                if (cc < 0) cc = 0;
+                else if (cc >= w) cc = w - 1;
+                s += sp[(long long)row * w + cc];
+            }
+            tp[(long long)row * w + c] = (uint8_t)s;
+        }
+    }
+
+    for (int row = 0; row < h; row++) {
+        for (int c = 0; c < w; c++) {
+            int s = 0;
+            for (int d = -half; d <= half; d++) {
+                int rr = row + d;
+                if (rr < 0) rr = 0;
+                else if (rr >= h) rr = h - 1;
+                s += tp[(long long)rr * w + c];
+            }
+            dp[(long long)row * w + c] = (uint8_t)s;
+        }
+    }
+
+    cr_sized_free(&tmp);
+    return 0;
+}

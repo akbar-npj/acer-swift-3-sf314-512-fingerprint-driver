@@ -696,6 +696,8 @@ int      cr_row_fir_i8(uint8_t *out, cr_fir_row_ctx *ctx,
                        const cr_image *img, int target);         /* 0x180010440 */
 int      cr_fir7_image_u8(cr_image *dst, const cr_image *src,
                           float sigma);                          /* 0x180035be0 */
+int      cr_box_sum_u8(void **dst_buf, const cr_image *src,
+                       int k);                                   /* 0x18001f2f0 */
 
 /* Pearson correlation of two int16 images over the thresholded interior. */
 void     cr_corr_coeff(float *out_corr, int *out_valid,

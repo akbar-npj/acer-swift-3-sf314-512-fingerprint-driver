@@ -1993,6 +1993,43 @@ static void test_fir7_image_u8(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir7_image_u8\n");
 }
 
+/* 0x18001f2f0 — separable box SUM of a byte image (window k, edge-clamped). */
+static void test_box_sum_u8(void)
+{
+    typedef int (WINAPI *fn_t)(void **, const void *, int);
+    fn_t v = (fn_t)fn_at(RVA(0x18001f2f0));
+    begin("cr_box_sum_u8");
+    int bad = g_fail;
+
+    enum { MAXW = 32, MAXH = 32, NP = MAXW * MAXH };
+    static u8 sbuf[NP], dbv[NP], dbc[NP];
+    static cr_image sv, sc, dv, dc;
+    static void *pvv, *pvc;
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 3 + (int)(rnd() % (MAXW - 3));
+        int h = 3 + (int)(rnd() % (MAXH - 3));
+        int kmax = (w < h ? w : h) - 1;             /* require w,h >= k+1 */
+        if (kmax < 1) kmax = 1;
+        int k = 1 + (int)(rnd() % kmax);
+
+        for (int i = 0; i < NP; i++) sbuf[i] = (u8)rnd();
+        memset(dbv, 0xAA, sizeof dbv); memset(dbc, 0xAA, sizeof dbc);
+
+        cr_image_set(&sv, sbuf, w, h);
+        cr_image_set(&sc, sbuf, w, h);
+        cr_image_set(&dv, dbv, w, h);
+        cr_image_set(&dc, dbc, w, h);
+
+        pvv = dv.data; pvc = dc.data;
+        int rv = v(&pvv, &sv, k);
+        int rc = cr_box_sum_u8(&pvc, &sc, k);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", dbv, dbc, sizeof dbv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_box_sum_u8\n");
+}
+
 /* ---- batch 68: byte-output streaming-FIR ctx initialiser ---------------- */
 static void test_fir_ctx_init_i8(void)
 {
@@ -8605,6 +8642,7 @@ int main(int argc, char **argv)
     test_ctx_find_node();
     test_fir_ctx_init();
     test_fir7_image_u8();
+    test_box_sum_u8();
     test_fir_ctx_init_i8();
     test_fft_real_n();
     test_obj_init_12fe0();
