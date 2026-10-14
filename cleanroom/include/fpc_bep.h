@@ -278,6 +278,8 @@ void     cr_polyphase_fir4(uint8_t *out, const uint8_t *in,
                            const int16_t *coef, int nbytes, int ncoef);   /* 0x18000ee70 */
 void     cr_warp_bilinear_q15(cr_image *dst, const cr_image *src,
                               const float *coef);                         /* 0x18001fd10 */
+int      cr_resize_pair_18000(cr_image *a1, cr_image *a2,
+                              int a3, int a4);                            /* 0x180018000 */
 
 /* ---- batch 19: 464-byte bilinear splat --------------------------------- */
 void     cr_splat_bilinear(const float *w, float *bufA, float *bufB,

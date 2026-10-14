@@ -155,6 +155,71 @@ void cr_warp_bilinear_q15(cr_image *dst, const cr_image *src,
     } while (ri != dh);
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x180018000 — downscale an s16 image (a1) and a u8 image (a2) together.
+ *   int fn(cr_image *a1, cr_image *a2, int a3, int a4)
+ *
+ * a1/a2 must both be a1->w x a1->h with a1->w > a3 and a1->h > a4, else 0x69.
+ * Computes s = min((float)w/(float)a3, (float)h/(float)a4) (the SSE MINSS
+ * operand order) and the affine coefficient vector
+ *   coef = { s, 0, (w - a3*s)*0.5, 0, s, (h - a4*s)*0.5 }
+ * then:
+ *   - allocates an s16 image d16 (w x h) and a u8 image d8 (w x h);
+ *   - cr_copy_u16_shl_guarded(&d16, a1, 0)   (a1 -> d16)
+ *   - cr_image_copy_u8(&d8, a2)              (a2 -> d8)
+ *   - cr_image_set(a1, a1->data, a3, a4) and cr_image_set(a2, a2->data, a3, a4)
+ *     (rewrite both descriptors to the target size, keeping their buffers);
+ *   - cr_warp_bilinear_q15(a1, &d16, coef) and
+ *     cr_affine_sample_u8_nn(a2, &d8, coef, 0);
+ *   - frees d16 and d8.
+ * Any failure frees what has been allocated and returns the first error.
+ * ------------------------------------------------------------------------ */
+int cr_resize_pair_18000(cr_image *a1, cr_image *a2, int a3, int a4)
+{
+    int w = a1->w, h = a1->h;
+    if (w <= a3)
+        return 0x69;
+    if (h <= a4)
+        return 0x69;
+
+    float sw = (float)w / (float)a3;
+    float sh = (float)h / (float)a4;
+    float s  = (sw < sh) ? sw : sh;
+
+    float coef[6];
+    coef[0] = s;
+    coef[1] = 0.0f;
+    coef[2] = ((float)w - (float)a3 * s) * 0.5f;
+    coef[3] = 0.0f;
+    coef[4] = s;
+    coef[5] = ((float)h - (float)a4 * s) * 0.5f;
+
+    cr_image d16, d8;
+    int r = cr_image_alloc_s16((int *)&d16, w, h);
+    if (r != 0)
+        return r;
+    r = cr_image_alloc_u8((int *)&d8, w, h);
+    if (r != 0) {
+        cr_cleanup_ptr8_clear(&d16);
+        return r;
+    }
+
+    r = cr_copy_u16_shl_guarded(&d16, a1, 0);
+    if (r == 0)
+        r = (int)cr_image_copy_u8(&d8, a2);
+    if (r == 0)
+        r = (int)cr_image_set(a1, a1->data, a3, a4);
+    if (r == 0)
+        r = (int)cr_image_set(a2, a2->data, a3, a4);
+    if (r == 0) {
+        cr_warp_bilinear_q15(a1, &d16, coef);
+        cr_affine_sample_u8_nn(a2, &d8, coef, 0);
+    }
+    cr_cleanup_ptr8_clear(&d16);
+    cr_cleanup_ptr8_a(&d8);
+    return r;
+}
+
 /* 0x18000ee70 — 4-phase FIR.  The input is treated as a stream of 4-byte
  * groups; for each group at byte offset 4*p the four output bytes are
  *     out[4p+r] = (int8_t)((0x4000 + sum_{j=0}^{2*iters} in[4p+r+j]*coef[j]) >> 15)

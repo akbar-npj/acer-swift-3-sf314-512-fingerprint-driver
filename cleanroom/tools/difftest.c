@@ -1575,6 +1575,51 @@ static void test_fir_ctx_init_i8(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir_ctx_init_i8\n");
 }
 
+/* ---- batch 68: downscale an s16 and a u8 image together (0x180018000) --- */
+static void test_resize_pair_18000(void)
+{
+    typedef int (WINAPI *v_i_ppii)(void *, void *, int, int);
+    v_i_ppii v = (v_i_ppii)fn_at(RVA(0x180018000));
+    begin("cr_resize_pair_18000");
+    int bad = g_fail;
+
+    /* a1 is an int16 image (2 bytes/px): cr_copy_u16_shl_guarded reads it as
+     * int16 and the warp writes 2*a3*a4 bytes back, so its buffer must hold
+     * 2*w*h bytes.  a2 is a byte image (w*h). */
+    enum { MAXW = 26, MAXH = 26,
+           CAP1 = 2 * MAXW * MAXH + 64, CAP2 = MAXW * MAXH + 64 };
+    static u8 b1v[CAP1], b1c[CAP1], b2v[CAP2], b2c[CAP2];
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 3 + (int)(rnd() % 24);
+        int h = 3 + (int)(rnd() % 24);
+        int a3 = 1 + (int)(rnd() % (w + 1));     /* 1..w  (w -> invalid) */
+        int a4 = 1 + (int)(rnd() % (h + 1));
+
+        for (int i = 0; i < CAP1; i++) { b1v[i] = (u8)rnd(); b1c[i] = b1v[i]; }
+        for (int i = 0; i < CAP2; i++) { b2v[i] = (u8)rnd(); b2c[i] = b2v[i]; }
+
+        cr_image a1v, a1c, a2v, a2c;
+        cr_image_set(&a1v, b1v, w, h);
+        cr_image_set(&a1c, b1c, w, h);
+        cr_image_set(&a2v, b2v, w, h);
+        cr_image_set(&a2c, b2c, w, h);
+
+        int rv = v(&a1v, &a2v, a3, a4);
+        int rc = cr_resize_pair_18000(&a1c, &a2c, a3, a4);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv != 0) continue;
+
+        if (a1v.a != a1c.a || a1v.b != a1c.b || a1v.w != a1c.w || a1v.h != a1c.h ||
+            a2v.a != a2c.a || a2v.b != a2c.b || a2v.w != a2c.w || a2v.h != a2c.h)
+            mismatch("dims", (u32)t, (u32)a1v.w, (u32)a1c.w);
+
+        cmp_buf("o16", b1v, b1c, (size_t)(2 * a3 * a4), (u32)t);
+        cmp_buf("o8",  b2v, b2c, (size_t)(a3 * a4), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_resize_pair_18000\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7253,6 +7298,7 @@ int main(int argc, char **argv)
     test_fir_ctx_init_i8();
     test_fft_real_n();
     test_obj_init_12fe0();
+    test_resize_pair_18000();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
