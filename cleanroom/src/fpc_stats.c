@@ -403,6 +403,77 @@ int cr_masked_hist_percentiles(int *out_lo, int *out_hi, int *out_count,
     return 0;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x1800281a0 — in-place 14-bit contrast stretch of an int16 image.
+ *   int fn(cr_image *img, const cr_image *mask, int and_mask,
+ *          float frac_lo, float frac_hi, int mode)
+ *
+ * `mode` (low byte) selects how the [lo, hi] window is found:
+ *   0 -> no-op, returns 0 (img is not touched);
+ *   1 -> cr_masked_minmax_s16 (raw min/max);
+ *   2 -> cr_masked_hist_percentiles(..., 512) with the percentile endpoints
+ *        clamped to lo = max(lo, 0), hi = min(hi, 0x3fc0);
+ *   else -> returns 0x69.
+ * With mode 2 a non-zero return from the percentile helper propagates.
+ *
+ * The window is then applied to the img->h * img->w int16 samples in place:
+ *   if (count > 0 && hi > lo):  v = ((src - lo) * (0x3fc000 / (hi - lo))) >> 8,
+ *                              clamped to [0, 0x3fc0];
+ *   otherwise:                  v = clamp(src, 0, 0x3fc0).
+ * The multiply/shift use the vendor's 32-bit wrapping/arithmetic-shift
+ * semantics.
+ * ------------------------------------------------------------------------ */
+int cr_stretch_14bit(cr_image *img, const cr_image *mask, int and_mask,
+                     float frac_lo, float frac_hi, int mode)
+{
+    uint8_t mb = (uint8_t)mode;
+
+    if (mb == 0)
+        return 0;
+
+    int lo, hi, count;
+    if (mb == 1) {
+        cr_masked_minmax_s16(&lo, &hi, &count, img, mask, (uint8_t)and_mask);
+    } else if (mb == 2) {
+        int r = cr_masked_hist_percentiles(&lo, &hi, &count, img, mask,
+                                           (uint8_t)and_mask, frac_lo, frac_hi,
+                                           512);
+        if (r != 0)
+            return r;
+        if (hi > 0x3fc0) hi = 0x3fc0;
+        if (lo < 0) lo = 0;
+    } else {
+        return 0x69;
+    }
+
+    int total = img->h * img->w;
+    int16_t *d = (int16_t *)img->data;
+
+    if (count > 0 && hi > lo) {
+        int scale = 0x3fc000 / (hi - lo);
+        if (total > 0) {
+            for (int i = 0; i < total; i++) {
+                int32_t v = (int32_t)((uint32_t)((int32_t)d[i] - lo) *
+                                      (uint32_t)scale);
+                v >>= 8;
+                if (v > 0x3fbf) v = 0x3fc0;
+                else if (v <= 0) v = 0;
+                d[i] = (int16_t)v;
+            }
+        }
+    } else {
+        if (total > 0) {
+            for (int i = 0; i < total; i++) {
+                int v = d[i];
+                if (v < 0) v = 0;
+                if (v > 0x3fc0) v = 0x3fc0;
+                d[i] = (int16_t)v;
+            }
+        }
+    }
+    return 0;
+}
+
 /* 0x180037330 — sum + count of the masked pixels in a centred square box.
  *
  * `idx` is a linear pixel index into an image `W x H` (row-major, stride W):

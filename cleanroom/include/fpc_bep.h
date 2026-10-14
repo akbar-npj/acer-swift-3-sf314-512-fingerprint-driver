@@ -208,6 +208,8 @@ int      cr_masked_hist_percentiles(int *out_lo, int *out_hi, int *out_count,
                                     const cr_image *img, const cr_image *mask,
                                     int and_mask, float frac_lo, float frac_hi,
                                     int nbin);                        /* 0x18001a7c0 */
+int      cr_stretch_14bit(cr_image *img, const cr_image *mask, int and_mask,
+                          float frac_lo, float frac_hi, int mode);  /* 0x1800281a0 */
 void     cr_i16_to_f32_scaled(cr_image *dst, const cr_image *src,
                               int shift);                             /* 0x1800334c0 */
 

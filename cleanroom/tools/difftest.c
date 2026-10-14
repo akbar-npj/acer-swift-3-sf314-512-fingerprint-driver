@@ -1676,6 +1676,55 @@ static void test_hist_percentiles(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_masked_hist_percentiles\n");
 }
 
+/* ---- batch 70: in-place 14-bit contrast stretch (0x1800281a0) ---------- */
+static void test_stretch_14bit(void)
+{
+    typedef int (WINAPI *v_stretch)(void *, void *, int, float, float, int);
+    v_stretch v = (v_stretch)fn_at(RVA(0x1800281a0));
+    begin("cr_stretch_14bit");
+    int bad = g_fail;
+
+    enum { MAXW = 32, MAXH = 32, NP = MAXW * MAXH };
+    static int16_t pv[NP], pc[NP];
+    static uint8_t mbuf[NP];
+    static cr_image iv, ic, mv, mc;
+
+    for (int t = 0; t < 5000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int total = w * h;
+
+        for (int i = 0; i < total; i++) {
+            int16_t x = (int16_t)((int)(rnd() % 0x10000) - 0x8000);
+            pv[i] = x; pc[i] = x;
+        }
+        for (int i = 0; i < total; i++) mbuf[i] = (uint8_t)rnd();
+
+        int use_mask = (int)(rnd() % 3) != 0;
+        int and_mask = (int)(rnd() % 256);
+        float f4 = (float)(rnd() % 201) / 200.0f;
+        float f5 = (float)(rnd() % 201) / 200.0f;
+        int mode = (int)(rnd() % 5);            /* 0..4 */
+        if (rnd() % 3 == 0) mode |= 0x100;      /* exercise byte masking */
+
+        cr_image_set(&iv, pv, w, h);
+        cr_image_set(&ic, pc, w, h);
+        cr_image_set(&mv, mbuf, w, h);
+        cr_image_set(&mc, mbuf, w, h);
+        const cr_image *mp = use_mask ? &mv : NULL;
+
+        int rv = v(&iv, mp, and_mask, f4, f5, mode);
+        int rc = cr_stretch_14bit(&ic, mp, and_mask, f4, f5, mode);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv != 0) continue;
+
+        if (iv.w != ic.w || iv.h != ic.h)
+            mismatch("dims", (u32)t, (u32)iv.w, (u32)ic.w);
+        cmp_buf("px", (u8 *)pv, (u8 *)pc, (size_t)(2 * total), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_stretch_14bit\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7356,6 +7405,7 @@ int main(int argc, char **argv)
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
+    test_stretch_14bit();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
