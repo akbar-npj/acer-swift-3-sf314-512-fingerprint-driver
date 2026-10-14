@@ -2929,6 +2929,95 @@ static void test_image_fill_desc(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_image_fill_desc\n");
 }
 
+/* 0x1800171d0 — build s16 image from descriptor, optionally grad score. */
+static void test_grad_score_from_desc(void)
+{
+    typedef int (WINAPI *v_t)(uint8_t *, void **, const void *, int, int,
+                              int, const void *);
+    v_t v = (v_t)fn_at(RVA(0x1800171d0));
+    begin("cr_grad_score_from_desc");
+    int bad = g_fail;
+
+    enum { MAXW = 24, MAXH = 24, NPIX = MAXW * MAXH };
+    static uint8_t src[NPIX * 2 + 64];
+    static uint8_t dv[NPIX * 2 + 64], dc[NPIX * 2 + 64];
+    static uint8_t ov[8], oc[8];
+    static void   *arrv[12], *arrc[12];
+    static uint8_t ev[0x20], ec[0x20];
+    static uint8_t a0v[0x20], a0c[0x20];
+    static uint8_t mv[128], mc[128];
+    static uint8_t iv[0x20], ic[0x20];
+    static uint8_t cfgv[0x40], cfgc[0x40];
+
+    for (int t = 0; t < 20000; t++) {
+        int w = 2 + (int)(rnd() % (MAXW - 2));
+        int h = 2 + (int)(rnd() % (MAXH - 2));
+        int type;
+        switch (rnd() % 5) {
+        case 0:  type = 8;            break;
+        case 1:  type = 0x10;         break;
+        default: type = (int)(rnd() & 0x1f); break;
+        }
+        int idx = (int)(rnd() % 3);
+        int match = (int)(rnd() & 0xff);
+        int shift = (int)(rnd() & 0xf);
+        int flag = (int)(rnd() % 3);
+        int mmax = (w < h ? w : h) / 2;          /* keep interior non-empty */
+        if (mmax < 1) mmax = 1;
+        int m = (int)(rnd() % mmax);
+
+        for (size_t i = 0; i < sizeof src; i++) src[i] = (uint8_t)rnd();
+        for (size_t i = 0; i < sizeof dv; i++) dv[i] = (uint8_t)rnd();
+        memcpy(dc, dv, sizeof dc);
+        dv[(long long)m * w + m] = (uint8_t)match;   /* guarantee >=1 match */
+        dc[(long long)m * w + m] = (uint8_t)match;
+        ov[0] = (uint8_t)rnd(); oc[0] = ov[0];
+
+        for (int i = 0; i < 12; i++) { arrv[i] = NULL; arrc[i] = NULL; }
+        arrv[0] = a0v; arrc[0] = a0c;
+        arrv[idx] = ev; arrc[idx] = ec;
+        arrv[idx + 7] = mv; arrc[idx + 7] = mc;
+
+        *(int16_t *)(a0v + 0x00) = (int16_t)w;
+        *(int16_t *)(a0v + 0x02) = (int16_t)h;
+        *(uint8_t *)(a0v + 0x06) = (uint8_t)type;
+        *(void   **)(a0v + 0x10) = src;
+        memcpy(a0c, a0v, sizeof a0c);
+
+        *(int16_t *)(ev + 0x00) = (int16_t)w;
+        *(int16_t *)(ev + 0x02) = (int16_t)h;
+        *(uint8_t *)(ev + 0x06) = (uint8_t)type;
+        *(void   **)(ev + 0x10) = src;
+        memcpy(ec, ev, sizeof ec);
+
+        uint32_t val = rnd();
+        int has = (int)(rnd() & 1);
+        memset(mv, 0, sizeof mv);
+        *(u32 *)(mv + 0x00) = 8;
+        *(u32 *)(mv + 0x04) = 0x40;
+        *(u32 *)(mv + 0x08) = 0xc;
+        *(u32 *)(mv + 0x0c) = has ? 0x148u : 0x149u;
+        *(u32 *)(mv + 0x10) = 4;
+        *(u32 *)(mv + 0x14) = val;
+        memcpy(mc, mv, sizeof mc);
+
+        memset(cfgv, 0, sizeof cfgv);
+        cfgv[0x29] = (uint8_t)flag;
+        *(uint16_t *)(cfgv + 0x2a) = (uint16_t)m;
+        memcpy(cfgc, cfgv, sizeof cfgc);
+
+        mk_image(iv, dv, w, w, h, 0, 0);
+        mk_image(ic, dc, w, w, h, 0, 0);
+
+        int rv = v(ov, arrv, iv, idx, match, shift, cfgv);
+        int rc = cr_grad_score_from_desc(oc, arrc, (cr_image *)ic, idx,
+                                        match, shift, cfgc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ov[0] != oc[0]) mismatch("out", (u32)t, (u32)ov[0], (u32)oc[0]);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_grad_score_from_desc\n");
+}
+
 static void test_rect_fills(void)
 {
     v_v_pb  v8  = (v_v_pb) fn_at(RVA(0x1800465a0));
@@ -8439,6 +8528,7 @@ int main(int argc, char **argv)
     printf("\n== metadata store ==\n");
     test_metadata();
     test_image_fill_desc();
+    test_grad_score_from_desc();
 
     printf("\n== image slots ==\n");
     test_image_slots();

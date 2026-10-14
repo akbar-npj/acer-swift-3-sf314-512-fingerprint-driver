@@ -1238,3 +1238,58 @@ int cr_grad_mag_score(uint8_t *out, const cr_image *src, const cr_image *mask,
     cr_cleanup_ptr8_clear(&B);
     return r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800171d0 — build an s16 image from a descriptor slot, then optionally
+ * compute a masked gradient-magnitude score.
+ *   int fn(uint8_t *out, void **arr, const cr_image *mask, int idx,
+ *          int match, int shift, const void *cfg):
+ *     d0 = arr[0];  w = d0->w; h = d0->h;
+ *     r = cr_image_alloc_s16(&img, w, h); if (r) return r;
+ *     r = cr_image_fill_desc(arr, idx, 6, &img);
+ *     if (r) { cr_cleanup_ptr8_clear(&img); return r; }
+ *     flag = ((const uint8_t *)cfg)[0x29];
+ *     if (flag == 0)      *out = 0xff;
+ *     else if (flag == 1) { r = cr_grad_mag_score(out, &img, mask, match,
+ *                                                 shift, cfg);
+ *                          if (r) { cr_cleanup_ptr8_clear(&img); return r; } }
+ *     else { cr_cleanup_ptr8_clear(&img); return 0x69; }
+ *     cr_cleanup_ptr8_clear(&img);
+ *     return 0;
+ * ------------------------------------------------------------------------ */
+int cr_grad_score_from_desc(uint8_t *out, void **arr, const cr_image *mask,
+                            int idx, int match, int shift, const void *cfg)
+{
+    cr_image img;
+    cr_slot_desc *d0 = (cr_slot_desc *)arr[0];
+    int w = (int)d0->w;
+    int h = (int)d0->h;
+
+    int r = cr_image_alloc_s16((int *)&img, w, h);
+    if (r != 0)
+        return r;
+
+    r = cr_image_fill_desc(arr, idx, 6, &img);
+    if (r != 0) {
+        cr_cleanup_ptr8_clear(&img);
+        return r;
+    }
+
+    uint8_t flag = ((const uint8_t *)cfg)[0x29];
+
+    if (flag == 0) {
+        *out = 0xff;
+    } else if (flag == 1) {
+        r = cr_grad_mag_score(out, &img, mask, match, shift, cfg);
+        if (r != 0) {
+            cr_cleanup_ptr8_clear(&img);
+            return r;
+        }
+    } else {
+        cr_cleanup_ptr8_clear(&img);
+        return 0x69;
+    }
+
+    cr_cleanup_ptr8_clear(&img);
+    return 0;
+}
