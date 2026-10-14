@@ -1644,6 +1644,84 @@ cleanup:
     return status;
 }
 
+/* ---- batch 69: Harris response -> masked local-maxima grid (0x180023e70) ---
+ * Widen a copy of `src` to u8 (image A), run cr_harris_response into a float
+ * image B, then scan B's interior (margin c = cfg->border) for pixels that are
+ * STRICTLY greater than all 8 neighbours and whose corresponding bit is set in
+ * the `mask` bitmap (a = stride in bits, offx/offy origin).  Each surviving
+ * pixel is fed to cr_grid_insert(grid, x, y, value, cfg).  Any stage failure
+ * short-circuits through the shared cleanup and returns that stage's status.
+ *   int fn(cr_grid *grid, const cr_image *src, const cr_image *mask,
+ *          const cr_harris_max_cfg *cfg)
+ * -------------------------------------------------------------------------- */
+int cr_harris_local_max_grid(cr_grid *grid, const cr_image *src,
+                             const cr_image *mask,
+                             const cr_harris_max_cfg *cfg)
+{
+    cr_image A, B;
+    int r = cr_image_alloc_u8((int *)&A, src->w, src->h);
+    if (r != 0)
+        return r;
+    r = cr_image_alloc_f32(&B, src->w, src->h);
+    if (r != 0) {
+        cr_cleanup_ptr8_a(&A);
+        return r;
+    }
+    r = (int)cr_image_copy_u8(&A, src);
+    if (r != 0) {
+        cr_cleanup_ptr8_a(&A);
+        cr_cleanup_ptr8_clear_b(&B);
+        return r;
+    }
+    r = cr_harris_response(&B, &A, cfg->coef, cfg->sigma);
+    if (r != 0) {
+        cr_cleanup_ptr8_a(&A);
+        cr_cleanup_ptr8_clear_b(&B);
+        return r;
+    }
+
+    int c    = cfg->border;
+    int xend = B.w - c;
+    int yend = B.h - c;
+    float *base = (float *)B.data + (B.offy * B.a + B.offx);
+    int stride  = B.a;
+
+    if (c < yend) {
+        for (int y = c; y < yend; y++) {
+            long long r0 = (long long)(y - 1) * stride;
+            long long r1 = (long long)y * stride;
+            long long r2 = (long long)(y + 1) * stride;
+            for (int x = c; x < xend; x++) {
+                float cur = base[r1 + x];
+                if (!(cur > base[r0 + x - 1])) continue;
+                if (!(cur > base[r0 + x]))     continue;
+                if (!(cur > base[r0 + x + 1])) continue;
+                if (!(cur > base[r1 + x - 1])) continue;
+                if (!(cur > base[r1 + x + 1])) continue;
+                if (!(cur > base[r2 + x - 1])) continue;
+                if (!(cur > base[r2 + x]))     continue;
+                if (!(cur > base[r2 + x + 1])) continue;
+
+                int bit = (mask->offy + y) * mask->a + (mask->offx + x);
+                uint32_t word = ((const uint32_t *)mask->data)[bit >> 5];
+                if (!((word >> ((mask->offx + x) & 31)) & 1u))
+                    continue;
+
+                r = cr_grid_insert(grid, (uint8_t)x, (uint8_t)y, cur,
+                                   (cr_grid_cfg *)cfg);
+                if (r != 0) {
+                    cr_cleanup_ptr8_a(&A);
+                    cr_cleanup_ptr8_clear_b(&B);
+                    return r;
+                }
+            }
+        }
+    }
+    cr_cleanup_ptr8_a(&A);
+    cr_cleanup_ptr8_clear_b(&B);
+    return 0;
+}
+
 /* ---- batch 66: feature/quality check (0x180048ab0) -----------------------
  * Validates nothing (no early return on inputs); computes a running temporal
  * average of p1[0x10] into one of two (cnt,dst) buffer pairs — selected by

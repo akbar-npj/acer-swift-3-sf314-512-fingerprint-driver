@@ -743,4 +743,24 @@ int      cr_struct_tensor_dispatch(cr_image *dst, const cr_image *src,
 int      cr_harris_response(cr_image *dst, const cr_image *src,
                             float coef, float sigma);               /* 0x1800305f0 */
 
+/* ---- batch 69: Harris response -> masked local-maxima grid accumulator ----- */
+/* cfg consumed by cr_harris_local_max_grid: `border` is the interior margin,
+ * `coef`/`sigma` feed cr_harris_response, and the tail is a cr_grid_cfg handed
+ * through to cr_grid_insert (mode @+0x24, cap2 @+0x10). */
+typedef struct {
+    uint8_t _pad[8];       /* +0x00                                     */
+    int8_t  border;        /* +0x08  interior margin c                  */
+    uint8_t _pad2[7];      /* +0x09..+0x0f                              */
+    int16_t cap2;          /* +0x10  mode-2 capacity (cr_grid_cfg)      */
+    uint8_t _pad3[6];      /* +0x12..+0x17                              */
+    float   coef;          /* +0x18  Harris coef                        */
+    float   sigma;         /* +0x1c  Harris sigma                       */
+    uint8_t _pad4[4];      /* +0x20..+0x23                              */
+    uint8_t mode;          /* +0x24  cr_grid_insert mode                */
+} cr_harris_max_cfg;
+
+int      cr_harris_local_max_grid(cr_grid *grid, const cr_image *src,
+                                  const cr_image *mask,
+                                  const cr_harris_max_cfg *cfg);       /* 0x180023e70 */
+
 #endif /* FPC_BEP_H */
