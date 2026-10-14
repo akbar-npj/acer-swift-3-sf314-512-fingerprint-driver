@@ -224,6 +224,10 @@ typedef struct {
  * (x,y) byte pairs stored in in_coords. */
 int      cr_angle_field_downsample(cr_af_ds_desc *a1, const cr_image *a2,
                                    const void *cfg);                 /* 0x18003fe20 */
+/* Allocate the output buffer (a1->out_buf, count*4 bytes) then, only when
+ * cfg[9] == 2, run cr_angle_field_downsample; any other cfg[9] returns 0x69. */
+int      cr_angle_field_ds_run(cr_af_ds_desc *a1, const cr_image *a2,
+                               const void *cfg);                     /* 0x1800302f0 */
 /* Threshold an int16 image into a bordered bitmap, open it, mark the byte
  * image where the opened mask is clear. */
 int      cr_thresh_open_mark(cr_image *img, const cr_image *src,

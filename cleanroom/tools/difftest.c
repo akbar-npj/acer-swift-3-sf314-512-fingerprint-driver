@@ -2011,6 +2011,58 @@ static void test_angle_field_downsample(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_angle_field_downsample\n");
 }
 
+static void test_angle_field_ds_run(void)
+{
+    typedef int (WINAPI *v_afd)(void *, void *, void *);
+    v_afd v = (v_afd)fn_at(RVA(0x1800302f0));
+    begin("cr_angle_field_ds_run");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 40, NPC = 64 * 64, CFGN = 0x40 };
+    static uint8_t coords[NPC];
+    static int16_t sbuf[NPC];
+    static cr_image sv, sc;
+    static cr_af_ds_desc av_d, ac_d;
+    static uint8_t cfg[CFGN];
+
+    for (int t = 0; t < 3000; t++) {
+        /* field must be >= 4x4 (see test_angle_field_downsample) */
+        int sw = 20 + (int)(rnd() % (MAXW - 12));
+        int sh = 20 + (int)(rnd() % (MAXH - 12));
+        int h  = 1 + (int)(rnd() % (MAXH / 2));
+
+        int qw = (sw - 4) >> 2, qh = (sh - 4) >> 2;
+        if (qw < 1) qw = 1;
+        if (qh < 1) qh = 1;
+
+        for (int i = 0; i < h * 2; i++)
+            coords[i] = (uint8_t)(rnd() % (uint32_t)(i & 1 ? qh : qw));
+        for (int i = 0; i < NPC; i++) sbuf[i] = (int16_t)rnd();
+        for (int i = 0; i < CFGN; i++) cfg[i] = (uint8_t)rnd();
+        *(float *)(cfg + 0x30) = (float)((rnd() % 1000) * 0.01f - 5.0f);
+        /* cfg[9] gates the dispatch: 2 runs the downsample, anything else 0x69 */
+        cfg[9] = (t % 4 == 3) ? (uint8_t)(rnd() & 0xff) : 2;
+
+        /* out_buf is allocated by the function; NULL it in */
+        av_d.in_coords = coords; av_d.pad08 = 0;
+        av_d.out_buf   = NULL;   av_d.pad18 = 0; av_d.count = h;
+        ac_d = av_d;
+
+        memset(&sv, 0, sizeof sv); memset(&sc, 0, sizeof sc);
+        sv.data = sbuf; sv.w = sw; sv.h = sh; sv.offx = 0; sv.offy = 0;
+        sc = sv;
+
+        int rv = v(&av_d, &sv, cfg);
+        int rc = cr_angle_field_ds_run(&ac_d, &sc, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0 && h > 0 && av_d.out_buf && ac_d.out_buf)
+            cmp_buf("a1", (u8 *)av_d.out_buf, (u8 *)ac_d.out_buf,
+                    (size_t)h, (u32)t);
+        /* deliberately leak the buffers (the vendor's own 0x69 path leaks too) */
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_angle_field_ds_run\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7701,6 +7753,7 @@ int main(int argc, char **argv)
     test_orient_map_haar();
     test_thresh_open_mark();
     test_angle_field_downsample();
+    test_angle_field_ds_run();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -249,3 +249,28 @@ int cr_angle_field_downsample(cr_af_ds_desc *a1, const cr_image *a2,
     cr_cleanup_ptr8_guard(&q);
     return r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800302f0 — allocate the downsample output buffer, then dispatch.
+ *
+ *   int fn(cr_af_ds_desc *a1, const cr_image *a2, const void *cfg):
+ *     int r = cr_malloc_aligned16(&a1->out_buf,
+ *                                 (size_t)((int64)a1->count << 2));
+ *     if (r) return r;
+ *     if (((const uint8_t*)cfg)[9] != 2) return 0x69;
+ *     return cr_angle_field_downsample(a1, a2, cfg);
+ *
+ * The 0x69 path leaves out_buf allocated (the vendor leaks it); the
+ * downsample itself frees out_buf on its own failure paths.
+ * ------------------------------------------------------------------------ */
+int cr_angle_field_ds_run(cr_af_ds_desc *a1, const cr_image *a2,
+                          const void *cfg)
+{
+    int r = cr_malloc_aligned16(&a1->out_buf,
+                                (size_t)((int64_t)a1->count << 2));
+    if (r != 0)
+        return r;
+    if (((const uint8_t *)cfg)[9] != 2)
+        return 0x69;
+    return cr_angle_field_downsample(a1, a2, cfg);
+}
