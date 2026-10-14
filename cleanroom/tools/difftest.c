@@ -3104,6 +3104,54 @@ static void test_bitmap_build_masked(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_build_masked\n");
 }
 
+/* 0x18001f660 — unpack bitmap, box-sum, k*k threshold, FIR blur. */
+static void test_bitmap_unpack_boxmax_fir(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, int, int, float);
+    v_t v = (v_t)fn_at(RVA(0x18001f660));
+    begin("cr_bitmap_unpack_boxmax_fir");
+    int bad = g_fail;
+
+    enum { MAXW = 24, MAXH = 24, NPIX = MAXW * MAXH };
+    static u8 bmv[512], bmc[512];
+    static u8 ov[NPIX + 64], oc[NPIX + 64];
+    static u8 srcv[0x20], srcc[0x20];
+    static u8 outv[0x20], outc[0x20];
+
+    for (int t = 0; t < 20000; t++) {
+        int w = 8 + (int)(rnd() % (MAXW - 8));      /* >= 8: box-sum + FIR need room */
+        int h = 8 + (int)(rnd() % (MAXH - 8));
+        int a = ((w + 31) / 32) * 32 + 32 * (int)(rnd() % 2);
+        int offx = (int)(rnd() % 4);
+        int offy = (int)(rnd() % 4);
+        int k = 1 + 2 * (int)(rnd() % 6);           /* odd: 1,3,5,7,9,11 */
+        if (k >= w) k = w - 1;
+        if (k >= h) k = h - 1;
+        if ((k & 1) == 0) k--;
+        if (k < 1) k = 1;
+        int niter = (int)(rnd() % 4);
+        float sigma = (float)(rnd() % 1000) / 500.0f;
+
+        long long maxidx = (long long)(offy + h - 1) * a + (offx + w - 1);
+        int nwords = (int)(maxidx >> 5) + 1;
+        for (int i = 0; i < nwords * 4; i++) { bmv[i] = (u8)rnd(); bmc[i] = bmv[i]; }
+        for (int i = 0; i < NPIX; i++) { ov[i] = 0; oc[i] = 0; }
+
+        mk_image(srcv, bmv, a, w, h, offx, offy);
+        memcpy(srcc, srcv, sizeof srcc);
+        cr_image_set((cr_image *)outv, ov, w, h);
+        cr_image_set((cr_image *)outc, oc, w, h);
+
+        int rv = v(outv, srcv, k, niter, sigma);
+        int rc = cr_bitmap_unpack_boxmax_fir((cr_image *)outc,
+                                             (const cr_image *)srcc,
+                                             k, niter, sigma);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", ov, oc, (size_t)(w * h), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_unpack_boxmax_fir\n");
+}
+
 static void test_rect_fills(void)
 {
     v_v_pb  v8  = (v_v_pb) fn_at(RVA(0x1800465a0));
@@ -8616,6 +8664,7 @@ int main(int argc, char **argv)
     test_grad_score_from_desc();
     test_mask_boxmax_fir_clear();
     test_bitmap_build_masked();
+    test_bitmap_unpack_boxmax_fir();
 
     printf("\n== image slots ==\n");
     test_image_slots();

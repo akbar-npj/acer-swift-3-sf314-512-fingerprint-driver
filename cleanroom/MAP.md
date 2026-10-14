@@ -391,6 +391,7 @@ side effects, never raw pointer values.
 | `0x18002d960` | `fpc_bio_bep_sw23_7fead33409` | `cr_fir_reflect_rows_guarded` | Row twin of the above; returns 1 (not 0x69) on validation failure; else `cr_fir_reflect_rows`. |
 | `0x180010e60` | `fpc_bio_bep_sw23_0fbb842e61.part.2` | `cr_palette_remap` | If `flag[0x3d]!=0`: allocate `count*2` at `obj+0x18` (obj=`*(ctx+0x48)`, count=`*(obj+0x20)`), then for each `i` in `count` look up `lut[src[2i+1]*mult + src[2i]]` (`lut=lut_desc->data`, `mult=lut_desc->w`) into `dst[i]`. Returns the allocator code. |
 | `0x1800388b0` | `fpc_bio_bep_sw23_b198c93f89` | `cr_bitmap_build_masked` | `int fn(cr_image *out, const cr_image *src, const void *cfg)`: `r = cr_image_alloc_u8(out, src->w, src->h)`; if `r==0` run `cr_mask_boxmax_fir_clear(out, src, 0xf, 1, 1, *(float*)(cfg+0x48))`; on failure free `out->data` via `cr_cleanup_ptr8_a` and return that error; else return `r`. |
+| `0x18001f660` | `fpc_bio_bep_sw23_4142dcc8d3.part.1` | `cr_bitmap_unpack_boxmax_fir` | Unpack a packed bitmap into `out` (`idx=(offy+y)*a+(offx+x)`, bit `(word[idx>>5]>>(idx&31))&1`), then `k`-box-sum → `(==k*k)?0xff:0` threshold → `niter` × `cr_fir7_image_u8(out,out,sigma)`; `k` even → 0x69. Bitmap-source twin of `cr_mask_boxmax_fir_clear` (no bit-2 clear). |
 
 ### Batch 53 — ready wrappers (size 160–500)
 

@@ -736,3 +736,57 @@ int cr_bitmap_build_masked(cr_image *out, const cr_image *src, const void *cfg)
     }
     return r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001f660 — unpack a bitmap into `out`, box-sum, k*k threshold, FIR blur.
+ *   int fn(cr_image *out, const cr_image *src, int k, int niter, float sigma):
+ *     w = src->w; h = src->h;
+ *     for y in h, x in w:
+ *        idx = (src->offy + y) * src->a + (src->offx + x);
+ *        out->data[y*w + x] = (src_word[idx>>5] >> (idx&31)) & 1;
+ *     if ((k & 1) == 0) return 0x69;
+ *     r = cr_box_sum_u8(&out->data, out, k);  if (r) return r;
+ *     for i in w*h: out->data[i] = (out->data[i] == (uint8_t)(k*k)) ? 0xff : 0;
+ *     for j in niter: { r = cr_fir7_image_u8(out, out, sigma); if (r) return r; }
+ *     return 0;
+ *   (Variant of cr_mask_boxmax_fir_clear whose source is a packed bitmap and
+ *   which omits the trailing "clear where src bit 2" phase.)
+ * ------------------------------------------------------------------------ */
+int cr_bitmap_unpack_boxmax_fir(cr_image *out, const cr_image *src,
+                                int k, int niter, float sigma)
+{
+    int w = src->w, h = src->h;
+    uint8_t *o = (uint8_t *)out->data;
+    const uint32_t *bm = (const uint32_t *)src->data;
+
+    if (h > 0) {
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int idx = (src->offy + y) * src->a + (src->offx + x);
+                o[(long long)y * w + x] =
+                    (uint8_t)((bm[idx >> 5] >> (idx & 31)) & 1);
+            }
+        }
+    }
+
+    if ((k & 1) == 0)
+        return 0x69;
+
+    int r = cr_box_sum_u8(&out->data, out, k);
+    if (r != 0)
+        return r;
+
+    int n = w * h;
+    if (n > 0) {
+        uint8_t t = (uint8_t)(k * k);
+        for (int i = 0; i < n; i++)
+            o[i] = (o[i] == t) ? 0xff : 0;
+    }
+
+    for (int j = 0; j < niter; j++) {
+        r = cr_fir7_image_u8(out, out, sigma);
+        if (r != 0)
+            return r;
+    }
+    return 0;
+}

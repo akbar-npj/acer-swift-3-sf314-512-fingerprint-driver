@@ -351,6 +351,8 @@ int      cr_mask_boxmax_fir_clear(cr_image *out, const cr_image *src,
                                   float sigma);                  /* 0x180023900 */
 int      cr_bitmap_build_masked(cr_image *out, const cr_image *src,
                                 const void *cfg);                /* 0x1800388b0 */
+int      cr_bitmap_unpack_boxmax_fir(cr_image *out, const cr_image *src,
+                                     int k, int niter, float sigma); /* 0x18001f660 */
 
 /* ---- batch 18: affine resample + 4-phase FIR --------------------------- */
 /* affine Q15 grid: x = x_org + row*x_row + col*x_col, y likewise */
