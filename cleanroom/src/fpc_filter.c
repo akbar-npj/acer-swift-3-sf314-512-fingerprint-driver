@@ -16,6 +16,7 @@
  */
 #include "fpc_bep.h"
 #include <string.h>
+#include <stdlib.h>
 
 static float f32_from_bits(uint32_t b)
 {
@@ -364,17 +365,24 @@ void cr_fir7_reflect(int16_t *out, const int16_t *in, const int16_t *coef,
 void cr_vfir7_cols(int16_t *out, const int16_t *in, const int16_t *coef,
                    int n, int sel)
 {
-    if (n <= 0)
+    if (n <= 0 || sel <= 0)
+        return;
+    /* This is called in-place by cr_gauss_fir7_apply (out == in == a_data).  A
+     * naive closed form that re-reads `in` for every output would, after an
+     * output overwrites position r, let later outputs read the *overwritten*
+     * value of r (as their -3/-2/-1 tap).  The vendor instead holds each input
+     * in a sliding register window, i.e. it reads every input exactly once,
+     * before any output overwrites it.  Replicate that by snapshotting each
+     * column into a temp buffer first; this is bit-identical and in-place-safe. */
+    int16_t *buf = malloc((size_t)sel * sizeof(int16_t));
+    if (!buf)
         return;
     for (int c = 0; c < n; c++) {
-        for (int j = 0; j < sel; j++) {
-            uint32_t s = 0;
-            for (int k = 0; k < 7; k++)
-                s += (uint32_t)((int32_t)coef[k]
-                                * (int32_t)in[c + refl101(j - 3 + k, sel) * n]);
-            out[c + j * n] = (int16_t)((int32_t)(s + 0x4000u) >> 15);
-        }
+        for (int j = 0; j < sel; j++)
+            buf[j] = in[c + (size_t)j * n];
+        fir_reflect_line(out + c, n, buf, coef, 7, 3, sel);
     }
+    free(buf);
 }
 
 /* ------------------------------------------------------------------------ *

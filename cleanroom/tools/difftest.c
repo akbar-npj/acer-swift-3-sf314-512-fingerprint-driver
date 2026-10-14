@@ -653,6 +653,113 @@ static void test_calib_blob(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_get_calib_blob\n");
 }
 
+/* ---- batch 63: Gaussian-windowed FIR orchestration (0x180046610 / 0x180044a20) --
+ * The descriptors these functions read are NOT cr_image: they are a 0x20-byte
+ * record with tag(+0x00) == qword(+0x10), data ptr(+0x08), L(+0x14), and a
+ * mandatory zero qword(+0x18).  W/L are taken from the *second* (source)
+ * descriptor. */
+typedef int (WINAPI *v_gf_apply)(void *, void *, int, uint16_t, float, float, float);
+typedef int (WINAPI *v_gf7_apply)(void *, void *, float, float, float);
+
+static void mk_gf_desc(unsigned char *d, void *data, int W, int L)
+{
+    uint64_t tag = (uint64_t)(uint32_t)W | ((uint64_t)(uint32_t)L << 32);
+    *(uint64_t *)(d + 0x00) = tag;   /* +0x00 tag (== +0x10)   */
+    *(void **)(d + 0x08) = data;     /* +0x08 data pointer     */
+    *(uint64_t *)(d + 0x10) = tag;   /* +0x10 qword: W(LSW)/L  */
+    *(uint64_t *)(d + 0x18) = 0;     /* +0x18 must be 0        */
+}
+
+static void test_gauss_fir(void)
+{
+    v_gf_apply v = (v_gf_apply)fn_at(RVA(0x180046610));
+    static const uint16_t counts[] = { 1, 3, 5, 7, 9, 11, 15, 31, 63, 127 };
+
+    begin("cr_gauss_fir_apply");
+    int bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        int W = (int)(rnd() % 64u) + 1;
+        int L = (int)(rnd() % 64u) + 1;
+        uint16_t count = counts[rnd() % (uint32_t)(sizeof counts / sizeof counts[0])];
+        float sigma = cr_u2f(rnd());
+        int n = W * L;
+        int16_t av[4096], ac[4096], bv[4096], bc[4096];
+        for (int i = 0; i < n; i++) {
+            int16_t s = (int16_t)(rnd() & 0xffffu); av[i] = s; ac[i] = s;
+            s = (int16_t)(rnd() & 0xffffu); bv[i] = s; bc[i] = s;
+        }
+        unsigned char dv[0x20], dc[0x20], adv[0x20], adc[0x20];
+        mk_gf_desc(dv, bv, W, L);  mk_gf_desc(dc, bc, W, L);
+        mk_gf_desc(adv, av, W, L); mk_gf_desc(adc, ac, W, L);
+        int rv = v(adv, dv, 0, count, 0.0f, 0.0f, sigma);
+        int rc = cr_gauss_fir_apply(adc, dc, 0, count, 0.0f, 0.0f, sigma);
+        if (rv != rc) mismatch("ret", t, (u32)rv, (u32)rc);
+        cmp_buf("a_data", (const unsigned char *)av, (const unsigned char *)ac,
+                (uint32_t)n * sizeof(int16_t), (u32)t);
+    }
+    /* invalid descriptor (corrupt +0x18 on the destination) -> 0x69, data intact */
+    for (int t = 0; t < 8; t++) {
+        int16_t av[16], ac[16], bv[16], bc[16];
+        for (int i = 0; i < 16; i++) { av[i] = ac[i] = bv[i] = bc[i] = (int16_t)(rnd() & 0xffffu); }
+        unsigned char dv[0x20], dc[0x20], adv[0x20], adc[0x20];
+        mk_gf_desc(dv, bv, 4, 4);  mk_gf_desc(dc, bc, 4, 4);
+        mk_gf_desc(adv, av, 4, 4); mk_gf_desc(adc, ac, 4, 4);
+        *(uint64_t *)(adv + 0x18) = 1; *(uint64_t *)(adc + 0x18) = 1;
+        int rv = v(adv, dv, 0, 7, 0.0f, 0.0f, 1.0f);
+        int rc = cr_gauss_fir_apply(adc, dc, 0, 7, 0.0f, 0.0f, 1.0f);
+        if (rv != 0x69 || rc != 0x69) mismatch("ret_bad", t, (u32)rv, (u32)rc);
+        cmp_buf("a_untouched", (const unsigned char *)av, (const unsigned char *)ac,
+                sizeof av, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_gauss_fir_apply\n");
+}
+
+static void test_gauss_fir7(void)
+{
+    v_gf7_apply v = (v_gf7_apply)fn_at(RVA(0x180044a20));
+
+    begin("cr_gauss_fir7_apply");
+    int bad = g_fail;
+    for (int t = 0; t < 4000; t++) {
+        /* the fixed 7-tap reflect FIRs are only defined for W>=4 and the
+         * column twin for L>=4 (a 7-tap window over a span < 7 folds past the
+         * edge into the next row/column, which the closed form cannot follow).
+         * This matches the validated domain of cr_fir7_reflect/cr_vfir7_cols. */
+        int W = (int)(rnd() % 61u) + 4;
+        int L = (int)(rnd() % 61u) + 4;
+        float sigma = cr_u2f(rnd());
+        int n = W * L;
+        int16_t av[4096], ac[4096], bv[4096], bc[4096];
+        for (int i = 0; i < n; i++) {
+            int16_t s = (int16_t)(rnd() & 0xffffu); av[i] = s; ac[i] = s;
+            s = (int16_t)(rnd() & 0xffffu); bv[i] = s; bc[i] = s;
+        }
+        unsigned char dv[0x20], dc[0x20], adv[0x20], adc[0x20];
+        mk_gf_desc(dv, bv, W, L);  mk_gf_desc(dc, bc, W, L);
+        mk_gf_desc(adv, av, W, L); mk_gf_desc(adc, ac, W, L);
+        int rv = v(adv, dv, 0.0f, 0.0f, sigma);
+        int rc = cr_gauss_fir7_apply(adc, dc, 0.0f, 0.0f, sigma);
+        if (rv != rc) mismatch("ret", t, (u32)rv, (u32)rc);
+        cmp_buf("a_data", (const unsigned char *)av, (const unsigned char *)ac,
+                (uint32_t)n * sizeof(int16_t), (u32)t);
+    }
+    /* invalid descriptor -> 0x69, data intact */
+    for (int t = 0; t < 8; t++) {
+        int16_t av[16], ac[16], bv[16], bc[16];
+        for (int i = 0; i < 16; i++) { av[i] = ac[i] = bv[i] = bc[i] = (int16_t)(rnd() & 0xffffu); }
+        unsigned char dv[0x20], dc[0x20], adv[0x20], adc[0x20];
+        mk_gf_desc(dv, bv, 4, 4);  mk_gf_desc(dc, bc, 4, 4);
+        mk_gf_desc(adv, av, 4, 4); mk_gf_desc(adc, ac, 4, 4);
+        *(uint64_t *)(adv + 0x18) = 1; *(uint64_t *)(adc + 0x18) = 1;
+        int rv = v(adv, dv, 0.0f, 0.0f, 1.0f);
+        int rc = cr_gauss_fir7_apply(adc, dc, 0.0f, 0.0f, 1.0f);
+        if (rv != 0x69 || rc != 0x69) mismatch("ret_bad", t, (u32)rv, (u32)rc);
+        cmp_buf("a_untouched", (const unsigned char *)av, (const unsigned char *)ac,
+                sizeof av, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_gauss_fir7_apply\n");
+}
+
 /* ---- batch 4: rect fills, bitmap ops, misc leaves ---------------------- */
 
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
@@ -6192,6 +6299,10 @@ int main(int argc, char **argv)
 
     printf("\n== calibration/data blob accessor ==\n");
     test_calib_blob();
+
+    printf("\n== batch 63: Gaussian-windowed FIR orchestration ==\n");
+    test_gauss_fir();
+    test_gauss_fir7();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

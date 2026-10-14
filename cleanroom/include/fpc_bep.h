@@ -99,6 +99,20 @@ uint32_t cr_fft_inv(float *out, const float *in, uint32_t n); /* 0x1800244a0 */
 /* ---- data/blob accessors ---------------------------------------------- */
 uint32_t cr_get_calib_blob(uint64_t *p1, uint32_t *p2, uint8_t sel); /* 0x180030340 */
 
+/* ---- batch 63: Gaussian-windowed FIR orchestration -------------------- *
+ * Both take a pair of descriptors with the layout the leaf FIR helpers
+ * actually read (NOT cr_image):
+ *   +0x00 u64  tag   (must equal field at +0x10)
+ *   +0x08 ptr  data
+ *   +0x10 u64        (low 32 = W)
+ *   +0x14 i32  L
+ *   +0x18 u64        (must be 0)
+ * Return 0x69 on invalid descriptor, else the guard status. */
+int cr_gauss_fir_apply(void *a, void *b, int r8, uint16_t count,
+                       float unk0, float unk1, float sigma); /* 0x180046610 */
+int cr_gauss_fir7_apply(void *a, void *b, float unk0, float unk1,
+                        float sigma);                        /* 0x180044a20 */
+
 /* ---- image descriptor -------------------------------------------------- *
  * Matches the vendor layout the leaf functions touch:
  *   +0x00 w   +0x04 h   +0x08 data   +0x10 w   +0x14 h   +0x18 offx +0x1c offy
