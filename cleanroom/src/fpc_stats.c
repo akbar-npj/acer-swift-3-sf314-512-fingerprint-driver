@@ -1156,3 +1156,85 @@ int cr_masked_median_f32(float *out, const float *src, int n, float skip)
     }
     return r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180018800 — mean gradient magnitude over a masked interior region.
+ *   int fn(uint8_t *out, const cr_image *src, const cr_image *mask,
+ *          int match, int shift, const void *cfg):
+ *     w = src->w; h = src->h; m = *(uint16_t *)(cfg + 0x2a);  *out = 0;
+ *     alloc two w x h int16 images A, B (cr_image_alloc_s16) and fill them
+ *     with cr_sep_fir_pair(&A, &B, src) (a separable gx / gy FIR pair);
+ *     if (m < h - m) {
+ *       sum = count = 0;
+ *       for (row = m; row != h - m; row++)
+ *         if (m < w - m)
+ *           for (idx = row*w + m; idx != row*w + (w - m); idx++)
+ *             if (mask->data[idx] == (uint8_t)match) {
+ *               count++;
+ *               sum += cr_sqrt_q16(A.data[idx]^2 + B.data[idx]^2) >> 16;
+ *             }
+ *       if (count) *out = (uint8_t)(sum / (count << (shift & 31)));
+ *     }
+ *     cleanup A, B; return status.
+ *   The divisor shift wraps in 32 bits like the vendor's SHL; the division is
+ *   a signed IDIV (so a zero divisor faults exactly as the vendor does).
+ * ------------------------------------------------------------------------ */
+int cr_grad_mag_score(uint8_t *out, const cr_image *src, const cr_image *mask,
+                      int match, int shift, const void *cfg)
+{
+    int w = src->w;
+    int h = src->h;
+    unsigned m = *(const uint16_t *)((const uint8_t *)cfg + 0x2a);
+
+    *out = 0;
+
+    cr_image A, B;
+    int r = cr_image_alloc_s16((int *)&A, w, h);
+    if (r != 0)
+        return r;
+
+    r = cr_image_alloc_s16((int *)&B, w, h);
+    if (r != 0) {
+        cr_cleanup_ptr8_clear(&A);
+        return r;
+    }
+
+    r = (int)cr_sep_fir_pair(&A, &B, src);
+    if (r == 0) {
+        unsigned end = (unsigned)h - m;
+
+        if ((int)m < (int)end) {
+            const uint8_t *md = (const uint8_t *)mask->data;
+            const int16_t *ad = (const int16_t *)A.data;
+            const int16_t *bd = (const int16_t *)B.data;
+            int wm = w - (int)m;
+            int sum = 0, count = 0;
+
+            for (unsigned row = m; row != end; row++) {
+                if ((int)m < wm) {
+                    long long idx = (long long)row * w + (int)m;
+                    long long lim = (long long)row * w + wm;
+
+                    for (; idx != lim; idx++) {
+                        if (md[idx] == (uint8_t)match) {
+                            int32_t gx = ad[idx];
+                            int32_t gy = bd[idx];
+                            uint32_t s = cr_sqrt_q16((uint32_t)(gx * gx + gy * gy));
+                            count++;
+                            sum += (int)(s >> 16);
+                        }
+                    }
+                }
+            }
+
+            if (count != 0) {
+                int denom = (int)((uint32_t)count << ((uint32_t)shift & 0x1f));
+                *out = (uint8_t)(sum / denom);
+            }
+        }
+    }
+
+    cr_cleanup_ptr8_clear(&A);
+    cr_cleanup_ptr8_clear(&B);
+    return r;
+}

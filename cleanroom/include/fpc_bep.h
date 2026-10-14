@@ -263,6 +263,9 @@ int      cr_masked_hist_percentiles_u8(int *out_lo, int *out_hi,
                                        float frac_hi, int nbin);  /* 0x18002fd40 */
 int      cr_stretch_u8_mode(cr_image *img, const cr_image *bitmap,
                             float frac_lo, float frac_hi, int mode); /* 0x180011020 */
+int      cr_grad_mag_score(uint8_t *out, const cr_image *src,
+                           const cr_image *mask, int match, int shift,
+                           const void *cfg);                         /* 0x180018800 */
 int      cr_stretch_14bit(cr_image *img, const cr_image *mask, int and_mask,
                           float frac_lo, float frac_hi, int mode);  /* 0x1800281a0 */
 int      cr_stretch_f32(cr_image *img, const cr_image *mask, int and_mask,

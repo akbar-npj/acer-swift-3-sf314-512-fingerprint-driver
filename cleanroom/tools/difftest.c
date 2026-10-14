@@ -2264,6 +2264,51 @@ static void test_stretch_u8_mode(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_stretch_u8_mode\n");
 }
 
+/* 0x180018800 — mean gradient magnitude over a masked interior region. */
+static void test_grad_mag_score(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, const void *, int, int,
+                               const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x180018800));
+    begin("cr_grad_mag_score");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 40, NP = MAXW * MAXH };
+    static int16_t sbuf[NP];
+    static uint8_t mbuf[NP];
+    static uint8_t cfg[0x40];
+    static cr_image sv, sc, mv, mc;
+
+    for (int t = 0; t < 4000; t++) {
+        int w = 4 + (int)(rnd() % (MAXW - 4));   /* 4..39 for cr_sep_fir_pair */
+        int h = 4 + (int)(rnd() % (MAXH - 4));
+        int lim = (w < h ? w : h) / 2;
+        int m = (int)(rnd() % (unsigned)(lim + 1));
+        int match = (int)(rnd() & 0xff);
+        int shift = (int)(rnd() % 6);
+
+        for (int i = 0; i < NP; i++) sbuf[i] = (int16_t)rnd();
+        for (int i = 0; i < NP; i++) {
+            int r = (int)(rnd() & 0xff);
+            mbuf[i] = (rnd() % 4 == 0) ? (uint8_t)match : (uint8_t)r;
+        }
+        memset(cfg, 0, sizeof cfg);
+        *(uint16_t *)(cfg + 0x2a) = (uint16_t)m;
+
+        cr_image_set(&sv, sbuf, w, h);
+        cr_image_set(&sc, sbuf, w, h);
+        cr_image_set(&mv, mbuf, w, h);
+        cr_image_set(&mc, mbuf, w, h);
+
+        uint8_t ov = 0xAA, oc = 0xAA;
+        int rv = v(&ov, &sv, &mv, match, shift, cfg);
+        int rc = cr_grad_mag_score(&oc, &sc, &mc, match, shift, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ov != oc) mismatch("out", (u32)t, (u32)ov, (u32)oc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_grad_mag_score\n");
+}
+
 /* ---- batch 70: in-place 14-bit contrast stretch (0x1800281a0) ---------- */
 static void test_stretch_14bit(void)
 {
@@ -8567,6 +8612,7 @@ int main(int argc, char **argv)
     test_hist_percentiles();
     test_hist_percentiles_u8();
     test_stretch_u8_mode();
+    test_grad_mag_score();
     test_stretch_14bit();
     test_bandpass_diff_i8();
     test_bandpass_dispatch();
