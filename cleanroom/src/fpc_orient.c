@@ -64,3 +64,97 @@ void cr_orient_pick(uint8_t *arr, uint8_t *flag, int *out,
 
     *out = 1;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180014e70 — 16-block Haar orientation accumulator.
+ *
+ * Descriptors (only the fields this function reads are listed):
+ *   re   (a1): +0x08 ptr data ; +0x10 i32 w ; +0x14 i32 h     (int16 out)
+ *   im   (a2): +0x08 ptr data                                  (int16 out)
+ *   src  (a3): +0x00 i32 byte stride ; +0x08 ptr data ;
+ *              +0x18 i32 offx ; +0x1c i32 offy
+ *   pt   (a4): +0x28 i32 dx ; +0x2c i32 dy
+ *
+ * The source origin is  src->data + (dy+offy)*stride + (dx+offx).  For every
+ * output pixel (x,y) a 5x5 byte window is read with row step `stride` and
+ * column step 4 bytes, based at  srcp + 4*stride*y + 4*x.  Over the sixteen
+ * 2x2 sub-blocks of that window the horizontal/vertical Haar gradients are
+ *
+ *     Dx = (p[r][c]-p[r][c+1]) + (p[r+1][c]-p[r+1][c+1])
+ *     Dy = (p[r][c]-p[r+1][c]) + (p[r][c+1]-p[r+1][c+1])
+ *
+ * and the sums  Re = sum(Dx*Dx - Dy*Dy),  Im = sum(2*Dx*Dy)  are formed.
+ * Both are then arithmetically shifted right by
+ *
+ *     shift = 18 - cr_clz_or32( ((Re>>1)^Re | (Im>>1)^Im) | 0x2000 )
+ *
+ * and stored as int16 into re->data[x] (Re) and im->data[x] (Im).  Integer
+ * addition is commutative, so the accumulation order is irrelevant; the
+ * result is the exact 32-bit sum.  h<=0 or w<=0 touch no memory.
+ * ------------------------------------------------------------------------ */
+int cr_haar16_orient(cr_image *re, cr_image *im, const cr_image *src,
+                     const void *pt)
+{
+    const int w = re->w;
+    const int h = re->h;
+    const int32_t S = src->a;                 /* byte stride between rows */
+    const uint8_t *base = (const uint8_t *)src->data;
+    const int32_t dx = *(const int32_t *)((const uint8_t *)pt + 0x28);
+    const int32_t dy = *(const int32_t *)((const uint8_t *)pt + 0x2c);
+    int16_t *o1 = (int16_t *)re->data;
+    int16_t *o2 = (int16_t *)im->data;
+
+    /* source origin, 32-bit wrapping like the vendor */
+    const int32_t off = (int32_t)((dy + src->offy) * S + (dx + src->offx));
+    const uint8_t *srcp = base + (int64_t)off;
+
+    if (h <= 0 || w <= 0)
+        return 0;
+
+    int32_t A = S;             /* row-1 byte offset */
+    int32_t B = 3 * S;         /* row-3 byte offset */
+    const int32_t fourS = 4 * S;
+
+    for (int y = 0; y < h; y++) {
+        const uint8_t *row0 = srcp + (int64_t)(int32_t)(A - S);
+        const uint8_t *row1 = srcp + (int64_t)A;
+        const uint8_t *row2 = srcp + (int64_t)(int32_t)(A + S);
+        const uint8_t *row3 = srcp + (int64_t)B;
+        const uint8_t *row4 = srcp + (int64_t)(int32_t)(B + S);
+
+        for (int x = 0; x < w; x++) {
+            const uint8_t *rows[5];
+            rows[0] = row0 + 4 * x;
+            rows[1] = row1 + 4 * x;
+            rows[2] = row2 + 4 * x;
+            rows[3] = row3 + 4 * x;
+            rows[4] = row4 + 4 * x;
+
+            int32_t acc_re = 0, acc_im = 0;
+            for (int r = 0; r < 4; r++) {
+                const uint8_t *ra = rows[r];
+                const uint8_t *rb = rows[r + 1];
+                for (int c = 0; c < 4; c++) {
+                    int a = ra[c], b = ra[c + 1];
+                    int cc = rb[c], d = rb[c + 1];
+                    int Dx = (a - b) + (cc - d);
+                    int Dy = (a - cc) + (b - d);
+                    acc_re += Dx * Dx - Dy * Dy;
+                    acc_im += 2 * Dx * Dy;
+                }
+            }
+
+            uint32_t mask = (uint32_t)(((acc_re >> 1) ^ acc_re) |
+                                       ((acc_im >> 1) ^ acc_im)) | 0x2000u;
+            int shift = 18 - cr_clz_or32(mask);
+            o1[x] = (int16_t)(acc_re >> shift);
+            o2[x] = (int16_t)(acc_im >> shift);
+        }
+
+        o1 += w;
+        o2 += w;
+        A += fourS;
+        B += fourS;
+    }
+    return 0;
+}

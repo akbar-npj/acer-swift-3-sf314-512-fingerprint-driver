@@ -1810,6 +1810,63 @@ static void test_bandpass_dispatch(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bandpass_dispatch\n");
 }
 
+/* ---- batch 73: 16-block Haar orientation accumulator (0x180014e70) ------ */
+static void test_haar16_orient(void)
+{
+    typedef int (WINAPI *v_h16)(void *, void *, void *, void *);
+    v_h16 v = (v_h16)fn_at(RVA(0x180014e70));
+    begin("cr_haar16_orient");
+    int bad = g_fail;
+
+    enum { MAXW = 16, MAXH = 16, SRCCAP = 8192, OUTN = 20 * 20 };
+    static uint8_t srcbuf[SRCCAP];
+    static uint8_t ptbufv[0x40], ptbufc[0x40];
+    static int16_t rv1[OUTN], rv2[OUTN], cv1[OUTN], cv2[OUTN];
+    static cr_image rev, rimv, cev, cimv, sv, sc;
+
+    for (int t = 0; t < 4000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        if (t % 11 == 0) h = -(int)(rnd() % 4);       /* exercise h<=0 */
+        if (t % 13 == 0) w = -(int)(rnd() % 4);       /* exercise w<=0 */
+
+        for (int i = 0; i < SRCCAP; i++) srcbuf[i] = (uint8_t)rnd();
+        for (int i = 0; i < OUTN; i++) {
+            int16_t a = (int16_t)rnd();
+            rv1[i] = a; cv1[i] = a;
+            rv2[i] = (int16_t)rnd(); cv2[i] = rv2[i];
+        }
+        for (int i = 0; i < 0x40; i++) { ptbufv[i] = (uint8_t)rnd(); ptbufc[i] = ptbufv[i]; }
+
+        int stride = 4 * w + 4 * (int)(rnd() % 3);     /* 4w .. 4w+8 */
+        if (stride < 4) stride = 4;                    /* keep w<=0 sane */
+        int offx = (int)(rnd() % 4), offy = (int)(rnd() % 4);
+        int dx = (int)(rnd() % 4), dy = (int)(rnd() % 4);
+        *(int32_t *)(ptbufv + 0x28) = dx; *(int32_t *)(ptbufc + 0x28) = dx;
+        *(int32_t *)(ptbufv + 0x2c) = dy; *(int32_t *)(ptbufc + 0x2c) = dy;
+
+        rev.a = w; rev.b = h; rev.data = rv1; rev.w = w; rev.h = h;
+        rev.offx = 0; rev.offy = 0;
+        cev = rev; cev.data = cv1;
+        rimv.a = w; rimv.b = h; rimv.data = rv2; rimv.w = w; rimv.h = h;
+        rimv.offx = 0; rimv.offy = 0;
+        cimv = rimv; cimv.data = cv2;
+
+        sv.a = stride; sv.b = 0; sv.data = srcbuf; sv.w = 0; sv.h = 0;
+        sv.offx = offx; sv.offy = offy;
+        sc = sv;
+
+        v(&rev, &rimv, &sv, ptbufv);
+        cr_haar16_orient(&cev, &cimv, &sc, ptbufc);
+
+        if (w > 0 && h > 0) {
+            cmp_buf("re", (u8 *)rv1, (u8 *)cv1, (size_t)(2 * w * h), (u32)t);
+            cmp_buf("im", (u8 *)rv2, (u8 *)cv2, (size_t)(2 * w * h), (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_haar16_orient\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7493,6 +7550,7 @@ int main(int argc, char **argv)
     test_stretch_14bit();
     test_bandpass_diff_i8();
     test_bandpass_dispatch();
+    test_haar16_orient();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -188,6 +188,10 @@ void     cr_masked_minmax(int *out_min, int *out_max, int *out_count,
 void     cr_orient_pick(uint8_t *arr, uint8_t *flag, int *out,
                         const uint8_t *const *src, const int16_t *coeff,
                         int half, int k);                             /* 0x1800309a0 */
+/* 16-block Haar orientation accumulator (5x5 byte window, 4-byte column step,
+ * `src->a` byte row stride).  src->data origin is offset by pt->{0x28,0x2c}. */
+int      cr_haar16_orient(cr_image *re, cr_image *im, const cr_image *src,
+                          const void *pt);                            /* 0x180014e70 */
 float    cr_atan2_deg(float a, float b);                              /* 0x1800391b0 */
 void     cr_sincos_f32(float *out_cos, float *out_sin, float x);      /* 0x18000eca0 */
 
