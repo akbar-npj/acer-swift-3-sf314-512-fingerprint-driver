@@ -929,6 +929,64 @@ static void test_obj_ctor_20aa0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_obj_ctor_20aa0\n");
 }
 
+/* ---- batch 66: Gaussian-windowed 2-pass reflect FIR orchestrator -------- */
+static void test_gaussian_fir_2pass(void)
+{
+    typedef int (WINAPI *v_i_ppf)(void *, void *, float);
+    v_i_ppf v = (v_i_ppf)fn_at(RVA(0x18002f620));
+    begin("cr_gaussian_fir_2pass");
+    int bad = g_fail;
+    static int16_t outV[256*256], outC[256*256], inV[256*256], inC[256*256];
+
+    for (int t = 0; t < 8000; t++) {
+        int W = 16 + (int)(rnd() % 185u);
+        int R = 16 + (int)(rnd() % 185u);
+        /* force both aligned (W%8==0) and unaligned paths */
+        if ((rnd() & 1u) && (W % 8 != 0)) W += (8 - (W % 8));   /* align */
+        else if (W % 8 == 0) W += 1;                              /* misalign */
+        float sigma = (float)(0.2 + (double)(rnd() % 1000u) / 200.0);
+        int n = W * R;
+
+        for (int i = 0; i < n; i++) {
+            int16_t s = (int16_t)rnd();
+            outV[i] = s; outC[i] = s;
+            s = (int16_t)rnd();
+            inV[i]  = s; inC[i]  = s;
+        }
+
+        static uint8_t a1v[0x20], a1c[0x20], a2v[0x20], a2c[0x20];
+        memset(a1v, 0, sizeof a1v); memset(a1c, 0, sizeof a1c);
+        memset(a2v, 0, sizeof a2v); memset(a2c, 0, sizeof a2c);
+
+        /* arg2: self-link pointer == (R<<32)|W; data@+8; tail@+0x18 = 0 */
+        uint64_t packed = ((uint64_t)(uint32_t)R << 32) | (uint32_t)W;
+        *(uint64_t *)(a2v + 0) = packed; *(uint64_t *)(a2v + 0x10) = packed;
+        *(uint64_t *)(a2c + 0) = packed; *(uint64_t *)(a2c + 0x10) = packed;
+        *(uint64_t *)(a2v + 0x8) = (uintptr_t)inV;  *(uint64_t *)(a2c + 0x8) = (uintptr_t)inC;
+        *(uint64_t *)(a2v + 0x18) = 0;              *(uint64_t *)(a2c + 0x18) = 0;
+
+        uint64_t base1 = (uint64_t)(0x1000 + ((rnd() & 0xfffu) << 4));
+        *(uint64_t *)(a1v + 0) = base1; *(uint64_t *)(a1v + 0x10) = base1;
+        *(uint64_t *)(a1c + 0) = base1; *(uint64_t *)(a1c + 0x10) = base1;
+        *(uint64_t *)(a1v + 0x8) = (uintptr_t)outV; *(uint64_t *)(a1c + 0x8) = (uintptr_t)outC;
+        *(uint64_t *)(a1v + 0x18) = 0;              *(uint64_t *)(a1c + 0x18) = 0;
+
+        int corrupt = (rnd() % 4u) == 0;
+        if (corrupt) {
+            *(uint64_t *)(a1v + 0x10) = base1 + 1; *(uint64_t *)(a1c + 0x10) = base1 + 1;
+        }
+
+        int rv = v(corrupt ? a1v : a1v, a2v, sigma);
+        int rc = cr_gaussian_fir_2pass(corrupt ? a1c : a1c, a2c, sigma);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (!corrupt) {
+            cmp_buf("out", (const unsigned char *)outV, (const unsigned char *)outC, (u32)(n * 2), (u32)t);
+            cmp_buf("in",  (const unsigned char *)inV,  (const unsigned char *)inC,  (u32)(n * 2), (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_gaussian_fir_2pass\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6477,6 +6535,7 @@ int main(int argc, char **argv)
 
     printf("\n== batch 65: object constructor (0x180020aa0) ==\n");
     test_obj_ctor_20aa0();
+    test_gaussian_fir_2pass();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

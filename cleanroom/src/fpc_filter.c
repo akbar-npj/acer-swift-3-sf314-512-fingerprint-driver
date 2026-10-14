@@ -1264,3 +1264,41 @@ uint32_t cr_box_median_u8(cr_image *out, const cr_image *src, uint16_t n)
     }
     return r;
 }
+
+/* ---- batch 66: Gaussian-windowed 2-pass reflect FIR orchestrator ---------
+ * 0x18002f620 — validates two "self-linked" descriptors (p[0]==p[0x10],
+ * p[0x18]==0), builds a 15-tap Q15 Gaussian window from `sigma`, then runs a
+ * row pass (fir_reflect_rows) followed by a column pass (fir_reflect) over the
+ * int16 data at p1[0x8] (out) using p2[0x8] (in) and the dimensions p2[0x10]
+ * (W) / p2[0x14] (R).  When the descriptor pointer p2[0x10] is 16-byte
+ * aligned the *guarded* FIR variants are used, otherwise the plain variants.
+ * Transcribed directly from the disassembly. */
+int cr_gaussian_fir_2pass(void *a1, void *a2, float sigma)
+{
+    uint8_t *p1 = (uint8_t *)a1, *p2 = (uint8_t *)a2;
+    if (*(void **)(p1 + 0)    != *(void **)(p1 + 0x10)) return 0x69;
+    if (*(void **)(p1 + 0x18) != NULL)                   return 0x69;
+    if (*(void **)(p2 + 0)    != *(void **)(p2 + 0x10)) return 0x69;
+    if (*(void **)(p2 + 0x18) != NULL)                   return 0x69;
+
+    int16_t coef[16];
+    cr_gaussian_window_q15(coef, sigma, 15);
+
+    int W = *(int *)(p2 + 0x10);
+    int R = *(int *)(p2 + 0x14);
+    int16_t *out = *(int16_t **)(p1 + 0x8);
+    int16_t *in  = *(int16_t **)(p2 + 0x8);
+
+    if (((uintptr_t)*(void **)(p2 + 0x10) & 7u) != 0) {
+        /* unaligned descriptor -> plain (unguarded) FIR variants */
+        if ((W - 0x10) > 0xf0) return 1;
+        int r = cr_fir_reflect_rows(out, in, coef, 15, W, R);
+        if (r) return r;
+        if ((R - 0x10) > 0xf0) return 0x69;
+        return cr_fir_reflect(out, out, coef, 15, W, R);
+    } else {
+        int r = cr_fir_reflect_rows_guarded(out, in, coef, 15, W, R);
+        if (r) return r;
+        return cr_fir_reflect_guarded(out, out, coef, 15, W, R);
+    }
+}
