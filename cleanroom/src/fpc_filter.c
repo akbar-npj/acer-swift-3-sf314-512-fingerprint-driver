@@ -1194,6 +1194,59 @@ uint32_t cr_gauss_deriv_blur_pair(cr_image *o1, cr_image *o2,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x18003eb00 — three-image Gaussian/derivative filter dispatcher.
+ *   int fn(void *p1, void *p2, const void *p3, float sigma)
+ *
+ * Validates the three descriptors (each: the tag word at +0 must equal the
+ * w/h word at +0x10, and the origin word at +0x18 must be zero).  If p3's w
+ * is 8-aligned, builds a fresh 15-tap Gaussian/derivative window and runs four
+ * guarded reflect FIR passes — p1 = rows(dg) then cols(g), p2 = rows(g) then
+ * cols(dg), both reading the shared p3 source (the vendor's p2 row call reuses
+ * r8 left holding g).  Otherwise it delegates to cr_gauss_deriv_blur_pair.
+ * A sigma below 0.72 returns 0x69 first.
+ * ------------------------------------------------------------------------ */
+int cr_gauss_deriv_3img(void *a1, void *a2, void *a3, float sigma)
+{
+    uint8_t *p1 = (uint8_t *)a1, *p2 = (uint8_t *)a2, *p3 = (uint8_t *)a3;
+
+    if (*(uint64_t *)(p1 + 0x00) != *(uint64_t *)(p1 + 0x10)) return 0x69;
+    if (*(uint64_t *)(p1 + 0x18) != 0)                         return 0x69;
+    if (*(uint64_t *)(p2 + 0x00) != *(uint64_t *)(p2 + 0x10)) return 0x69;
+    if (*(uint64_t *)(p2 + 0x18) != 0)                         return 0x69;
+    if (*(uint64_t *)(p3 + 0x00) != *(uint64_t *)(p3 + 0x10)) return 0x69;
+    if (*(uint64_t *)(p3 + 0x18) != 0)                         return 0x69;
+
+    if ((*(uint8_t *)(p3 + 0x10) & 7) != 0) {
+        if (0.72f > sigma)
+            return 0x69;
+        return (int)cr_gauss_deriv_blur_pair((cr_image *)p1, (cr_image *)p2,
+                                             (const cr_image *)p3, sigma);
+    }
+    if (0.72f > sigma)
+        return 0x69;
+
+    int16_t g[16], dg[16], d2g[16];
+    cr_gaussian_deriv_windows_q15(g, dg, d2g, sigma, 15);
+
+    int w = *(int *)(p3 + 0x10);
+    int h = *(int *)(p3 + 0x14);
+    int16_t *p1d = *(int16_t **)(p1 + 8);
+    int16_t *p2d = *(int16_t **)(p2 + 8);
+    int16_t *p3d = *(int16_t **)(p3 + 8);
+    int r;
+
+    r = cr_fir_reflect_rows_guarded(p1d, p3d, dg, 15, w, h);
+    if (r) return r;
+    r = cr_fir_reflect_guarded(p1d, p1d, g, 15, w, h);
+    if (r) return r;
+    r = cr_fir_reflect_rows_guarded(p2d, p3d, g, 15, w, h);
+    if (r) return r;
+    r = cr_fir_reflect_guarded(p2d, p2d, dg, 15, w, h);
+    if (r) return r;
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x1800256e0 — n*n box median filter over an 8-bit image, borders clamped.
  *   uint32_t fn(cr_image *out, cr_image *src, uint16_t n):
  *     scratch = cr_malloc_aligned16(n*n);

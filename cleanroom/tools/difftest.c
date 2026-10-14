@@ -1168,6 +1168,68 @@ static void test_obj_init_17ca0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_obj_init_17ca0\n");
 }
 
+/* ---- batch 67b: three-image gaussian/derivative dispatcher -------------- */
+static void mk_img2(u8 *d, int16_t *data, int w, int h)
+{
+    memset(d, 0, 0x20);
+    *(int *)(d + 0x00) = w;
+    *(int *)(d + 0x04) = h;
+    *(void **)(d + 0x08) = data;
+    *(int *)(d + 0x10) = w;
+    *(int *)(d + 0x14) = h;
+}
+
+static void test_gauss_deriv_3img(void)
+{
+    typedef int (WINAPI *v_i_pppf)(void *, void *, void *, float);
+    v_i_pppf v = (v_i_pppf)fn_at(RVA(0x18003eb00));
+    begin("cr_gauss_deriv_3img");
+    int bad = g_fail;
+
+    static int16_t d1v[4096], d1c[4096], d2v[4096], d2c[4096],
+                   d3v[4096], d3c[4096];
+    static u8 i1v[0x20], i1c[0x20], i2v[0x20], i2c[0x20], i3v[0x20], i3c[0x20];
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 16 + (int)(rnd() % 3u) * 8 + (int)(rnd() & 1u);  /* 16..33 */
+        int h = 16 + (int)(rnd() % 17u);                         /* 16..32 */
+        float sigma = (float)(rnd() % 220u) / 100.0f;            /* 0..2.19 */
+
+        for (int i = 0; i < w * h; i++) {
+            int16_t x = (int16_t)rnd();
+            d1v[i] = x; d1c[i] = x; d2v[i] = x; d2c[i] = x;
+            d3v[i] = x; d3c[i] = x;
+        }
+        mk_img2(i1v, d1v, w, h); mk_img2(i1c, d1c, w, h);
+        mk_img2(i2v, d2v, w, h); mk_img2(i2c, d2c, w, h);
+        mk_img2(i3v, d3v, w, h); mk_img2(i3c, d3c, w, h);
+
+        int rv = v(i1v, i2v, i3v, sigma);
+        int rc = cr_gauss_deriv_3img(i1c, i2c, i3c, sigma);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("d1", (const unsigned char *)d1v, (const unsigned char *)d1c,
+                (u32)(w * h * 2), (u32)t);
+        cmp_buf("d2", (const unsigned char *)d2v, (const unsigned char *)d2c,
+                (u32)(w * h * 2), (u32)t);
+    }
+
+    /* corrupted descriptors must yield the 0x69 guard in both implementations */
+    for (int c = 0; c < 3; c++) {
+        static int16_t dd[1024];
+        for (int i = 0; i < 1024; i++) dd[i] = (int16_t)rnd();
+        u8 a[0x20], b[0x20], d[0x20], a2[0x20], b2[0x20], d2[0x20];
+        mk_img2(a, dd, 24, 24); mk_img2(b, dd, 24, 24); mk_img2(d, dd, 24, 24);
+        memcpy(a2, a, 0x20); memcpy(b2, b, 0x20); memcpy(d2, d, 0x20);
+        if (c == 0) { *(int *)(a + 0x10) = 25; *(int *)(a2 + 0x10) = 25; }  /* a != w */
+        if (c == 1) { *(int *)(b + 0x18) = 3;  *(int *)(b2 + 0x18) = 3;  }  /* offx != 0 */
+        if (c == 2) { *(int *)(d + 0x00) = 0;  *(int *)(d2 + 0x00) = 0;  }  /* tag != w */
+        int rv = v(a, b, d, 1.5f);
+        int rc = cr_gauss_deriv_3img(a2, b2, d2, 1.5f);
+        if (rv != rc) mismatch("ret-bad", (u32)c, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_3img\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6719,6 +6781,7 @@ int main(int argc, char **argv)
     test_gaussian_fir_2pass();
     test_feature_qualify();
     test_obj_init_17ca0();
+    test_gauss_deriv_3img();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
