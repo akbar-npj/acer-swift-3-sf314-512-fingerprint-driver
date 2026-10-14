@@ -520,6 +520,8 @@ void     cr_box_mean_edge(float *out, const float *in, int n,
 /* ---- batch 54: ready wrappers (size 192-512) ---------------------------- */
 void     cr_atan2_image_u8(cr_image *dst, const cr_image *a,
                            const cr_image *b);               /* 0x18003ce10 */
+void     cr_cordic_atan_q15(int16_t *out, const int16_t *b,
+                            const int16_t *a, int n, int tsel); /* 0x18002ba80 */
 int      cr_gain_normalize_u8(cr_image *img);                /* 0x180037ac0 */
 int      cr_gain_normalize_s16(cr_image *img);               /* 0x1800175b0 */
 void     cr_affine_sample_s16_nn(cr_image *dst, const cr_image *src,

@@ -1271,6 +1271,41 @@ static void test_warp_bilinear_q15(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_warp_bilinear_q15\n");
 }
 
+/* ---- batch 68: table-driven CORDIC angle --------------------------------- */
+static void test_cordic_atan_q15(void)
+{
+    typedef void (WINAPI *v_v_pppii)(int16_t *, const int16_t *, const int16_t *,
+                                     int, int);
+    v_v_pppii v = (v_v_pppii)fn_at(RVA(0x18002ba80));
+    begin("cr_cordic_atan_q15");
+    int bad = g_fail;
+
+    static int16_t av[600], bv[600], ov[600], oc[600];
+
+    for (int t = 0; t < 3000; t++) {
+        int n = 1 + (int)(rnd() % 300u);
+        for (int i = 0; i < n; i++) {
+            /* mix random values with the -32768 / 0 / +-1 edge cases */
+            uint32_t r = rnd();
+            int16_t val;
+            if ((r & 15u) == 0)      val = (int16_t)0x8000;
+            else if ((r & 15u) == 1) val = (int16_t)((int)(rnd() % 5u) - 2);
+            else                     val = (int16_t)rnd();
+            av[i] = val;
+            bv[i] = ((r & 15u) == 0) ? (int16_t)0x8000 : (int16_t)rnd();
+        }
+        int tsel = (int)(rnd() % 6u);
+        for (int i = 0; i < n; i++) { ov[i] = 0x7; oc[i] = 0x7; }
+
+        v(ov, bv, av, n, tsel);
+        cr_cordic_atan_q15(oc, bv, av, n, tsel);
+
+        cmp_buf("out", (const unsigned char *)ov, (const unsigned char *)oc,
+                (u32)(n * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_cordic_atan_q15\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6824,6 +6859,7 @@ int main(int argc, char **argv)
     test_obj_init_17ca0();
     test_gauss_deriv_3img();
     test_warp_bilinear_q15();
+    test_cordic_atan_q15();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

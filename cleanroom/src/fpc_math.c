@@ -376,3 +376,116 @@ void cr_atan2_image_u8(cr_image *dst, const cr_image *a, const cr_image *b)
         }
     }
 }
+
+/* 0x18002ba80 — table-driven CORDIC-style angle over int16 vector pairs.
+ *   void fn(int16_t *out, const int16_t *b, const int16_t *a, int n, int tsel)
+ *
+ * For each i the pair (a[i], b[i]) is reduced to a first-quadrant ratio, the
+ * ratio is formed by a clz-based long division, a 4-term odd polynomial with
+ * the six coefficients t[0..5] of row `tsel` (table at 0x180117120, 12 B/row)
+ * is evaluated around a quadrant-dependent base angle in `r14`, and t[5] is
+ * added to negative results.  A pair whose low 16 bits are both zero yields 0.
+ * Both known call sites pass tsel == 2. */
+static const uint16_t cr_cordic_tbl[6][6] = {
+    { 0x8000, 0x28bc, 0x0d46, 0x0657, 0x01ce, 0x0000 },
+    { 0x6488, 0x1ffe, 0x0a6d, 0x04fb, 0x016b, 0x0000 },
+    { 0x5a00, 0x1ca4, 0x0955, 0x0475, 0x0145, 0x0000 },
+    { 0x8000, 0x28bc, 0x0d46, 0x0657, 0x01ce, 0x0000 },
+    { 0x6488, 0x1ffe, 0x0a6d, 0x04fb, 0x016b, 0xc910 },
+    { 0x5a00, 0x1ca4, 0x0955, 0x0475, 0x0145, 0xb400 },
+};
+
+void cr_cordic_atan_q15(int16_t *out, const int16_t *b_in, const int16_t *a_in,
+                        int n, int tsel)
+{
+    const uint16_t *t = cr_cordic_tbl[tsel & 7];
+    const int esi = -12540;
+
+    for (int i = 0; i < n; i++) {
+        int a = a_in[i], b = b_in[i];
+        if (((a | b) & 0xffff) == 0) { out[i] = 0; continue; }
+
+        int r13 = a, ebp = b, r14 = 0, r15 = 0, edi = 0, r12 = 0;
+        int e1 = 0, e3 = 0, e5 = 0, e7 = 0;
+
+        if (r13 == -32768) {
+            if (ebp == -32768) {
+                r13 = 0x7fff; ebp = 0x7fff; r12 = 0x539e58c2;
+                r15 = esi; edi = 0x7642; r14 = (int)0xffff9000;
+                goto Lclz;
+            }
+            if (ebp <= 0) {
+                ebp = -ebp; r13 = 0x7fff; r15 = esi; edi = 0x7642;
+                r14 = (int)0xffff9000;
+                goto Lbba0;
+            }
+            r13 = ebp; r14 = 0x5000; ebp = 0x7fff;
+            goto Lbb81;
+        }
+        if (ebp == -32768) {
+            r13 = -r13; ebp = 0x7fff; r14 = (int)0xffff9000;
+            if (r13 >= 0) goto Lbb81;
+            goto Ld;
+        }
+        r14 = 0x1000;
+        if (ebp <= 0) {
+            r13 = -r13; ebp = -ebp; r14 = (int)0xffff9000;
+            if (r13 >= 0) goto Lbb81;
+            goto Ld;
+        }
+        if (r13 < 0) goto Ld;
+
+    Lbb81:
+        r15 = esi; edi = 0x7642;
+        if (r13 >= ebp) goto Lbba0;
+        r14 += 0x2000; r15 = (int)0xffff89be; edi = 0x30fc;
+
+    Lbba0:
+        r12 = edi * r13 - r15 * ebp;
+        if (r12 == 0) goto Lsmall;
+
+    Lclz:
+        {
+            int cl = (int)cr_clz((uint32_t)r12) - 2;
+            r13 = r13 * r15;
+            edi = edi * ebp;
+            r12 = (int)((uint32_t)r12 << (cl & 31)) + 0x4000;
+            int num = (int)((uint32_t)(r13 + edi) << (cl & 31));
+            r12 = r12 >> 15;
+            if (r12 == 0) goto Lsmall;
+            e1 = num / r12;
+            int e2 = (e1 * e1 + 0x4000) >> 15;
+            e3 = (e1 * e2 + 0x4000) >> 15;
+            e5 = (e2 * e3 + 0x4000) >> 15;
+            e7 = (e2 * e5 + 0x4000) >> 15;
+        }
+        goto Lpoly;
+
+    Ld:
+        r14 += 0x4000;
+        { int e = r13; r13 = ebp; ebp = -e; }
+        goto Lbb81;
+
+    Lsmall:
+        e1 = e3 = e5 = e7 = 0;
+
+    Lpoly:
+        {
+            r14 = r14 * (int)t[0];
+            int acc = (int)t[1] * e1 + r14;
+            acc = acc - e3 * (int)t[2];
+            int edx = acc;
+            acc = (int)t[3] * e5 + edx;
+            acc = acc - e7 * (int)t[4];
+            acc = acc >> 1;
+            acc = acc * 2 + 0x8000;
+            acc = acc >> 16;
+            acc = acc + acc;
+            if (acc >= 0)
+                out[i] = (int16_t)acc;
+            else
+                out[i] = (int16_t)(uint16_t)((acc & 0xffff) + t[5]);
+        }
+    }
+}
+
