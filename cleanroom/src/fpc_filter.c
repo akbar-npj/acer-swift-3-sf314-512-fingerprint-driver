@@ -1302,3 +1302,55 @@ int cr_gaussian_fir_2pass(void *a1, void *a2, float sigma)
         return cr_fir_reflect_guarded(out, out, coef, 15, W, R);
     }
 }
+
+/* ---- batch 66: feature/quality check (0x180048ab0) -----------------------
+ * Validates nothing (no early return on inputs); computes a running temporal
+ * average of p1[0x10] into one of two (cnt,dst) buffer pairs — selected by
+ * whether 0.5*p1[0x40] is a non-integer — then a Pearson correlation over
+ * p1[0x10]/p1[0x28].  When the correlation passes it raises the flag byte at
+ * p1[0x08].  Return value is always 0.  Transcribed from disassembly.
+ *   fn(p1, k, p3): MS-x64 assigns registers by argument POSITION, so the
+ *   vendor's real signature is (void *p1, float k, void *p3) — arg2 (float)
+ *   lands in xmm1, arg3 (ptr) in r8: rcx=p1, xmm1=k, r8=p3. */
+int cr_feature_qualify(void *a1, void *a3, float k)
+{
+    uint8_t *p1 = (uint8_t *)a1, *p3 = (uint8_t *)a3;
+    int a60 = *(int *)(p1 + 0x60);
+    int a64 = *(int *)(p1 + 0x64);
+    int r9  = a64 * a60;
+    int cnt = (r9 >= 0) ? (r9 >> 4) : ((r9 + 15) >> 4);
+
+    float x   = (float)*(int *)(p1 + 0x40) * 0.5f;
+    float ipart;
+    float frac = cr_modff(x, &ipart);
+
+    int16_t *src   = *(int16_t **)(p1 + 0x10);
+    int16_t *dstA  = *(int16_t **)(p1 + 0x20);
+    int16_t *cntA  = *(int16_t **)(p1 + 0x30);
+    int16_t *dstB  = *(int16_t **)(p1 + 0x28);
+    int16_t *cntB  = *(int16_t **)(p1 + 0x38);
+    /* the vendor passes the *address* p3+0x24 (a single int16 limit value),
+     * it does not dereference it here */
+    int16_t *limit = (int16_t *)(p3 + 0x24);
+
+    if (frac > 0.0f) {
+        cr_running_avg(cntA, dstA, src, cnt, k, limit);
+    } else {
+        cr_running_avg(cntB, dstB, src, cnt, k, limit);
+    }
+
+    /* vendor: trunc(a60/4) and trunc(a64/4) — cmovns picks v (not v+3) when
+     * v >= 0, then sar 2 (round toward zero for both signs) */
+    int    width  = (a60 >= 0) ? (a60 >> 2) : ((a60 + 3) >> 2);
+    int    height = (a64 >= 0) ? (a64 >> 2) : ((a64 + 3) >> 2);
+    float  out_corr;
+    int    out_valid;
+    cr_corr_coeff(&out_corr, &out_valid, dstA, dstB,
+                  width, height, 0x7fff,
+                  *(int *)(p3 + 0x10), *(int *)(p3 + 0x14));
+    if (out_valid != 1)                    return 0;
+    if (out_corr <= *(float *)(p3 + 0x28)) return 0;
+    if (*(int *)(p1 + 0x40) <= 20)         return 0;
+    *(uint8_t *)(p1 + 8) = 1;
+    return 0;
+}

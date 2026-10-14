@@ -620,6 +620,7 @@ int      cr_masked_median_f32(float *out, const float *src, int n,
                               float skip);                     /* 0x18000e6f0 */
 void     cr_gaussian_window_q15(int16_t *out, float sigma, int n); /* 0x1800345f0 */
 int      cr_gaussian_fir_2pass(void *a1, void *a2, float sigma);   /* 0x18002f620 */
+int      cr_feature_qualify(void *a1, void *a3, float k);           /* 0x180048ab0 */
 void     cr_gaussian_deriv_windows_q15(int16_t *g, int16_t *dg, int16_t *d2g,
                                        float sigma, int n);         /* 0x180018a10 */
 int      cr_bilinear_angle_sample(const cr_angle_field *d,

@@ -939,8 +939,12 @@ static void test_gaussian_fir_2pass(void)
     static int16_t outV[256*256], outC[256*256], inV[256*256], inC[256*256];
 
     for (int t = 0; t < 8000; t++) {
-        int W = 16 + (int)(rnd() % 185u);
-        int R = 16 + (int)(rnd() % 185u);
+        /* NB: the vendor's plain (unguarded) FIR fast-path overflows its fixed
+         * stack scratch for dimensions well above the production max (image is
+         * 64x176).  Cap at 176 so we stay inside the range the real callers use
+         * and the vendor is guaranteed not to overflow. */
+        int W = 16 + (int)(rnd() % 161u);
+        int R = 16 + (int)(rnd() % 161u);
         /* force both aligned (W%8==0) and unaligned paths */
         if ((rnd() & 1u) && (W % 8 != 0)) W += (8 - (W % 8));   /* align */
         else if (W % 8 == 0) W += 1;                              /* misalign */
@@ -985,6 +989,71 @@ static void test_gaussian_fir_2pass(void)
         }
     }
     if (g_fail == bad) end(); else printf("  FAIL cr_gaussian_fir_2pass\n");
+}
+
+/* ---- batch 66: feature/quality check (0x180048ab0) ----------------------- */
+static void test_feature_qualify(void)
+{
+    /* Microsoft x64 ABI assigns registers by argument POSITION: arg1->rcx/xmm0,
+     * arg2->rdx/xmm1, arg3->r8/xmm2, arg4->r9/xmm3.  The vendor reads
+     * rcx=p1, xmm1=k, r8=p3, so its real signature is (void*, float, void*). */
+    typedef int (WINAPI *v_pfp)(void *, float, void *);
+    v_pfp v = (v_pfp)fn_at(RVA(0x180048ab0));
+    begin("cr_feature_qualify");
+    int bad = g_fail;
+    static int16_t srcV[1024], srcC[1024];
+    static int16_t c20V[1024], c20C[1024], c38V[1024], c38C[1024];
+    static int16_t d30V[1024], d30C[1024], d28V[1024], d28C[1024];
+
+    for (int t = 0; t < 8000; t++) {
+        for (int i = 0; i < 1024; i++) {
+            int16_t s = (int16_t)(rnd() % 200u);          /* < 0xfa */
+            srcV[i] = s; srcC[i] = s;
+            int16_t c = (int16_t)(rnd() % 50u);
+            c20V[i] = c; c20C[i] = c; c38V[i] = c; c38C[i] = c;
+            int16_t d = (int16_t)rnd();
+            d30V[i] = d; d30C[i] = d; d28V[i] = d; d28C[i] = d;
+        }
+
+        static uint8_t a1v[0x70], a1c[0x70], a3v[0x30], a3c[0x30];
+        memset(a1v, 0, sizeof a1v); memset(a1c, 0, sizeof a1c);
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+
+        int a60 = (int)(rnd() % 32u) + 1;
+        int a64 = (int)(rnd() % 32u) + 1;
+        int f40 = (int)(rnd() % 180u) + 21;     /* > 20; odd->pathA even->pathB */
+        float k = (float)(rnd() % 1000u) / 50.0f;
+        uint8_t flag0 = (uint8_t)(rnd() & 1u);
+
+        *(int *)(a1v + 0x40) = f40; *(int *)(a1c + 0x40) = f40;
+        *(int *)(a1v + 0x60) = a60; *(int *)(a1c + 0x60) = a60;
+        *(int *)(a1v + 0x64) = a64; *(int *)(a1c + 0x64) = a64;
+        *(uint8_t *)(a1v + 8) = flag0; *(uint8_t *)(a1c + 8) = flag0;
+        *(uint64_t *)(a1v + 0x10) = (uint64_t)srcV; *(uint64_t *)(a1c + 0x10) = (uint64_t)srcC;
+        *(uint64_t *)(a1v + 0x20) = (uint64_t)d30V; *(uint64_t *)(a1c + 0x20) = (uint64_t)d30C;
+        *(uint64_t *)(a1v + 0x28) = (uint64_t)d28V; *(uint64_t *)(a1c + 0x28) = (uint64_t)d28C;
+        *(uint64_t *)(a1v + 0x30) = (uint64_t)c20V; *(uint64_t *)(a1c + 0x30) = (uint64_t)c20C;
+        *(uint64_t *)(a1v + 0x38) = (uint64_t)c38V; *(uint64_t *)(a1c + 0x38) = (uint64_t)c38C;
+
+        int my = (int)(rnd() % 3u), mx = (int)(rnd() % 3u);
+        float thr = (float)(rnd() % 100u) / 7.0f;
+        int16_t lim = (int16_t)(int)(rnd() % 400u);   /* single int16 limit value */
+        *(int *)(a3v + 0x10) = my; *(int *)(a3c + 0x10) = my;
+        *(int *)(a3v + 0x14) = mx; *(int *)(a3c + 0x14) = mx;
+        *(int16_t *)(a3v + 0x24) = lim; *(int16_t *)(a3c + 0x24) = lim;
+        *(float *)(a3v + 0x28) = thr; *(float *)(a3c + 0x28) = thr;
+
+        int rv = v(a1v, k, a3v);
+        int rc = cr_feature_qualify(a1c, a3c, k);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (a1v[8] != a1c[8]) mismatch("flag", (u32)t, a1v[8], a1c[8]);
+        cmp_buf("src", (const unsigned char *)srcV, (const unsigned char *)srcC, 2048, (u32)t);
+        cmp_buf("c20", (const unsigned char *)c20V, (const unsigned char *)c20C, 2048, (u32)t);
+        cmp_buf("c38", (const unsigned char *)c38V, (const unsigned char *)c38C, 2048, (u32)t);
+        cmp_buf("d30", (const unsigned char *)d30V, (const unsigned char *)d30C, 2048, (u32)t);
+        cmp_buf("d28", (const unsigned char *)d28V, (const unsigned char *)d28C, 2048, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_feature_qualify\n");
 }
 
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
@@ -6536,6 +6605,7 @@ int main(int argc, char **argv)
     printf("\n== batch 65: object constructor (0x180020aa0) ==\n");
     test_obj_ctor_20aa0();
     test_gaussian_fir_2pass();
+    test_feature_qualify();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
