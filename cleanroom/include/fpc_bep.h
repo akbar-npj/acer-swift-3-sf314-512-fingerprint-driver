@@ -98,6 +98,8 @@ uint32_t cr_fft_inv(float *out, const float *in, uint32_t n); /* 0x1800244a0 */
 
 /* ---- data/blob accessors ---------------------------------------------- */
 uint32_t cr_get_calib_blob(uint64_t *p1, uint32_t *p2, uint8_t sel); /* 0x180030340 */
+uint32_t cr_image_data_dump(const void *defs, uint32_t idx, void *out); /* 0x18004a680 */
+uint32_t cr_pixel_buf_setup(const void *defs, uint32_t idx, int rows, int cols); /* 0x18003d840 */
 
 /* ---- batch 63: Gaussian-windowed FIR orchestration -------------------- *
  * Both take a pair of descriptors with the layout the leaf FIR helpers

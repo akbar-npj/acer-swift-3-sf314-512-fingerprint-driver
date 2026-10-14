@@ -760,7 +760,94 @@ static void test_gauss_fir7(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_gauss_fir7_apply\n");
 }
 
-/* ---- batch 4: rect fills, bitmap ops, misc leaves ---------------------- */
+/* ---- batch 64: image-data dump + pixel-buffer setup -------------------- */
+
+/* Build a defs table with metadata-class slot pointers, matching the vendor's
+ * image-definition layout: defs+0x10 holds an array of 22 (ptr) slots. */
+static void test_image_data_dump(void)
+{
+    typedef uint32_t (WINAPI *v_u_ppu)(const void *, uint32_t, void *);
+    v_u_ppu v = (v_u_ppu)fn_at(RVA(0x18004a680));
+    begin("cr_image_data_dump");
+    int bad = g_fail;
+    static u8 defs[0x10 + 22 * 8];
+    static u8 meta[22][0x40];
+    for (int t = 0; t < 8000; t++) {
+        memset(defs, 0, sizeof defs);
+        for (int i = 0; i < 22; i++) {
+            int kind = (int)(rnd() % 4u);
+            if (kind == 0) continue;          /* NULL slot */
+            memset(meta[i], 0, sizeof meta[i]);
+            /* tag: even and >= 8 → metadata-class true; odd or < 8 → false */
+            if (kind == 1)
+                *(u32 *)meta[i] = 8u + 2u * (rnd() % 8u);   /* valid */
+            else if (kind == 2)
+                *(u32 *)meta[i] = 9u + 2u * (rnd() % 8u);   /* odd >= 8 → invalid */
+            else
+                *(u32 *)meta[i] = rnd() % 8u;                /* < 8 → invalid */
+            /* fill some fields the function reads */
+            *(u32 *)(meta[i] + 4) = (rnd() % 200u) + 0x20u;
+            *(u32 *)(meta[i] + 0x0c) = rnd();
+            *(u32 *)(meta[i] + 0x10) = rnd();
+            *(u32 *)(meta[i] + 0x14) = rnd();
+            *(u32 *)(meta[i] + 0x18) = rnd();
+            *(void **)(defs + 0x10 + (size_t)i * 8) = meta[i];
+        }
+        u32 idx = rnd() % 26u;
+        u8 ov[0x30], oc[0x30];
+        memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
+        uint32_t rv = v(defs, idx, ov);
+        uint32_t rc = cr_image_data_dump(defs, idx, oc);
+        if (rv != rc) mismatch("idd-ret", idx, rv, rc);
+        /* Only compare the first 0x20 bytes (the packed header up to but not
+         * including the cr_image_buf_desc output at +0x20, which shares the
+         * same defs context so pointers match). Actually the full 0x30 is
+         * deterministic from defs+meta. */
+        cmp_buf("idd", ov, oc, sizeof ov, (u32)t);
+    }
+    /* NULL defs */
+    {
+        u8 ov[0x30], oc[0x30];
+        memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
+        uint32_t rv = v(NULL, 0, ov);
+        uint32_t rc = cr_image_data_dump(NULL, 0, oc);
+        if (rv != rc) mismatch("idd-null", 0, rv, rc);
+        cmp_buf("idd-null", ov, oc, sizeof ov, 0);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_image_data_dump\n");
+}
+
+static void test_pixel_buf_setup(void)
+{
+    typedef uint32_t (WINAPI *v_u_puii)(const void *, uint32_t, int, int);
+    v_u_puii v = (v_u_puii)fn_at(RVA(0x18003d840));
+    begin("cr_pixel_buf_setup");
+    int bad = g_fail;
+    static u8 defs[0x10 + 22 * 8];
+    static u8 objs[22][0x20];
+    for (int t = 0; t < 8000; t++) {
+        memset(defs, 0, sizeof defs);
+        for (int i = 0; i < 22; i++) {
+            u32 r = rnd() % 3u;
+            if (r == 0) continue;
+            memset(objs[i], 0, sizeof objs[i]);
+            *(int *)(objs[i] + 8) = (r == 1) ? 0 : (int)rnd();
+            *(u64 *)(defs + 0x10 + (size_t)i * 8) = (u64)(uintptr_t)objs[i];
+        }
+        u32 idx = rnd() % 26u;
+        int rows = (int)(rnd() % 30u) + 1;
+        int cols = (int)(rnd() % 30u) + 1;
+        uint32_t rv = v(defs, idx, rows, cols);
+        uint32_t rc = cr_pixel_buf_setup(defs, idx, rows, cols);
+        if (rv != rc) mismatch("pbs-ret", idx, rv, rc);
+    }
+    {
+        uint32_t rv = v(NULL, 0, 4, 4);
+        uint32_t rc = cr_pixel_buf_setup(NULL, 0, 4, 4);
+        if (rv != rc) mismatch("pbs-null", 0, rv, rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_pixel_buf_setup\n");
+}
 
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
@@ -6303,6 +6390,10 @@ int main(int argc, char **argv)
     printf("\n== batch 63: Gaussian-windowed FIR orchestration ==\n");
     test_gauss_fir();
     test_gauss_fir7();
+
+    printf("\n== batch 64: image-data dump + pixel-buffer setup ==\n");
+    test_image_data_dump();
+    test_pixel_buf_setup();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
