@@ -1496,6 +1496,66 @@ static void test_struct_tensor_dispatch(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_struct_tensor_dispatch\n");
 }
 
+/* ---- batch 61: masked float histogram percentile range (0x18003c7f0) ---- */
+static void test_hist_percentiles_f32(void)
+{
+    typedef int (WINAPI *v_histf)(float *, float *, int *, const void *,
+                                  const void *, int, float, float, int);
+    v_histf v = (v_histf)fn_at(RVA(0x18003c7f0));
+    begin("cr_masked_hist_percentiles_f32");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 40, NP = MAXW * MAXH };
+    static float   pix[NP];
+    static uint8_t mbuf[NP];
+    static cr_image img, maskimg;
+
+    for (int t = 0; t < 5000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int total = w * h;
+        int mode = (int)(rnd() % 8);
+
+        for (int i = 0; i < total; i++)
+            pix[i] = (float)((int)(rnd() % 4001) - 2000) * 0.125f;
+        for (int i = 0; i < total; i++)
+            mbuf[i] = (uint8_t)rnd();
+
+        if (mode == 1) {                     /* force fmin == fmax */
+            float c = (float)((int)(rnd() % 4001) - 2000) * 0.125f;
+            for (int i = 0; i < total; i++) pix[i] = c;
+        }
+
+        int use_mask = (int)(rnd() % 3) != 0;
+        int and_mask = (int)(rnd() % 256);
+        if (mode == 2) and_mask = 0;         /* count == 0 when masked */
+
+        float f_lo = (float)(rnd() % 201) / 200.0f;   /* 0.0 .. 1.0 */
+        float f_hi = (float)(rnd() % 201) / 200.0f;
+        int nbin = 2 + (int)(rnd() % 512);            /* nm1 >= 1 */
+
+        cr_image_set(&img, pix, w, h);
+        cr_image_set(&maskimg, mbuf, w, h);
+        const cr_image *mp = use_mask ? &maskimg : NULL;
+
+        float lo_v = -1.0f, hi_v = -2.0f;
+        float lo_c = -1.0f, hi_c = -2.0f;
+        int ct_v = 0x33333333, ct_c = 0x33333333;
+
+        int rv = v(&lo_v, &hi_v, &ct_v, &img, mp, and_mask, f_lo, f_hi, nbin);
+        int rc = cr_masked_hist_percentiles_f32(&lo_c, &hi_c, &ct_c, &img, mp,
+                                                (uint8_t)and_mask, f_lo, f_hi,
+                                                nbin);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("lo", (const unsigned char *)&lo_v, (const unsigned char *)&lo_c,
+                4, (u32)t);
+        cmp_buf("hi", (const unsigned char *)&hi_v, (const unsigned char *)&hi_c,
+                4, (u32)t);
+        if (ct_v != ct_c) mismatch("ct", (u32)t, (u32)ct_v, (u32)ct_c);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_hist_percentiles_f32\n");
+}
+
 /* ---- batch 68: global bio-context getter --------------------------------- */
 static void test_bio_init(void)
 {
@@ -7887,6 +7947,7 @@ int main(int argc, char **argv)
     test_gauss_deriv_triple_guarded();
     test_struct_tensor_aniso();
     test_struct_tensor_dispatch();
+    test_hist_percentiles_f32();
     test_bio_init();
     test_bio_get_ctx();
     test_ctx_find_node();

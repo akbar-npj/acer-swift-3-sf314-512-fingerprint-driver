@@ -404,6 +404,126 @@ int cr_masked_hist_percentiles(int *out_lo, int *out_hi, int *out_count,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x18003c7f0 — masked float intensity range from histogram percentiles.
+ *   int fn(float *out_lo, float *out_hi, int *out_count, const cr_image *img,
+ *          const cr_image *mask, uint8_t and_mask, float frac_lo,
+ *          float frac_hi, int nbin)
+ *
+ * The float sibling of cr_masked_hist_percentiles: cr_masked_minmax_f32 first
+ * fills (min, max, count) over the pixels selected by (mask[i] & and_mask) != 0
+ * (all pixels when mask == NULL) and both float outputs are seeded with min /
+ * max.  If min == max or count <= 0 the function returns 0.
+ *
+ * An nbin-entry histogram over [min, max] is then accumulated from the float
+ * samples img->data:
+ *     scale = (float)(nbin - 1) / (max - min)
+ *     bin   = clamp((int)((v - min) * scale + 0.5f), 0, nbin - 1)
+ * and the endpoints become
+ *     out_lo = min + k_lo / scale,  out_hi = min + k_hi / scale
+ * where k_lo is the first bin whose forward cumulative count exceeds
+ * (int)(frac_lo * count) and k_hi is the last bin whose backward cumulative
+ * count exceeds (int)(count * (1 - frac_hi)).  Every degenerate path keeps the
+ * vendor's leftover operands exactly (min for k_lo, max for k_hi), and the
+ * zeroing pass is skipped when nbin <= 0, mirroring the vendor control flow.
+ * ------------------------------------------------------------------------ */
+int cr_masked_hist_percentiles_f32(float *out_lo, float *out_hi,
+                                   int *out_count, const cr_image *img,
+                                   const cr_image *mask, uint8_t and_mask,
+                                   float frac_lo, float frac_hi, int nbin)
+{
+    float fmin, fmax;
+    cr_masked_minmax_f32(&fmin, &fmax, out_count, img, mask, and_mask);
+    int count = *out_count;
+
+    *out_lo = fmin;
+    *out_hi = fmax;
+    if (fmin == fmax)
+        return 0;
+    if (count <= 0)
+        return 0;
+
+    int *hist = NULL;
+    int r = cr_malloc_aligned16((void **)&hist, (size_t)((intptr_t)nbin * 4));
+    if (r != 0)
+        return r;
+
+    int   nm1    = nbin - 1;
+    float scale  = (float)nm1 / (fmax - fmin);
+    int   total  = img->w * img->h;
+    float fcount = (float)count;
+
+    if (nbin > 0)
+        for (int i = 0; i < nbin; i++)
+            hist[i] = 0;
+
+    if (total > 0) {
+        const float   *src = (const float *)img->data;
+        const uint8_t *m   = mask ? (const uint8_t *)mask->data : NULL;
+        for (int p = 0; p < total; p++) {
+            if (m && !(m[p] & and_mask))
+                continue;
+            float v = src[p] - fmin;
+            v = v * scale;
+            v = v + 0.5f;
+            int idx = (int)v;
+            if (idx < 0)
+                idx = 0;
+            if (nm1 <= idx)
+                idx = nm1;
+            hist[idx]++;
+        }
+    }
+
+    if (nbin > 0) {
+        int target = (int)(frac_lo * fcount);
+        int cum    = hist[0];
+        if (target < cum) {
+            *out_lo = 0.0f;
+        } else {
+            int edx = 1, esi = 0;
+            for (;;) {
+                esi = edx;
+                if (nbin <= edx)
+                    break;
+                cum += hist[edx];
+                edx++;
+                if (target < cum) {
+                    *out_lo = (float)esi;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (nm1 >= 0) {
+        int target_hi = (int)(fcount * (1.0f - frac_hi));
+        int cum       = hist[nbin - 1];
+        if (target_hi < cum) {
+            *out_hi = (float)nm1;
+        } else {
+            int ecx = nm1;
+            int idx = nbin - 2;
+            for (;;) {
+                ecx--;
+                if (ecx == -1)
+                    break;
+                cum += hist[idx];
+                idx--;
+                if (target_hi < cum) {
+                    *out_hi = (float)ecx;
+                    break;
+                }
+            }
+        }
+    }
+
+    *out_lo = fmin + (*out_lo) / scale;
+    *out_hi = fmin + (*out_hi) / scale;
+    cr_sized_free((void **)&hist);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x1800281a0 — in-place 14-bit contrast stretch of an int16 image.
  *   int fn(cr_image *img, const cr_image *mask, int and_mask,
  *          float frac_lo, float frac_hi, int mode)
