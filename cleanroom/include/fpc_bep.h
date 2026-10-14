@@ -271,6 +271,8 @@ int      cr_grad_score_from_desc(uint8_t *out, void **arr,
                                 int shift, const void *cfg);         /* 0x1800171d0 */
 int      cr_masked_sharpness(int *out, const cr_image *src,
                              void *const *mask);                     /* 0x18000f6f0 */
+int      cr_masked_sharpness_f32(int *out, const float *const *src, int w,
+                                 int h, void *const *mask);          /* 0x180033f60 */
 int      cr_stretch_14bit(cr_image *img, const cr_image *mask, int and_mask,
                           float frac_lo, float frac_hi, int mode);  /* 0x1800281a0 */
 int      cr_stretch_f32(cr_image *img, const cr_image *mask, int and_mask,

@@ -1348,3 +1348,83 @@ int cr_masked_sharpness(int *out, const cr_image *src, void *const *mask)
     cr_cleanup_ptr8_a(&local);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180033f60 — float-source twin of cr_masked_sharpness: round each float
+ * pixel to a byte (with a range check), 0.5-sigma blur, masked mean-squared
+ * difference.
+ *   int fn(int *out, const float *const *src, int w, int h, void *const *mask):
+ *     alloc u8 bytes(w,h); alloc u8 blurred(w,h);
+ *     n = w*h;
+ *     if (n < 1) { r = cr_fir7_image_u8(blurred, bytes, 0.5f);
+ *                  if (r) return r; *out = 0; free; return 0; }
+ *     for i in n:  x = (*src)[i];
+ *        if (x >= 255.5f || 0.0f > x + 0.5f) { free; return 200; }
+ *        bytes[i] = (uint8_t)(int)(x + 0.5f);
+ *     r = cr_fir7_image_u8(blurred, bytes, 0.5f);  if (r) { free; return r; }
+ *     sumsq=0, cnt=1 over i in n where mask[i]==0xff:
+ *        d = bytes[i] - blurred[i];  cnt+=1; sumsq += (float)(d*d);
+ *     *out = (int)((sumsq*1024.0f)/cnt);  free; return 0;
+ * ------------------------------------------------------------------------ */
+int cr_masked_sharpness_f32(int *out, const float *const *src, int w, int h,
+                            void *const *mask)
+{
+    cr_image bytes, blurred;
+    int r = cr_image_alloc_u8((int *)&bytes, w, h);
+    if (r != 0)
+        return r;
+    r = cr_image_alloc_u8((int *)&blurred, w, h);
+    if (r != 0) {
+        cr_cleanup_ptr8_a(&bytes);
+        return r;
+    }
+
+    int n = w * h;
+    if (n < 1) {
+        int r2 = cr_fir7_image_u8(&blurred, &bytes, 0.5f);
+        if (r2 == 0) {
+            *out = 0;
+            cr_cleanup_ptr8_a(&bytes);
+            cr_cleanup_ptr8_a(&blurred);
+            return 0;
+        }
+        cr_cleanup_ptr8_a(&bytes);
+        cr_cleanup_ptr8_a(&blurred);
+        return r2;
+    }
+
+    const float *sp = *src;
+    uint8_t *bp = (uint8_t *)bytes.data;
+    for (int i = 0; i < n; i++) {
+        float x = sp[i];
+        if (x >= 255.5f || 0.0f > (x + 0.5f)) {
+            cr_cleanup_ptr8_a(&bytes);
+            cr_cleanup_ptr8_a(&blurred);
+            return 200;
+        }
+        bp[i] = (uint8_t)(int)(x + 0.5f);
+    }
+
+    r = cr_fir7_image_u8(&blurred, &bytes, 0.5f);
+    if (r != 0) {
+        cr_cleanup_ptr8_a(&bytes);
+        cr_cleanup_ptr8_a(&blurred);
+        return r;
+    }
+
+    const uint8_t *bb = (const uint8_t *)blurred.data;
+    const uint8_t *m = (const uint8_t *)*mask;
+    float sumsq = 0.0f;
+    float cnt = 1.0f;
+    for (int i = 0; i < n; i++) {
+        if ((int8_t)m[i] == -1) {
+            int d = (int)(uint32_t)bp[i] - (int)(uint32_t)bb[i];
+            cnt += 1.0f;
+            sumsq += (float)(d * d);
+        }
+    }
+    *out = (int)((sumsq * 1024.0f) / cnt);
+    cr_cleanup_ptr8_a(&bytes);
+    cr_cleanup_ptr8_a(&blurred);
+    return 0;
+}

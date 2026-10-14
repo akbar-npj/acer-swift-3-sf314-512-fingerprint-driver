@@ -3050,6 +3050,56 @@ static void test_masked_sharpness(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_masked_sharpness\n");
 }
 
+/* 0x180033f60 — float-source masked sharpness (round f32->u8 + range check). */
+static void test_masked_sharpness_f32(void)
+{
+    typedef int (WINAPI *v_t)(int *, const void *, int, int, const void *);
+    v_t v = (v_t)fn_at(RVA(0x180033f60));
+    begin("cr_masked_sharpness_f32");
+    int bad = g_fail;
+
+    enum { MAXW = 32, MAXH = 32, NP = MAXW * MAXH };
+    static float sbuf[NP + 64];
+    static u8 mbuf[NP + 64];
+    static void *pmv, *pmc;
+    static const float *psv, *psc;
+
+    for (int t = 0; t < 20000; t++) {
+        int w = 7 + (int)(rnd() % (MAXW - 7));
+        int h = 7 + (int)(rnd() % (MAXH - 7));
+        for (int i = 0; i < NP; i++) {
+            switch (rnd() % 4) {
+            case 0:  sbuf[i] = (float)(rnd() % 256);             break;
+            case 1:  sbuf[i] = (float)(rnd() % 1000) / 4.0f;     break;
+            case 2:  sbuf[i] = 255.5f + (float)(rnd() % 10);     break;
+            default: sbuf[i] = -0.5f - (float)(rnd() % 10);      break;
+            }
+        }
+        for (int i = 0; i < NP; i++) mbuf[i] = (rnd() & 1) ? 0xff : (u8)rnd();
+
+        psv = sbuf; psc = sbuf; pmv = mbuf; pmc = mbuf;
+
+        int ov = (int)0x12345678, oc = (int)0x12345678;
+        int rv = v(&ov, &psv, w, h, &pmv);
+        int rc = cr_masked_sharpness_f32(&oc, &psc, w, h, &pmc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ov != oc) mismatch("out", (u32)t, (u32)ov, (u32)oc);
+    }
+
+    /* n < 1 branch */
+    for (int t = 0; t < 300; t++) {
+        int w = (rnd() & 1) ? 0 : 8;
+        int h = (rnd() & 1) ? 0 : 8;
+        psv = sbuf; psc = sbuf; pmv = mbuf; pmc = mbuf;
+        int ov = 7, oc = 7;
+        int rv = v(&ov, &psv, w, h, &pmv);
+        int rc = cr_masked_sharpness_f32(&oc, &psc, w, h, &pmc);
+        if (rv != rc) mismatch("nret", (u32)t, (u32)rv, (u32)rc);
+        if (ov != oc) mismatch("nout", (u32)t, (u32)ov, (u32)oc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_sharpness_f32\n");
+}
+
 /* 0x180023900 — masked bitmap: box-sum, threshold, FIR, bit-2 clear. */
 static void test_mask_boxmax_fir_clear(void)
 {
@@ -8748,6 +8798,7 @@ int main(int argc, char **argv)
     test_image_fill_desc();
     test_grad_score_from_desc();
     test_masked_sharpness();
+    test_masked_sharpness_f32();
     test_mask_boxmax_fir_clear();
     test_bitmap_build_masked();
     test_bitmap_unpack_boxmax_fir();
