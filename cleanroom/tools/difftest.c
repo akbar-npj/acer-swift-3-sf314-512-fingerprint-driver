@@ -631,6 +631,28 @@ static void test_fft(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fft_invalid\n");
 }
 
+/* ---- calibration/data blob accessor (0x180030340) ---------------------- */
+typedef uint32_t (WINAPI *v_u32_pppu8)(uint64_t *, uint32_t *, uint8_t);
+
+static void test_calib_blob(void)
+{
+    v_u32_pppu8 v = (v_u32_pppu8)fn_at(RVA(0x180030340));
+    begin("cr_get_calib_blob");
+    int bad = g_fail;
+    static const uint8_t sels[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 255 };
+    for (int t = 0; t < (int)(sizeof sels / sizeof sels[0]); t++) {
+        uint8_t sel = sels[t];
+        uint64_t vp1 = 0, cp1 = 0;
+        uint32_t vp2 = 0, cp2 = 0;
+        uint32_t rv = v(&vp1, &vp2, sel);
+        uint32_t rc = cr_get_calib_blob(&cp1, &cp2, sel);
+        if (rv != rc) mismatch("ret", sel, rv, rc);
+        if (vp1 != cp1) mismatch("p1", sel, vp1, cp1);
+        if (vp2 != cp2) mismatch("p2", sel, vp2, cp2);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_get_calib_blob\n");
+}
+
 /* ---- batch 4: rect fills, bitmap ops, misc leaves ---------------------- */
 
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
@@ -5888,6 +5910,7 @@ int main(int argc, char **argv)
     setup_teb();
     g_base = (u8 *)pe_load(dll, shim_lookup);
     if (!g_base) { fprintf(stderr, "failed to load %s\n", dll); return 2; }
+    g_cr_image_base = (uintptr_t)g_base;
     win32_shims_set_image_base(g_base);
     printf("[+] loaded %s at %p\n\n", dll, g_base);
 
@@ -6166,6 +6189,9 @@ int main(int argc, char **argv)
 
     printf("\n== vendor FFT (fwd/inv) ==\n");
     test_fft();
+
+    printf("\n== calibration/data blob accessor ==\n");
+    test_calib_blob();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -24,6 +24,15 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+/*
+ * Rehost aid: when the clean-room runs inside the differential test harness the
+ * vendor DLL is mapped at this base, so functions that hand back pointers into
+ * the vendor's read-only data (.rdata blobs) can be mirrored by returning
+ * g_cr_image_base + file_offset.  Outside the harness it is 0 and such accessors
+ * are meaningless.  difftest.c sets it right after pe_load().
+ */
+extern uintptr_t g_cr_image_base;
+
 /* ---- bit reinterpretation helpers -------------------------------------- */
 static inline uint32_t cr_f2u(float f)  { uint32_t u; __builtin_memcpy(&u, &f, 4); return u; }
 static inline float    cr_u2f(uint32_t u) { float f; __builtin_memcpy(&f, &u, 4); return f; }
@@ -86,6 +95,9 @@ float    cr_dot_f32(const float *a, const float *b, int n);            /* 0x1800
  * n must be a power of two in [8,256]; other sizes return 0x69. */
 uint32_t cr_fft_fwd(float *out, const float *in, uint32_t n); /* 0x18003d490 */
 uint32_t cr_fft_inv(float *out, const float *in, uint32_t n); /* 0x1800244a0 */
+
+/* ---- data/blob accessors ---------------------------------------------- */
+uint32_t cr_get_calib_blob(uint64_t *p1, uint32_t *p2, uint8_t sel); /* 0x180030340 */
 
 /* ---- image descriptor -------------------------------------------------- *
  * Matches the vendor layout the leaf functions touch:
