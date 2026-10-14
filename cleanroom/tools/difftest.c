@@ -1459,6 +1459,43 @@ static void test_struct_tensor_aniso(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_struct_tensor_aniso\n");
 }
 
+/* ---- batch 61: flag-gated structure-tensor dispatcher -------------------- */
+static void test_struct_tensor_dispatch(void)
+{
+    typedef int (WINAPI *v_i_ppp)(void *, void *, void *);
+    v_i_ppp v = (v_i_ppp)fn_at(RVA(0x18003ced0));
+    begin("cr_struct_tensor_dispatch");
+    int bad = g_fail;
+
+    static int16_t srcv[4096], srcc[4096], dstv[4096], dstc[4096];
+    static u8 sv[0x20], sc[0x20], dv[0x20], dc[0x20];
+    static u8 fv[0x40], fc[0x40];
+
+    for (int t = 0; t < 400; t++) {
+        int w = 16 + (int)(rnd() % 33u);
+        int h = 16 + (int)(rnd() % 33u);
+        for (int i = 0; i < w * h; i++) {
+            int16_t x = (int16_t)rnd();
+            srcv[i] = x; srcc[i] = x;
+        }
+        for (int i = 0; i < 4096; i++)
+            dstv[i] = dstc[i] = (int16_t)0x5A5A;
+        mk_img2(sv, srcv, w, h); mk_img2(sc, srcc, w, h);
+        mk_img2(dv, dstv, w, h); mk_img2(dc, dstc, w, h);
+
+        u8 flag = (t % 5 == 0) ? 0 : (t % 5 == 1) ? 1 : (u8)rnd();
+        memset(fv, 0, sizeof fv); memset(fc, 0, sizeof fc);
+        fv[0x3d] = flag; fc[0x3d] = flag;
+
+        int rv = v(dv, sv, fv);
+        int rc = cr_struct_tensor_dispatch((cr_image *)dc, (const cr_image *)sc, fc);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("dst", (const unsigned char *)dstv, (const unsigned char *)dstc,
+                (u32)(w * h * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_struct_tensor_dispatch\n");
+}
+
 /* ---- batch 68: global bio-context getter --------------------------------- */
 static void test_bio_init(void)
 {
@@ -7849,6 +7886,7 @@ int main(int argc, char **argv)
     test_gauss_deriv_triple();
     test_gauss_deriv_triple_guarded();
     test_struct_tensor_aniso();
+    test_struct_tensor_dispatch();
     test_bio_init();
     test_bio_get_ctx();
     test_ctx_find_node();

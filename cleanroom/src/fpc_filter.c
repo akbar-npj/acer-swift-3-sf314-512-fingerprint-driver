@@ -1554,6 +1554,25 @@ int cr_struct_tensor_aniso(cr_image *dst, const cr_image *src)
     return rr;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x18003ced0 — flag-gated dispatcher for cr_struct_tensor_aniso.
+ *   int fn(cr_image *dst, const cr_image *src, const void *flag_obj):
+ *     flag = ((const uint8_t *)flag_obj)[0x3d];
+ *     if (flag == 0) return 0;
+ *     if (flag == 1) return cr_struct_tensor_aniso(dst, src);  (tail call)
+ *     return 0x69;
+ * ------------------------------------------------------------------------ */
+int cr_struct_tensor_dispatch(cr_image *dst, const cr_image *src,
+                              const void *flag_obj)
+{
+    uint8_t flag = *(const uint8_t *)((const uint8_t *)flag_obj + 0x3d);
+    if (flag == 0)
+        return 0;
+    if (flag == 1)
+        return cr_struct_tensor_aniso(dst, src);
+    return 0x69;
+}
+
 /* ---- batch 66: feature/quality check (0x180048ab0) -----------------------
  * Validates nothing (no early return on inputs); computes a running temporal
  * average of p1[0x10] into one of two (cnt,dst) buffer pairs — selected by

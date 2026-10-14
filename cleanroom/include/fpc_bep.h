@@ -731,5 +731,7 @@ uint32_t cr_box_median_u8(cr_image *out, const cr_image *src,
 int      cr_gauss_deriv_triple_guarded(void *o1, void *o2, void *o3,
                                        const void *src, float sigma); /* 0x180030070 */
 int      cr_struct_tensor_aniso(cr_image *dst, const cr_image *src); /* 0x1800331f0 */
+int      cr_struct_tensor_dispatch(cr_image *dst, const cr_image *src,
+                                   const void *flag_obj);           /* 0x18003ced0 */
 
 #endif /* FPC_BEP_H */
