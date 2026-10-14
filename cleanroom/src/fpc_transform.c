@@ -73,6 +73,132 @@ void cr_affine_sample_u8(cr_image *dst, const cr_image *src,
     } while (ri != h);
 }
 
+/* 0x180032d60 — bounded Q15 bilinear affine resample of a byte image.
+ *   void fn(cr_image *dst, const cr_image *src, const cr_affine_map *s)
+ *
+ * Same geometry as cr_affine_sample_u8 (the Q15 grid s drives the source
+ * coordinate), but the source fetch is CLAMPED to the image rectangle instead
+ * of trusting the transform: the integer source coordinates are pinned into
+ * [0, w-1] x [0, h-1] per axis.  The four transformed destination corners are
+ * first min/max-folded; if the whole bounding box stays strictly inside the
+ * source with a 1-pixel margin (measured in the offx/offy-shifted frame against
+ * src->a/src->b) the unclamped cr_affine_sample_u8 fast path is taken instead.
+ *
+ * Bilinear weights (Q15, all 32-bit):
+ *     w00=((0x8000-fx)(0x8000-fy))>>15 -> (row0,col0)
+ *     w10=((0x8000-fx)fy)>>15          -> (row1,col0)
+ *     w01=((0x8000-fy)fx)>>15          -> (row0,col1)
+ *     w11=(fx*fy)>>15                  -> (row1,col1)
+ * and out = (int8_t)((w00*P00 + w10*P10 + w01*P01 + w11*P11) >> 15). */
+void cr_affine_sample_u8_clamped(cr_image *dst, const cr_image *src,
+                                 const cr_affine_map *s)
+{
+    int w = dst->w, h = dst->h;
+    int sstride = src->a;
+    int sw1 = src->w - 1;
+    int sh  = src->h;
+    int sox = src->offx, soy = src->offy;
+    const uint8_t *sbase = (const uint8_t *)src->data
+        + ((long long)sstride * soy + sox);
+    uint8_t *dbase = (uint8_t *)dst->data
+        + ((long long)dst->a * dst->offy + dst->offx);
+    uint32_t w1 = (uint32_t)(w - 1);
+    uint32_t h1 = (uint32_t)(h - 1);
+
+    uint32_t xa = (uint32_t)s->x_col * w1 + (uint32_t)s->x_org;
+    uint32_t ya = (uint32_t)s->y_col * w1 + (uint32_t)s->y_org;
+    uint32_t xb = (uint32_t)s->x_row * h1 + (uint32_t)s->x_org;
+    uint32_t yb = h1 * (uint32_t)s->y_row + (uint32_t)s->y_org;
+    uint32_t xc = (uint32_t)s->x_col * w1 + xb;
+    uint32_t yc = (uint32_t)s->y_col * w1 + yb;
+    uint32_t x0 = (uint32_t)s->x_org;
+    uint32_t y0 = (uint32_t)s->y_org;
+
+    int32_t xmin = (int32_t)xc, xmax = (int32_t)xc;
+    int32_t ymin = (int32_t)yc, ymax = (int32_t)yc;
+    if ((int32_t)xb <= xmin) xmin = (int32_t)xb; else xmax = (int32_t)xb;
+    if ((int32_t)x0 <  xmin) xmin = (int32_t)x0;
+    if ((int32_t)xa <  xmin) xmin = (int32_t)xa;
+    if (xmax < (int32_t)x0) xmax = (int32_t)x0;
+    if (xmax < (int32_t)xa) xmax = (int32_t)xa;
+    if ((int32_t)yb <= ymin) ymin = (int32_t)yb; else ymax = (int32_t)yb;
+    if ((int32_t)y0 <  ymin) ymin = (int32_t)y0;
+    if ((int32_t)ya <  ymin) ymin = (int32_t)ya;
+    if (ymax < (int32_t)y0) ymax = (int32_t)y0;
+    if (ymax < (int32_t)ya) ymax = (int32_t)ya;
+
+    if (-sox <= (xmin >> 15) && (xmax >> 15) + 1 < sstride - sox &&
+        -soy <= (ymin >> 15) && (ymax >> 15) + 1 < src->b - soy) {
+        cr_affine_sample_u8(dst, src, s);
+        return;
+    }
+
+    if (h <= 0)
+        return;
+
+    int rowmax = sstride * (sh - 1);
+    int row = 0, ri = 0;
+    int32_t xrow = s->x_org, yrow = s->y_org;
+
+    do {
+        if (w > 0) {
+            uint8_t *dp = dbase + row;
+            int32_t xacc = xrow, yacc = yrow;
+            do {
+                uint32_t fx = (uint32_t)xacc & 0x7fffu;
+                uint32_t fy = (uint32_t)yacc & 0x7fffu;
+                int sy = (int32_t)yacc >> 15;
+                int sx = (int32_t)xacc >> 15;
+                int row0, row1, i14, i25, i17, i24;
+
+                if (sy < 0) {
+                    row0 = 0; row1 = 0;
+                } else if (sy < sh - 1) {
+                    row0 = sy * sstride; row1 = (sy + 1) * sstride;
+                } else {
+                    row0 = rowmax; row1 = rowmax;
+                }
+                i14 = row0; i24 = row1;
+                if (sx >= 0) {
+                    if (sx < sw1) {
+                        i17 = row0 + sx + 1;
+                        i14 = row0 + sx;
+                        i25 = row1 + sx;
+                        i24 = row1 + sx + 1;
+                    } else {
+                        i24 = row1 + sw1;
+                        i14 = row0 + sw1;
+                        i17 = i14;
+                        i25 = i24;
+                    }
+                } else {
+                    i17 = i14;
+                    i25 = i24;
+                }
+
+                uint32_t sum = 0;
+                sum += (uint32_t)((int32_t)((0x8000u - fx) * (0x8000u - fy)) >> 15)
+                       * (uint32_t)sbase[i14];
+                sum += (uint32_t)((int32_t)((0x8000u - fx) * fy) >> 15)
+                       * (uint32_t)sbase[i25];
+                sum += (uint32_t)((int32_t)((0x8000u - fy) * fx) >> 15)
+                       * (uint32_t)sbase[i17];
+                sum += (uint32_t)((int32_t)(fx * fy) >> 15)
+                       * (uint32_t)sbase[i24];
+                *dp = (uint8_t)(int8_t)((int32_t)sum >> 15);
+
+                xacc += s->x_col;
+                yacc += s->y_col;
+                dp++;
+            } while (dp != dbase + row + w);
+        }
+        ri++;
+        xrow += s->x_row;
+        row += dst->a;
+        yrow += s->y_row;
+    } while (ri != h);
+}
+
 /* 0x18001fd10 — Q15 bilinear warp of an int16 image with ldexp-scaled steps.
  *   void fn(cr_image *dst, const cr_image *src, const float *coef, uint32_t _)
  *

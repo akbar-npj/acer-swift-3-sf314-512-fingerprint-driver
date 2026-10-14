@@ -3539,6 +3539,54 @@ static void test_affine_sample_u8(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_affine_sample_u8\n");
 }
 
+/* 0x180032d60 — bounded (clamped) Q15 bilinear affine resample of a byte
+ * image.  Same grid as cr_affine_sample_u8 but the source fetch is pinned to
+ * [0,w-1]x[0,h-1]; the unclamped fast path is taken when the transformed
+ * destination bounding box stays strictly inside the source. */
+static void test_affine_sample_u8_clamped(void)
+{
+    typedef void (WINAPI *fn_t)(void *, const void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x180032d60));
+    begin("cr_affine_sample_u8_clamped");
+    int bad = g_fail;
+    static uint8_t src[4096], ov[4096], oc[4096];
+    static cr_image sv, sc, dv, dc;
+    for (int t = 0; t < 20000; t++) {
+        int sw = 1 + (int)(rnd() % 24u);
+        int sh = 1 + (int)(rnd() % 24u);
+        int w  = (int)(rnd() % 16u);
+        int h  = (int)(rnd() % 16u);
+        int32_t m[6];
+        int mode = (int)(rnd() % 4);
+        if (mode == 0) {                 /* constant map -> often inside */
+            m[0] = 0; m[1] = 0; m[3] = 0; m[4] = 0;
+            m[2] = (int32_t)((rnd() % (unsigned)sw) * 0x8000u)
+                 + (int32_t)(rnd() & 0x7fffu);
+            m[5] = (int32_t)((rnd() % (unsigned)sh) * 0x8000u)
+                 + (int32_t)(rnd() & 0x7fffu);
+        } else {                         /* wide transform, both paths */
+            m[0] = (int32_t)((int)(rnd() % 0x10000u) - 0x8000);
+            m[1] = (int32_t)((int)(rnd() % 0x10000u) - 0x8000);
+            m[2] = (int32_t)((int)((rnd() % ((unsigned)sw + 4u)) * 0x8000u)
+                             - 2 * 0x8000);
+            m[3] = (int32_t)((int)(rnd() % 0x10000u) - 0x8000);
+            m[4] = (int32_t)((int)(rnd() % 0x10000u) - 0x8000);
+            m[5] = (int32_t)((int)((rnd() % ((unsigned)sh + 4u)) * 0x8000u)
+                             - 2 * 0x8000);
+        }
+        for (size_t i = 0; i < sizeof src; i++) src[i] = (uint8_t)rnd();
+        memset(ov, 0xAA, sizeof ov); memset(oc, 0xAA, sizeof oc);
+        cr_image_set(&sv, src, sw, sh);
+        cr_image_set(&sc, src, sw, sh);
+        cr_image_set(&dv, ov, w, h);
+        cr_image_set(&dc, oc, w, h);
+        v(&dv, &sv, m);
+        cr_affine_sample_u8_clamped(&dc, &sc, (const cr_affine_map *)m);
+        cmp_buf("affc", ov, oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_affine_sample_u8_clamped\n");
+}
+
 /* 0x18000ee70 — 4-phase FIR over interleaved bytes.  Input is a stream of
  * 4-byte groups; each output byte is a shifted dot product with the int16
  * coefficient vector. */
@@ -8157,6 +8205,7 @@ int main(int argc, char **argv)
     test_bitmap_morph();
     printf("\n== affine resample + 4-phase FIR ==\n");
     test_affine_sample_u8();
+    test_affine_sample_u8_clamped();
     test_polyphase_fir4();
     printf("\n== bilinear splat ==\n");
     test_splat_bilinear();
