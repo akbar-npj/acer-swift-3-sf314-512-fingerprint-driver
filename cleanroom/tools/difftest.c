@@ -3704,6 +3704,44 @@ static void test_affine_sample_u8_clamped(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_affine_sample_u8_clamped\n");
 }
 
+/* 0x18001c700 — rotate/translate-warp a src image into an N x N u8 buffer. */
+static void test_warp_rotate_u8(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, int, int, int, const int *);
+    fn_t v = (fn_t)fn_at(RVA(0x18001c700));
+    begin("cr_warp_rotate_u8");
+    int bad = g_fail;
+
+    enum { MAXB = 31 * 31 };
+    static uint8_t src[4096];
+    static uint8_t ov[MAXB + 64], oc[MAXB + 64];
+    static cr_image sv, sc;
+    static int cfg[2];
+
+    for (int t = 0; t < 20000; t++) {
+        int sw = 1 + (int)(rnd() % 24u);
+        int sh = 1 + (int)(rnd() % 24u);
+        int M = (int)(rnd() % 64u);
+        int N;
+        do { N = (int)(rnd() % 33u); } while (N == 1);   /* N==1 -> IDIV #DE */
+        int ox = (int)(rnd() % 300u);
+        int oy = (int)(rnd() % 300u);
+        int phase = (int)(rnd() % 512u);
+        cfg[0] = M; cfg[1] = N;
+
+        for (size_t i = 0; i < sizeof src; i++) src[i] = (uint8_t)rnd();
+        memset(ov, 0xAA, sizeof ov); memset(oc, 0xAA, sizeof oc);
+        cr_image_set(&sv, src, sw, sh);
+        cr_image_set(&sc, src, sw, sh);
+
+        int rv = v(ov, &sv, ox, oy, phase, cfg);
+        int rc = cr_warp_rotate_u8(oc, &sc, ox, oy, phase, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("rot", ov, oc, sizeof ov, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_warp_rotate_u8\n");
+}
+
 /* 0x18000ee70 — 4-phase FIR over interleaved bytes.  Input is a stream of
  * 4-byte groups; each output byte is a shifted dot product with the int16
  * coefficient vector. */
@@ -8361,6 +8399,7 @@ int main(int argc, char **argv)
     printf("\n== affine resample + 4-phase FIR ==\n");
     test_affine_sample_u8();
     test_affine_sample_u8_clamped();
+    test_warp_rotate_u8();
     test_polyphase_fir4();
     printf("\n== bilinear splat ==\n");
     test_splat_bilinear();

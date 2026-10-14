@@ -356,6 +356,9 @@ void     cr_affine_sample_u8(cr_image *dst, const cr_image *src,
                              const cr_affine_map *s);                     /* 0x18002ca30 */
 void     cr_affine_sample_u8_clamped(cr_image *dst, const cr_image *src,
                                      const cr_affine_map *s);             /* 0x180032d60 */
+int      cr_warp_rotate_u8(void *dst_buf, const cr_image *src,
+                           int ox, int oy, int phase,
+                           const int *cfg);                              /* 0x18001c700 */
 void     cr_polyphase_fir4(uint8_t *out, const uint8_t *in,
                            const int16_t *coef, int nbytes, int ncoef);   /* 0x18000ee70 */
 void     cr_warp_bilinear_q15(cr_image *dst, const cr_image *src,

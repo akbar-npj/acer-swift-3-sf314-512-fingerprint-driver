@@ -134,3 +134,56 @@ void cr_affine_sample_u8_nn(cr_image *dst, const cr_image *src,
         rowoff += ds;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001c700 — rotate/translate-warp `src` into an N x N u8 buffer.
+ *   int fn(void *dst_buf, const cr_image *src, int ox, int oy, int phase,
+ *          const int *cfg):
+ *     M = cfg[0]; N = cfg[1];
+ *     if (N > 31) return 0x69;                        // signed
+ *     img = { a=b=N, data=dst_buf, w=h=N, offx=offy=0 };
+ *     r = cr_image_set(&img, dst_buf, N, N); if (r) return r;
+ *     cr_sincos(&A, &B, (uint8_t)phase);
+ *     half  = (M - 1) / 2;                            // trunc toward zero
+ *     scale = (int32_t)((M - 1) << 15) / (N - 1);     // 32-bit shift, signed
+ *     map.x_col = (A * scale) >> 14;  map.y_row = map.x_col;
+ *     map.y_col = (scale * B) >> 14;  map.x_row = -map.y_col;
+ *     map.x_org = ((uint8_t)ox << 15) - half * (A - B) * 2;
+ *     map.y_org = ((uint8_t)oy << 15) - (A + B) * 2 * half;
+ *     cr_affine_sample_u8_clamped(&img, src, &map);
+ *     return 0;
+ *   The (N-1) divisor is a divide-by-zero when N == 1, exactly as in the
+ *   vendor (IDIV #DE); callers must not pass N == 1.
+ * ------------------------------------------------------------------------ */
+int cr_warp_rotate_u8(void *dst_buf, const cr_image *src,
+                      int ox, int oy, int phase, const int *cfg)
+{
+    int M = cfg[0];
+    int N = cfg[1];
+
+    if (N > 31)
+        return 0x69;
+
+    cr_image img;
+    uint32_t r = cr_image_set(&img, dst_buf, N, N);
+    if (r != 0)
+        return (int)r;
+
+    int32_t A, B;
+    cr_sincos(&A, &B, (uint32_t)(uint8_t)phase);
+
+    int     half  = (M - 1) / 2;
+    int32_t num   = (int32_t)((uint32_t)(M - 1) << 15);
+    int     scale = (int32_t)((int64_t)num / (int64_t)(int32_t)(N - 1));
+
+    cr_affine_map map;
+    map.x_col = (int32_t)((uint32_t)A * (uint32_t)scale) >> 14;
+    map.y_row = map.x_col;
+    map.y_col = (int32_t)((uint32_t)scale * (uint32_t)B) >> 14;
+    map.x_row = -map.y_col;
+    map.x_org = ((int)((uint8_t)ox << 15)) - half * ((A - B) * 2);
+    map.y_org = ((int)((uint8_t)oy << 15)) - ((A + B) * 2) * half;
+
+    cr_affine_sample_u8_clamped(&img, src, &map);
+    return 0;
+}
