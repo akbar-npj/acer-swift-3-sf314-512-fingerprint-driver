@@ -1620,6 +1620,62 @@ static void test_resize_pair_18000(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_resize_pair_18000\n");
 }
 
+/* ---- batch 69: masked histogram percentile range (0x18001a7c0) --------- */
+static void test_hist_percentiles(void)
+{
+    typedef int (WINAPI *v_hist)(int *, int *, int *, const void *,
+                                 const void *, int, float, float, int);
+    v_hist v = (v_hist)fn_at(RVA(0x18001a7c0));
+    begin("cr_masked_hist_percentiles");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 40, NP = MAXW * MAXH };
+    static int16_t pix[NP];
+    static uint8_t mbuf[NP];
+    static cr_image img, maskimg;
+
+    for (int t = 0; t < 5000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int total = w * h;
+        int mode = (int)(rnd() % 8);
+
+        for (int i = 0; i < total; i++)
+            pix[i] = (int16_t)((int)(rnd() % 0x10000) - 0x8000);
+        for (int i = 0; i < total; i++)
+            mbuf[i] = (uint8_t)rnd();
+
+        if (mode == 1) {                    /* force x == y */
+            int16_t c = (int16_t)((int)(rnd() % 0x10000) - 0x8000);
+            for (int i = 0; i < total; i++) pix[i] = c;
+        }
+
+        int use_mask = (int)(rnd() % 3) != 0;
+        int and_mask = (int)(rnd() % 256);
+        if (mode == 2) and_mask = 0;        /* count == 0 when masked */
+
+        float f_lo = (float)(rnd() % 201) / 200.0f;   /* 0.0 .. 1.0 */
+        float f_hi = (float)(rnd() % 201) / 200.0f;
+        int nbin = 2 + (int)(rnd() % 512);            /* nm1 >= 1, no /0 */
+
+        cr_image_set(&img, pix, w, h);
+        cr_image_set(&maskimg, mbuf, w, h);
+        const cr_image *mp = use_mask ? &maskimg : NULL;
+
+        int lo_v = 0x11111111, hi_v = 0x22222222, ct_v = 0x33333333;
+        int lo_c = 0x11111111, hi_c = 0x22222222, ct_c = 0x33333333;
+
+        int rv = v(&lo_v, &hi_v, &ct_v, &img, mp, and_mask, f_lo, f_hi, nbin);
+        int rc = cr_masked_hist_percentiles(&lo_c, &hi_c, &ct_c, &img, mp,
+                                            and_mask, f_lo, f_hi, nbin);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (lo_v != lo_c) mismatch("lo", (u32)t, (u32)lo_v, (u32)lo_c);
+        if (hi_v != hi_c) mismatch("hi", (u32)t, (u32)hi_v, (u32)hi_c);
+        if (ct_v != ct_c) mismatch("ct", (u32)t, (u32)ct_v, (u32)ct_c);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_hist_percentiles\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7299,6 +7355,7 @@ int main(int argc, char **argv)
     test_fft_real_n();
     test_obj_init_12fe0();
     test_resize_pair_18000();
+    test_hist_percentiles();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

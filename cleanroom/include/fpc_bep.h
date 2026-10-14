@@ -204,6 +204,10 @@ void     cr_masked_minmax_s16(int *out_min, int *out_max, int *out_count,
 void     cr_masked_minmax_f32(float *out_min, float *out_max, int *out_count,
                               const cr_image *img, const cr_image *mask,
                               uint8_t and_mask);                      /* 0x180017840 */
+int      cr_masked_hist_percentiles(int *out_lo, int *out_hi, int *out_count,
+                                    const cr_image *img, const cr_image *mask,
+                                    int and_mask, float frac_lo, float frac_hi,
+                                    int nbin);                        /* 0x18001a7c0 */
 void     cr_i16_to_f32_scaled(cr_image *dst, const cr_image *src,
                               int shift);                             /* 0x1800334c0 */
 

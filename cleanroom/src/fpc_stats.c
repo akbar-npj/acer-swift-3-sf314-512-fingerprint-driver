@@ -269,6 +269,140 @@ void cr_masked_minmax_f32(float *out_min, float *out_max, int *out_count,
     *out_count = count;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x18001a7c0 — masked intensity range from histogram percentiles.
+ *   int fn(int *out_lo, int *out_hi, int *out_count, const cr_image *img,
+ *          const cr_image *mask, int and_mask, float frac_lo, float frac_hi,
+ *          int nbin)
+ *
+ * cr_masked_minmax_s16 first fills (x, y, count) over the pixels selected by
+ * (mask[i] & and_mask) != 0 (all pixels when mask == NULL); both outputs are
+ * seeded with x and y.  If x == y or count <= 0 the function returns 0.
+ *
+ * An nbin-entry histogram over [x, y] is then accumulated from the selected
+ * int16 samples:
+ *     bin   = clamp(((v - x) * scale + 0x8000) >> 16, 0, nbin - 1)
+ *     scale = ((nbin - 1) << 16) / (y - x)      (0x400 when y == x)
+ * and the two endpoints are the bin-quantised values
+ *     out_lo = x + k_lo*(y - x)/(nbin - 1)
+ *     out_hi = x + k_hi*(y - x)/(nbin - 1)
+ * where k_lo is the first bin whose forward cumulative count exceeds
+ * (int)(frac_lo * count) and k_hi is the last bin whose backward cumulative
+ * count exceeds (int)((1 - frac_hi) * count).  Every degenerate path (nbin <= 0,
+ * a percentile that never crosses, nbin - 1 < 0) keeps the vendor's leftover
+ * operands (x for k_lo, y for k_hi) exactly as written, including the 32-bit
+ * wrapping multiply and arithmetic shift of the bin mapping.
+ * ------------------------------------------------------------------------ */
+int cr_masked_hist_percentiles(int *out_lo, int *out_hi, int *out_count,
+                               const cr_image *img, const cr_image *mask,
+                               int and_mask, float frac_lo, float frac_hi,
+                               int nbin)
+{
+    int x, y;
+    cr_masked_minmax_s16(&x, &y, out_count, img, mask, (uint8_t)and_mask);
+    int count = *out_count;
+
+    *out_lo = x;
+    *out_hi = y;
+    if (x == y)
+        return 0;
+    if (count <= 0)
+        return 0;
+
+    int *hist = NULL;
+    int r = cr_malloc_aligned16((void **)&hist, (size_t)((intptr_t)nbin * 4));
+    if (r != 0)
+        return r;
+
+    int nm1 = nbin - 1;
+
+    if (nbin > 0)
+        for (int i = 0; i < nbin; i++)
+            hist[i] = 0;
+
+    int scale = 0x400;
+    if (y != x)
+        scale = (int)((int64_t)(int32_t)((uint32_t)nm1 << 16) /
+                      (int64_t)(y - x));
+
+    int total = img->h * img->w;
+    if (total > 0) {
+        const int16_t *src = (const int16_t *)img->data;
+        const uint8_t *m = mask ? (const uint8_t *)mask->data : NULL;
+        uint8_t am = (uint8_t)and_mask;
+        for (int p = 0; p < total; p++) {
+            if (m && !(m[p] & am))
+                continue;
+            int32_t v = (int32_t)((uint32_t)((int32_t)src[p] - x) *
+                                  (uint32_t)scale);
+            v = (int32_t)((uint32_t)v + 0x8000u);
+            v >>= 16;
+            if (v < 0) v = 0;
+            if (v > nm1) v = nm1;
+            hist[v]++;
+        }
+    }
+
+    int dydx = y - x;
+    int lo;
+
+    if (nbin <= 0) {
+        lo = x + (int)((int64_t)(int32_t)((uint32_t)x * (uint32_t)dydx) / nm1);
+    } else {
+        int target1 = (int)(frac_lo * (float)count);
+        if (target1 < hist[0]) {
+            lo = x;
+        } else {
+            int cum = hist[0];
+            int k = 1;
+            for (;;) {
+                if (k == nbin) {
+                    lo = x + (int)((int64_t)(int32_t)((uint32_t)x *
+                                                     (uint32_t)dydx) / nm1);
+                    break;
+                }
+                int edx = k;
+                cum += hist[k];
+                k++;
+                if (target1 < cum) {
+                    lo = x + (int)((int64_t)(int32_t)((uint32_t)edx *
+                                                     (uint32_t)dydx) / nm1);
+                    break;
+                }
+            }
+        }
+    }
+
+    int edi = y;
+    if (nm1 >= 0) {
+        int target2 = (int)((1.0f - frac_hi) * (float)count);
+        int cum = hist[nbin - 1];
+        if (target2 < cum) {
+            edi = nm1;
+        } else {
+            int edx = nm1;
+            int idx = nbin - 2;
+            for (;;) {
+                edx -= 1;
+                if (edx == -1)
+                    break;
+                cum += hist[idx];
+                idx -= 1;
+                if (target2 < cum) {
+                    edi = edx;
+                    break;
+                }
+            }
+        }
+    }
+
+    *out_lo = lo;
+    *out_hi = x + (int)((int64_t)(int32_t)((uint32_t)edi *
+                                           (uint32_t)dydx) / nm1);
+    cr_sized_free((void **)&hist);
+    return 0;
+}
+
 /* 0x180037330 — sum + count of the masked pixels in a centred square box.
  *
  * `idx` is a linear pixel index into an image `W x H` (row-major, stride W):
