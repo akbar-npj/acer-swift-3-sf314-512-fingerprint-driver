@@ -3018,6 +3018,38 @@ static void test_grad_score_from_desc(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_grad_score_from_desc\n");
 }
 
+/* 0x18000f6f0 — masked mean-squared difference vs 0.5-sigma blur. */
+static void test_masked_sharpness(void)
+{
+    typedef int (WINAPI *v_t)(int *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x18000f6f0));
+    begin("cr_masked_sharpness");
+    int bad = g_fail;
+
+    enum { MAXW = 32, MAXH = 32, NP = MAXW * MAXH };
+    static u8 sbuf[NP + 64], mbuf[NP + 64];
+    static cr_image sv, sc;
+    static void *pmv, *pmc;
+
+    for (int t = 0; t < 20000; t++) {
+        int w = 7 + (int)(rnd() % (MAXW - 7));     /* FIR ctx needs >= 7 */
+        int h = 7 + (int)(rnd() % (MAXH - 7));
+        for (int i = 0; i < NP; i++) sbuf[i] = (u8)rnd();
+        for (int i = 0; i < NP; i++) mbuf[i] = (rnd() & 1) ? 0xff : (u8)rnd();
+
+        (void)cr_image_set(&sv, sbuf, w, h);
+        (void)cr_image_set(&sc, sbuf, w, h);
+        pmv = mbuf; pmc = mbuf;
+
+        int ov = (int)0x12345678, oc = (int)0x12345678;
+        int rv = v(&ov, &sv, &pmv);
+        int rc = cr_masked_sharpness(&oc, &sc, &pmc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ov != oc) mismatch("out", (u32)t, (u32)ov, (u32)oc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_sharpness\n");
+}
+
 /* 0x180023900 — masked bitmap: box-sum, threshold, FIR, bit-2 clear. */
 static void test_mask_boxmax_fir_clear(void)
 {
@@ -8662,6 +8694,7 @@ int main(int argc, char **argv)
     test_metadata();
     test_image_fill_desc();
     test_grad_score_from_desc();
+    test_masked_sharpness();
     test_mask_boxmax_fir_clear();
     test_bitmap_build_masked();
     test_bitmap_unpack_boxmax_fir();

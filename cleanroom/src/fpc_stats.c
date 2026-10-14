@@ -1293,3 +1293,58 @@ int cr_grad_score_from_desc(uint8_t *out, void **arr, const cr_image *mask,
     cr_cleanup_ptr8_clear(&img);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18000f6f0 — masked mean-squared difference between `src` and its
+ * 0.5-sigma 7-tap blur, over pixels where mask[i] == 0xff.
+ *   int fn(int *out, const cr_image *src, void *const *mask):
+ *     cr_image local;
+ *     r = cr_image_alloc_u8((int*)&local, src->w, src->h);  if (r) return r;
+ *     r = cr_fir7_image_u8(&local, src, 0.5f);
+ *     if (r != 0) { cr_cleanup_ptr8_a(&local); return r; }
+ *     n = src->h * src->w;  acc = 0;
+ *     if (n > 0) {
+ *         float sumsq = 0.0f, cnt = 1.0f;
+ *         for i in n:
+ *             if ((int8_t)(*mask)[i] == -1) {
+ *                 int d = (int)(uint32_t)src[i] - (int)(uint32_t)blur[i];
+ *                 cnt += 1.0f;  sumsq += (float)(d * d);
+ *             }
+ *         acc = (int)((sumsq * 1024.0f) / cnt);   (all single precision)
+ *     }
+ *     *out = acc;  cr_cleanup_ptr8_a(&local);  return 0;
+ * ------------------------------------------------------------------------ */
+int cr_masked_sharpness(int *out, const cr_image *src, void *const *mask)
+{
+    cr_image local;
+    int r = cr_image_alloc_u8((int *)&local, src->w, src->h);
+    if (r != 0)
+        return r;
+
+    r = cr_fir7_image_u8(&local, src, 0.5f);
+    if (r != 0) {
+        cr_cleanup_ptr8_a(&local);
+        return r;
+    }
+
+    int n = src->h * src->w;
+    int acc = 0;
+    if (n > 0) {
+        const uint8_t *s = (const uint8_t *)src->data;
+        const uint8_t *b = (const uint8_t *)local.data;
+        const uint8_t *m = (const uint8_t *)*mask;
+        float sumsq = 0.0f;
+        float cnt = 1.0f;
+        for (int i = 0; i < n; i++) {
+            if ((int8_t)m[i] == -1) {
+                int d = (int)(uint32_t)s[i] - (int)(uint32_t)b[i];
+                cnt += 1.0f;
+                sumsq += (float)(d * d);
+            }
+        }
+        acc = (int)((sumsq * 1024.0f) / cnt);
+    }
+    *out = acc;
+    cr_cleanup_ptr8_a(&local);
+    return 0;
+}

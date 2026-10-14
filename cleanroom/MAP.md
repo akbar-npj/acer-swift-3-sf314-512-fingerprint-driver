@@ -149,6 +149,7 @@ The image descriptor layout (established from these functions):
 | `0x18001fb80` | `fpc_bio_bep_sw23_442776bb33` | `cr_image_border_extend` | byte-per-pixel **edge replication** (the u8 twin of `cr_image_fill_border`): same four-region frame, but each region copies the window's edge row/column outward instead of writing a constant. Args `rcx=img, rdx=top, r8=bottom, r9=left, [rsp+0x20]=right` (5 args). `a` = row stride in **bytes**; row step `a`. |
 | `0x180016df0` | `fpc_bio_bep_sw23_214aef3596` | `cr_image_border_extend_s16` | the **int16 twin** of `cr_image_border_extend`: identical four-region edge-replication frame logic, but pixels are `int16_t` and `a` is the row stride in **elements**. |
 | `0x1800356e0` | `fpc_bio_bep_sw23_a45214d052.part.7` | `cr_saturation_score` | `n = (int16)h * (int16)w`; if `n<=0` → `*out = 1000`. Else count pixels where `(uint8)(b-1) > 253` (i.e. `b==0 || b==255`), then `*out = 1000 + (count * -1000) / n` (32-bit `imul`+`idiv`, truncating). Struct: `{int16 w@0, int16 h@2, ..., uint8 *data@0x10}`. |
+| `0x18000f6f0` | `fpc_bio_bep_sw23_06ea123a28` | `cr_masked_sharpness` | `int fn(int *out, const cr_image *src, void *const *mask)`: allocate a `src->w × src->h` u8 image, `cr_fir7_image_u8(&local, src, 0.5f)`; then over `n=w*h` accumulate `sumsq += (float)(d*d)` and `cnt += 1.0f` (both starting at 0/1) where `mask[i]==0xff`, `d=(int)(uint32_t)src[i]-(int)(uint32_t)blur[i]`; `*out = (int)((sumsq*1024.0f)/cnt)` — all **single precision**. |
 
 ### Batch 16 — allocator wrappers
 
