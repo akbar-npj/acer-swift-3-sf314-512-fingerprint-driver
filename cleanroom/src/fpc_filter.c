@@ -1247,6 +1247,56 @@ int cr_gauss_deriv_3img(void *a1, void *a2, void *a3, float sigma)
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x18002f770 — three-output Gaussian-derivative triple from one source.
+ *   int fn(void *o1, void *o2, void *o3, void *src, float sigma)
+ *
+ * Builds the 15-tap Gaussian derivative windows (g, dg, d2g) from sigma, then
+ * fills the three output int16 images from the source `src`:
+ *     o1 = cols(g)   o rows(d2g) o src
+ *     o2 = cols(dg)  o rows(dg)  o src
+ *     o3 = cols(d2g) o rows(g)   o src
+ * Each stage validates the source width/height (must be in [16,256], else 1)
+ * after the windows (return its status) and before the column pass (else 0x69).
+ * The vendor leaves r8 holding the window pointer across the row pass (the
+ * reflect helpers do not write r8), so the o3 row pass uses g and the o2 column
+ * pass uses dg. */
+int cr_gauss_deriv_triple(void *a1, void *a2, void *a3, void *a4, float sigma)
+{
+    uint8_t *p1 = (uint8_t *)a1, *p2 = (uint8_t *)a2,
+            *p3 = (uint8_t *)a3, *p4 = (uint8_t *)a4;
+    int16_t g[16], dg[16], d2g[16];
+    int r;
+
+    cr_gaussian_deriv_windows_q15(g, dg, d2g, sigma, 15);
+
+    if ((unsigned)(*(int *)(p4 + 0x10) - 0x10) > 0xf0u) return 1;
+
+    int16_t *src = *(int16_t **)(p4 + 8);
+    int     w = *(int *)(p4 + 0x10);
+    int     h = *(int *)(p4 + 0x14);
+
+    r = cr_fir_reflect_rows(*(int16_t **)(p1 + 8), src, d2g, 15, w, h);
+    if (r) return r;
+    if ((unsigned)(h - 0x10) > 0xf0u) return 0x69;
+    r = cr_fir_reflect(*(int16_t **)(p1 + 8), *(int16_t **)(p1 + 8), g, 15, w, h);
+    if (r) return r;
+
+    if ((unsigned)(w - 0x10) > 0xf0u) return 1;
+    r = cr_fir_reflect_rows(*(int16_t **)(p3 + 8), src, g, 15, w, h);
+    if (r) return r;
+    if ((unsigned)(h - 0x10) > 0xf0u) return 0x69;
+    r = cr_fir_reflect(*(int16_t **)(p3 + 8), *(int16_t **)(p3 + 8), d2g, 15, w, h);
+    if (r) return r;
+
+    if ((unsigned)(w - 0x10) > 0xf0u) return 1;
+    r = cr_fir_reflect_rows(*(int16_t **)(p2 + 8), src, dg, 15, w, h);
+    if (r) return r;
+    if ((unsigned)(h - 0x10) > 0xf0u) return 0x69;
+    r = cr_fir_reflect(*(int16_t **)(p2 + 8), *(int16_t **)(p2 + 8), dg, 15, w, h);
+    return r;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x1800256e0 — n*n box median filter over an 8-bit image, borders clamped.
  *   uint32_t fn(cr_image *out, cr_image *src, uint16_t n):
  *     scratch = cr_malloc_aligned16(n*n);

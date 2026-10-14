@@ -1306,6 +1306,49 @@ static void test_cordic_atan_q15(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_cordic_atan_q15\n");
 }
 
+/* ---- batch 68: three-output gaussian-derivative triple ------------------- */
+static void test_gauss_deriv_triple(void)
+{
+    typedef int (WINAPI *v_i_ppppf)(void *, void *, void *, void *, float);
+    v_i_ppppf v = (v_i_ppppf)fn_at(RVA(0x18002f770));
+    begin("cr_gauss_deriv_triple");
+    int bad = g_fail;
+
+    static int16_t src[4096], o1v[4096], o2v[4096], o3v[4096],
+                   o1c[4096], o2c[4096], o3c[4096];
+    static u8 d4[0x20], d1v[0x20], d2v[0x20], d3v[0x20],
+              d1c[0x20], d2c[0x20], d3c[0x20];
+
+    for (int t = 0; t < 2000; t++) {
+        int   w = 16 + (int)(rnd() % 33u);       /* 16..48 */
+        int   h = 16 + (int)(rnd() % 33u);
+        float sigma = (float)(rnd() % 220u) / 100.0f;
+
+        for (int i = 0; i < w * h; i++) src[i] = (int16_t)rnd();
+        for (int i = 0; i < 4096; i++)
+            o1v[i] = o1c[i] = o2v[i] = o2c[i] = o3v[i] = o3c[i] = 0x5A5A;
+
+        mk_image(d4,  src, w, w, h, 0, 0);
+        mk_image(d1v, o1v, w, w, h, 0, 0);
+        mk_image(d2v, o2v, w, w, h, 0, 0);
+        mk_image(d3v, o3v, w, w, h, 0, 0);
+        mk_image(d1c, o1c, w, w, h, 0, 0);
+        mk_image(d2c, o2c, w, w, h, 0, 0);
+        mk_image(d3c, o3c, w, w, h, 0, 0);
+
+        int rv = v(d1v, d2v, d3v, d4, sigma);
+        int rc = cr_gauss_deriv_triple(d1c, d2c, d3c, d4, sigma);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("o1", (const unsigned char *)o1v, (const unsigned char *)o1c,
+                (u32)(w * h * 2), (u32)t);
+        cmp_buf("o2", (const unsigned char *)o2v, (const unsigned char *)o2c,
+                (u32)(w * h * 2), (u32)t);
+        cmp_buf("o3", (const unsigned char *)o3v, (const unsigned char *)o3c,
+                (u32)(w * h * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_triple\n");
+}
+
 /* ---- batch 68: global bio-context getter --------------------------------- */
 static void test_bio_init(void)
 {
@@ -6961,6 +7004,7 @@ int main(int argc, char **argv)
     test_gauss_deriv_3img();
     test_warp_bilinear_q15();
     test_cordic_atan_q15();
+    test_gauss_deriv_triple();
     test_bio_init();
     test_bio_get_ctx();
     test_ctx_find_node();
