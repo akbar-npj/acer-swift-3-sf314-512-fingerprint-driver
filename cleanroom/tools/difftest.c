@@ -1306,6 +1306,27 @@ static void test_cordic_atan_q15(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_cordic_atan_q15\n");
 }
 
+/* ---- batch 68: global bio-context getter --------------------------------- */
+static void test_bio_init(void)
+{
+    typedef void *(WINAPI *v_p_v)(void);
+    v_p_v v = (v_p_v)fn_at(RVA(0x180048d40));
+    begin("cr_bio_init");
+    int bad = g_fail;
+
+    void *rv = v();
+    void *rc = cr_bio_init();
+    if (rv != rc)
+        mismatch("ptr", 0, (u32)(uintptr_t)rv, (u32)(uintptr_t)rc);
+    /* and it must be exactly the mapped global plus 8 */
+    void *gv = *(void **)((char *)g_base + 0x16f4c8);
+    if (rc != (char *)gv + 8)
+        mismatch("plus8", 0, (u32)(uintptr_t)((char *)gv + 8),
+                 (u32)(uintptr_t)rc);
+
+    if (g_fail == bad) end(); else printf("  FAIL cr_bio_init\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6860,6 +6881,7 @@ int main(int argc, char **argv)
     test_gauss_deriv_3img();
     test_warp_bilinear_q15();
     test_cordic_atan_q15();
+    test_bio_init();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

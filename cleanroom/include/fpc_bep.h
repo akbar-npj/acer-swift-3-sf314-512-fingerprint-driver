@@ -98,6 +98,7 @@ uint32_t cr_fft_inv(float *out, const float *in, uint32_t n); /* 0x1800244a0 */
 
 /* ---- data/blob accessors ---------------------------------------------- */
 uint32_t cr_get_calib_blob(uint64_t *p1, uint32_t *p2, uint8_t sel); /* 0x180030340 */
+void    *cr_bio_init(void);                                         /* 0x180048d40 */
 uint32_t cr_image_data_dump(const void *defs, uint32_t idx, void *out); /* 0x18004a680 */
 uint32_t cr_pixel_buf_setup(const void *defs, uint32_t idx, int rows, int cols); /* 0x18003d840 */
 

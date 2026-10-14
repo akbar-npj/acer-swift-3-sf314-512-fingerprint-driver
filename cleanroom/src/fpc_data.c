@@ -13,6 +13,15 @@
 
 uintptr_t g_cr_image_base = 0;
 
+/* 0x180048d40 — global bio-context getter.
+ *   void *fn(void)  =  (*(void **)[0x18016f4c8]) + 8
+ * The global lives in the mapped image, so it is read through g_cr_image_base
+ * exactly as the vendor does. */
+void *cr_bio_init(void)
+{
+    return (char *)(*(void **)(g_cr_image_base + 0x16f4c8u)) + 8;
+}
+
 /* 0x180030340 — calibration/data blob lookup by selector.
  * Transcribed from disassembly: store 0 into both outputs, then switch(sel):
  *   0 -> ptr=0,    len=0,     ret 0
