@@ -727,4 +727,8 @@ int      cr_gauss_deriv_triple(void *o1, void *o2, void *o3, void *src,
 uint32_t cr_box_median_u8(cr_image *out, const cr_image *src,
                           uint16_t n);                               /* 0x1800256e0 */
 
+/* ---- batch 61: validated 3-output Gaussian-derivative triple ------------- */
+int      cr_gauss_deriv_triple_guarded(void *o1, void *o2, void *o3,
+                                       const void *src, float sigma); /* 0x180030070 */
+
 #endif /* FPC_BEP_H */

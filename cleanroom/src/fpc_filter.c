@@ -1304,6 +1304,66 @@ int cr_gauss_deriv_triple(void *a1, void *a2, void *a3, void *a4, float sigma)
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180030070 — validated 3-output Gaussian-derivative triple.
+ *   int fn(cr_image *o1, cr_image *o2, cr_image *o3, const cr_image *src,
+ *          float sigma)
+ *
+ * All four descriptors must be canonical (the tag word at +0 equals the w/h
+ * word at +0x10, and the origin word at +0x18 is zero), else 0x69.  A sigma
+ * below 0.72 also returns 0x69.
+ *
+ * If src->w is NOT 8-aligned it delegates to cr_gauss_deriv_triple (which
+ * uses the unguarded reflect helpers).  When src->w IS 8-aligned it runs the
+ * six guarded reflect passes itself, mirroring the triple's pass order:
+ *     o1 = cols(g)   o rows(d2g) o src
+ *     o3 = cols(d2g) o rows(g)   o src   (row call reuses r8 left holding g)
+ *     o2 = cols(dg)  o rows(dg)  o src   (col call reuses r8 left holding dg)
+ * Each pass short-circuits on its (nonzero) status, which is returned.
+ * ------------------------------------------------------------------------ */
+int cr_gauss_deriv_triple_guarded(void *a1, void *a2, void *a3,
+                                  const void *a4, float sigma)
+{
+    uint8_t *p1 = (uint8_t *)a1, *p2 = (uint8_t *)a2,
+            *p3 = (uint8_t *)a3, *p4 = (uint8_t *)a4;
+
+    if (*(uint64_t *)(p1 + 0x00) != *(uint64_t *)(p1 + 0x10)) return 0x69;
+    if (*(uint64_t *)(p1 + 0x18) != 0)                         return 0x69;
+    if (*(uint64_t *)(p2 + 0x00) != *(uint64_t *)(p2 + 0x10)) return 0x69;
+    if (*(uint64_t *)(p2 + 0x18) != 0)                         return 0x69;
+    if (*(uint64_t *)(p3 + 0x00) != *(uint64_t *)(p3 + 0x10)) return 0x69;
+    if (*(uint64_t *)(p3 + 0x18) != 0)                         return 0x69;
+    if (*(uint64_t *)(p4 + 0x00) != *(uint64_t *)(p4 + 0x10)) return 0x69;
+    if (*(uint64_t *)(p4 + 0x18) != 0)                         return 0x69;
+
+    if ((*(uint8_t *)(p4 + 0x10) & 7) != 0) {
+        if (0.72f > sigma)
+            return 0x69;
+        return cr_gauss_deriv_triple(a1, a2, a3, (void *)a4, sigma);
+    }
+    if (0.72f > sigma)
+        return 0x69;
+
+    int16_t g[16], dg[16], d2g[16];
+    cr_gaussian_deriv_windows_q15(g, dg, d2g, sigma, 15);
+
+    int w = *(int *)(p4 + 0x10);
+    int h = *(int *)(p4 + 0x14);
+    int16_t *p1d = *(int16_t **)(p1 + 8);
+    int16_t *p2d = *(int16_t **)(p2 + 8);
+    int16_t *p3d = *(int16_t **)(p3 + 8);
+    const int16_t *p4d = *(const int16_t **)(p4 + 8);
+    int r;
+
+    r = cr_fir_reflect_rows_guarded(p1d, p4d, d2g, 15, w, h); if (r) return r;
+    r = cr_fir_reflect_guarded(p1d, p1d, g, 15, w, h);       if (r) return r;
+    r = cr_fir_reflect_rows_guarded(p3d, p4d, g, 15, w, h);   if (r) return r;
+    r = cr_fir_reflect_guarded(p3d, p3d, d2g, 15, w, h);     if (r) return r;
+    r = cr_fir_reflect_rows_guarded(p2d, p4d, dg, 15, w, h);  if (r) return r;
+    r = cr_fir_reflect_guarded(p2d, p2d, dg, 15, w, h);      if (r) return r;
+    return r;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x1800256e0 — n*n box median filter over an 8-bit image, borders clamped.
  *   uint32_t fn(cr_image *out, cr_image *src, uint16_t n):
  *     scratch = cr_malloc_aligned16(n*n);

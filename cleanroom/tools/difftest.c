@@ -1349,6 +1349,67 @@ static void test_gauss_deriv_triple(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_triple\n");
 }
 
+/* ---- batch 61: validated 3-output Gaussian-derivative triple ------------- */
+static void test_gauss_deriv_triple_guarded(void)
+{
+    typedef int (WINAPI *v_i_ppppf)(void *, void *, void *, void *, float);
+    v_i_ppppf v = (v_i_ppppf)fn_at(RVA(0x180030070));
+    begin("cr_gauss_deriv_triple_guarded");
+    int bad = g_fail;
+
+    static int16_t src[4096], o1v[4096], o2v[4096], o3v[4096],
+                   o1c[4096], o2c[4096], o3c[4096];
+    static u8 d4[0x20], d1v[0x20], d2v[0x20], d3v[0x20],
+              d1c[0x20], d2c[0x20], d3c[0x20];
+
+    for (int t = 0; t < 3000; t++) {
+        /* even t: 8-aligned width (manual path); odd t: misaligned (delegate) */
+        int   w = 16 + (int)(rnd() % 5u) * 8;                 /* 16..48 */
+        if (t & 1)
+            w += (int)(rnd() % 7u) + 1;                       /* 17..55 */
+        int   h = 16 + (int)(rnd() % 33u);                    /* 16..48 */
+        float sigma = (float)(rnd() % 220u) / 100.0f;         /* 0..2.19 */
+
+        for (int i = 0; i < w * h; i++) src[i] = (int16_t)rnd();
+        for (int i = 0; i < 4096; i++)
+            o1v[i] = o1c[i] = o2v[i] = o2c[i] = o3v[i] = o3c[i] = 0x5A5A;
+
+        mk_img2(d4,  src, w, h);
+        mk_img2(d1v, o1v, w, h); mk_img2(d2v, o2v, w, h); mk_img2(d3v, o3v, w, h);
+        mk_img2(d1c, o1c, w, h); mk_img2(d2c, o2c, w, h); mk_img2(d3c, o3c, w, h);
+
+        int rv = v(d1v, d2v, d3v, d4, sigma);
+        int rc = cr_gauss_deriv_triple_guarded(d1c, d2c, d3c, d4, sigma);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("o1", (const unsigned char *)o1v, (const unsigned char *)o1c,
+                (u32)(w * h * 2), (u32)t);
+        cmp_buf("o2", (const unsigned char *)o2v, (const unsigned char *)o2c,
+                (u32)(w * h * 2), (u32)t);
+        cmp_buf("o3", (const unsigned char *)o3v, (const unsigned char *)o3c,
+                (u32)(w * h * 2), (u32)t);
+    }
+
+    /* each corrupted descriptor must yield the 0x69 guard in both impls */
+    for (int c = 0; c < 4; c++) {
+        static int16_t dd[1024];
+        for (int i = 0; i < 1024; i++) dd[i] = (int16_t)rnd();
+        u8 a[0x20], b[0x20], e[0x20], d[0x20];
+        u8 a2[0x20], b2[0x20], e2[0x20], d2[0x20];
+        mk_img2(a, dd, 24, 24); mk_img2(b, dd, 24, 24);
+        mk_img2(e, dd, 24, 24); mk_img2(d, dd, 24, 24);
+        memcpy(a2, a, 0x20); memcpy(b2, b, 0x20);
+        memcpy(e2, e, 0x20); memcpy(d2, d, 0x20);
+        if (c == 0) { *(int *)(a + 0x10) = 25; *(int *)(a2 + 0x10) = 25; }
+        if (c == 1) { *(int *)(b + 0x18) = 3;  *(int *)(b2 + 0x18) = 3;  }
+        if (c == 2) { *(int *)(e + 0x00) = 0;  *(int *)(e2 + 0x00) = 0;  }
+        if (c == 3) { *(int *)(d + 0x00) = 0;  *(int *)(d2 + 0x00) = 0;  }
+        int rv = v(a, b, e, d, 1.5f);
+        int rc = cr_gauss_deriv_triple_guarded(a2, b2, e2, d2, 1.5f);
+        if (rv != rc) mismatch("ret-bad", (u32)c, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_triple_guarded\n");
+}
+
 /* ---- batch 68: global bio-context getter --------------------------------- */
 static void test_bio_init(void)
 {
@@ -7737,6 +7798,7 @@ int main(int argc, char **argv)
     test_warp_bilinear_q15();
     test_cordic_atan_q15();
     test_gauss_deriv_triple();
+    test_gauss_deriv_triple_guarded();
     test_bio_init();
     test_bio_get_ctx();
     test_ctx_find_node();
