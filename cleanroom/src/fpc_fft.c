@@ -106,3 +106,61 @@ uint32_t cr_fft_inv(float *out, const float *in, uint32_t n) {
     cr_fft_stages(out, n, -1);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180018330 — n-point real transform from an (n/2)-point complex FFT.
+ *   int fn(float *a1, float *a2, int n)
+ *
+ * n must be a power of two in [16,512] (else 0x69).  First runs
+ *   cr_fft_fwd(a2, a1, n/2)          (a1 -> a2, half-size complex FFT)
+ * then the real-recombination butterfly for i = 0..n/4-2 with the shared
+ * unit-circle twiddles tw1 = cos(2pi(i+1)/n), tw2 = sin(2pi(i+1)/n) read from
+ * cr_fft_twiddle at float offset (4096/n)*(i+1):
+ *   A=a2[2+2i] C=a2[3+2i] B=a2[n-1-2i] D=a2[n-2-2i]
+ *   ad=(A+D)/2  da=(D-A)/2  cb=(C+B)/2  cbm=(C-B)/2
+ *   p = tw1*da + cb*tw2
+ *   q = tw1*cb - tw2*da
+ *   a1[2+2i]     = ad + q
+ *   a1[n-2-2i]   = ad - q
+ *   a1[3+2i]     = cbm + p
+ *   a1[n-1-2i]   = p - cbm
+ * and the four leftover bins:
+ *   a1[0] = a2[0]+a2[1]   a1[1] = a2[0]-a2[1]
+ *   a1[n/2] = a2[n/2]     a1[n/2+1] = a2[n/2+1]
+ * Returns 0, or the FFT status on failure.
+ * ------------------------------------------------------------------------ */
+int cr_fft_real_n(float *a1, float *a2, int n)
+{
+    if ((unsigned)(n - 0x10) > 0x1f0u)
+        return 0x69;
+    if (((uint32_t)1u << (cr_hi_bit_index((uint32_t)n) & 0x1f)) != (uint32_t)n)
+        return 0x69;
+
+    uint32_t r = cr_fft_fwd(a2, a1, (uint32_t)(n >> 1));
+    if (r != 0)
+        return (int)r;
+
+    int S = 4096 / n;                        /* float stride into the table */
+    for (int i = 0; i < (n >> 2) - 1; i++) {
+        const float *tw = cr_fft_twiddle + (size_t)(i + 1) * (size_t)S;
+        float tw1 = tw[0], tw2 = tw[1];
+        float A = a2[2 + 2 * i], C = a2[3 + 2 * i];
+        float B = a2[n - 1 - 2 * i], D = a2[n - 2 - 2 * i];
+        float ad  = (A + D) * 0.5f;
+        float da  = (D - A) * 0.5f;
+        float cb  = (C + B) * 0.5f;
+        float cbm = (C - B) * 0.5f;
+        float p = tw1 * da + cb * tw2;
+        float q = tw1 * cb - tw2 * da;
+        a1[2 + 2 * i]     = ad + q;
+        a1[n - 2 - 2 * i] = ad - q;
+        a1[3 + 2 * i]     = cbm + p;
+        a1[n - 1 - 2 * i] = p - cbm;
+    }
+    int half = n >> 1;
+    a1[0]        = a2[0] + a2[1];
+    a1[1]        = a2[0] - a2[1];
+    a1[half]     = a2[half];
+    a1[half + 1] = a2[half + 1];
+    return 0;
+}

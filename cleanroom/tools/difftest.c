@@ -1510,6 +1510,39 @@ static void test_fir_ctx_init(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir_ctx_init\n");
 }
 
+/* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
+static void test_fft_real_n(void)
+{
+    typedef int (WINAPI *v_i_ppf)(float *, float *, int);
+    v_i_ppf v = (v_i_ppf)fn_at(RVA(0x180018330));
+    begin("cr_fft_real_n");
+    int bad = g_fail;
+    enum { MAXN = 512 };
+    static float a1v[MAXN], a2v[MAXN], a1c[MAXN], a2c[MAXN];
+
+    for (int t = 0; t < 400; t++) {
+        int n;
+        if (t % 4 == 3) {
+            n = (int)(rnd() % 600);                    /* often invalid */
+        } else {
+            n = 1 << (4 + (int)(rnd() % 6));           /* 16..512 pow2 */
+        }
+        for (int i = 0; i < MAXN; i++) {
+            float f = (float)((int)(rnd() % 2001) - 1000) / 500.0f;
+            a1v[i] = f; a1c[i] = f;
+            a2v[i] = 123.0f; a2c[i] = 123.0f;
+        }
+        int rv = v(a1v, a2v, n);
+        int rc = cr_fft_real_n(a1c, a2c, n);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0) {
+            cmp_buf("a1", (u8 *)a1v, (u8 *)a1c, sizeof(float) * (size_t)n, (u32)t);
+            cmp_buf("a2", (u8 *)a2v, (u8 *)a2c, sizeof(float) * (size_t)n, (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fft_real_n\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -7069,6 +7102,7 @@ int main(int argc, char **argv)
     test_bio_get_ctx();
     test_ctx_find_node();
     test_fir_ctx_init();
+    test_fft_real_n();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

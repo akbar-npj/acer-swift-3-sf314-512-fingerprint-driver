@@ -96,6 +96,10 @@ float    cr_dot_f32(const float *a, const float *b, int n);            /* 0x1800
 uint32_t cr_fft_fwd(float *out, const float *in, uint32_t n); /* 0x18003d490 */
 uint32_t cr_fft_inv(float *out, const float *in, uint32_t n); /* 0x1800244a0 */
 
+/* n-point real transform from an (n/2)-point complex FFT; n power of two in
+ * [16,512].  a1 is in/out (n floats), a2 is n floats of scratch. */
+int      cr_fft_real_n(float *a1, float *a2, int n);     /* 0x180018330 */
+
 /* ---- data/blob accessors ---------------------------------------------- */
 uint32_t cr_get_calib_blob(uint64_t *p1, uint32_t *p2, uint8_t sel); /* 0x180030340 */
 void    *cr_bio_init(void);                                         /* 0x180048d40 */
