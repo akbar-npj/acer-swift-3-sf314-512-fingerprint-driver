@@ -711,3 +711,28 @@ int cr_mask_boxmax_fir_clear(cr_image *out, const cr_image *src,
 
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800388b0 — build a masked bitmap image sized to `src`.
+ *   int fn(cr_image *out, const cr_image *src, const void *cfg):
+ *     r = cr_image_alloc_u8((int*)out, src->w, src->h);
+ *     if (r == 0) {
+ *         r2 = cr_mask_boxmax_fir_clear(out, src, 0xf, 1, 1,
+ *                                       *(float*)(cfg + 0x48));
+ *         if (r2 != 0) { cr_cleanup_ptr8_a(out); return r2; }
+ *     }
+ *     return r;
+ * ------------------------------------------------------------------------ */
+int cr_bitmap_build_masked(cr_image *out, const cr_image *src, const void *cfg)
+{
+    int r = cr_image_alloc_u8((int *)out, src->w, src->h);
+    if (r == 0) {
+        int r2 = cr_mask_boxmax_fir_clear(
+            out, src, 0xf, 1, 1, *(const float *)((const char *)cfg + 0x48));
+        if (r2 != 0) {
+            cr_cleanup_ptr8_a(out);
+            return r2;
+        }
+    }
+    return r;
+}

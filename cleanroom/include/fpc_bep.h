@@ -349,6 +349,8 @@ void     cr_bitmap_extend_border(cr_image *bm, int left, int top,
 int      cr_mask_boxmax_fir_clear(cr_image *out, const cr_image *src,
                                   uint8_t maskbyte, int k, int niter,
                                   float sigma);                  /* 0x180023900 */
+int      cr_bitmap_build_masked(cr_image *out, const cr_image *src,
+                                const void *cfg);                /* 0x1800388b0 */
 
 /* ---- batch 18: affine resample + 4-phase FIR --------------------------- */
 /* affine Q15 grid: x = x_org + row*x_row + col*x_col, y likewise */

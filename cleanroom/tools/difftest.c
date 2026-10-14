@@ -3059,6 +3059,51 @@ static void test_mask_boxmax_fir_clear(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_mask_boxmax_fir_clear\n");
 }
 
+/* 0x1800388b0 — build a masked bitmap sized to src (alloc + mask_boxmax). */
+static void test_bitmap_build_masked(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x1800388b0));
+    v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+    begin("cr_bitmap_build_masked");
+    int bad = g_fail;
+
+    enum { MAXW = 24, MAXH = 24, NPIX = MAXW * MAXH };
+    static u8 sv[NPIX + 64], sc[NPIX + 64];
+    static u8 srcv[0x20], srcc[0x20];
+    static u8 ov[0x20], oc[0x20];
+    static u8 cfgv[0x50], cfgc[0x50];
+
+    for (int t = 0; t < 20000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        for (int i = 0; i < NPIX; i++) { sv[i] = (u8)rnd(); sc[i] = sv[i]; }
+
+        mk_image(srcv, sv, w, w, h, 0, 0);
+        memcpy(srcc, srcv, sizeof srcc);
+
+        memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+        memset(cfgv, 0, sizeof cfgv);
+        *(float *)(cfgv + 0x48) = (float)(rnd() % 1000) / 500.0f;
+        memcpy(cfgc, cfgv, sizeof cfgc);
+
+        int rv = v(ov, srcv, cfgv);
+        int rc = cr_bitmap_build_masked((cr_image *)oc, (const cr_image *)srcc, cfgc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); }
+        else if (rv == 0) {
+            /* descriptor fields (skip the data pointer at +8) */
+            if (memcmp(ov, oc, 8) != 0 || memcmp(ov + 0x10, oc + 0x10, 0x10) != 0)
+                mismatch("desc", (u32)t, 0, 0);
+            void *pv = *(void **)(ov + 8), *pc = *(void **)(oc + 8);
+            if ((pv != NULL) != (pc != NULL)) mismatch("ptr", (u32)t, pv != NULL, pc != NULL);
+            else if (pv) cmp_buf("data", (u8 *)pv, (u8 *)pc, (size_t)(w * h), (u32)t);
+        }
+        if (*(void **)(ov + 8)) vsfree((void **)(ov + 8));
+        if (*(void **)(oc + 8)) cr_sized_free((void **)(oc + 8));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_build_masked\n");
+}
+
 static void test_rect_fills(void)
 {
     v_v_pb  v8  = (v_v_pb) fn_at(RVA(0x1800465a0));
@@ -8570,6 +8615,7 @@ int main(int argc, char **argv)
     test_image_fill_desc();
     test_grad_score_from_desc();
     test_mask_boxmax_fir_clear();
+    test_bitmap_build_masked();
 
     printf("\n== image slots ==\n");
     test_image_slots();

@@ -390,6 +390,7 @@ side effects, never raw pointer values.
 | `0x1800280d0` | `fpc_bio_bep_sw23_6d0a2edcde` | `cr_fir_reflect_guarded` | Validate K/W/L (K==7 or 0xf fast paths with `W&7==0`, L≤256; else `0≤K<L≤256`), then `cr_fir_reflect`; else 0x69. |
 | `0x18002d960` | `fpc_bio_bep_sw23_7fead33409` | `cr_fir_reflect_rows_guarded` | Row twin of the above; returns 1 (not 0x69) on validation failure; else `cr_fir_reflect_rows`. |
 | `0x180010e60` | `fpc_bio_bep_sw23_0fbb842e61.part.2` | `cr_palette_remap` | If `flag[0x3d]!=0`: allocate `count*2` at `obj+0x18` (obj=`*(ctx+0x48)`, count=`*(obj+0x20)`), then for each `i` in `count` look up `lut[src[2i+1]*mult + src[2i]]` (`lut=lut_desc->data`, `mult=lut_desc->w`) into `dst[i]`. Returns the allocator code. |
+| `0x1800388b0` | `fpc_bio_bep_sw23_b198c93f89` | `cr_bitmap_build_masked` | `int fn(cr_image *out, const cr_image *src, const void *cfg)`: `r = cr_image_alloc_u8(out, src->w, src->h)`; if `r==0` run `cr_mask_boxmax_fir_clear(out, src, 0xf, 1, 1, *(float*)(cfg+0x48))`; on failure free `out->data` via `cr_cleanup_ptr8_a` and return that error; else return `r`. |
 
 ### Batch 53 — ready wrappers (size 160–500)
 
