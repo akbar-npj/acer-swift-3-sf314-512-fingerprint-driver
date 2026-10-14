@@ -1360,6 +1360,53 @@ static void test_bio_get_ctx(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bio_get_ctx\n");
 }
 
+/* ---- batch 68: bio-context linked-list lookup ---------------------------- */
+static void test_ctx_find_node(void)
+{
+    typedef int (WINAPI *v_i_ppu)(void **, unsigned);
+    v_i_ppu v = (v_i_ppu)fn_at(RVA(0x180016f90));
+    begin("cr_ctx_find_node");
+    int bad = g_fail;
+
+    static u8 gbuf[0x20];
+    static u8 nodes[4][0x100];
+    void **slot = (void **)(g_base + 0x16f4c8);
+    void *saved = *slot;
+    *slot = gbuf;                         /* vendor global */
+    *(void **)(gbuf + 8) = nodes[0];      /* ctx = global+8 -> *ctx = head */
+
+    unsigned keys[4] = { 100u, 200u, 300u, 400u };
+    for (int i = 0; i < 4; i++) {
+        *(uint32_t *)nodes[i] = keys[i];
+        *(void **)(nodes[i] + 0xd8) = (i < 3) ? nodes[i + 1] : NULL;
+    }
+
+    for (int i = 0; i < 6; i++) {
+        unsigned key = (i < 4) ? keys[i] : (i == 4 ? 999u : 0u);
+        void *ov = NULL, *oc = NULL;
+        int rv = v(&ov, key);
+        int rc = cr_ctx_find_node(&oc, key);
+        if (rv != rc) mismatch("ret", key, (u32)rv, (u32)rc);
+        if (ov != oc) mismatch("out", key, (u32)(uintptr_t)ov, (u32)(uintptr_t)oc);
+    }
+
+    /* single-node list, and empty list */
+    *(void **)(nodes[0] + 0xd8) = NULL;
+    { void *ov = NULL, *oc = NULL;
+      int rv = v(&ov, 100u), rc = cr_ctx_find_node(&oc, 100u);
+      if (rv != rc) mismatch("ret1", 100u, (u32)rv, (u32)rc);
+      if (ov != oc) mismatch("out1", 100u, (u32)(uintptr_t)ov, (u32)(uintptr_t)oc); }
+    *(void **)(gbuf + 8) = NULL;
+    { void *ov = (void *)7, *oc = (void *)7;
+      int rv = v(&ov, 100u), rc = cr_ctx_find_node(&oc, 100u);
+      if (rv != rc) mismatch("ret0", 100u, (u32)rv, (u32)rc);
+      if (ov != (void *)7 || oc != (void *)7)
+          mismatch("out0", 100u, (u32)(uintptr_t)ov, (u32)(uintptr_t)oc); }
+
+    *slot = saved;
+    if (g_fail == bad) end(); else printf("  FAIL cr_ctx_find_node\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6916,6 +6963,7 @@ int main(int argc, char **argv)
     test_cordic_atan_q15();
     test_bio_init();
     test_bio_get_ctx();
+    test_ctx_find_node();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -37,6 +37,30 @@ int cr_bio_get_ctx(void **out, unsigned flag)
     return 0;
 }
 
+/* 0x180016f90 — find a node by key in the bio context's linked list.
+ *   int fn(void **out, unsigned key)
+ * ctx = cr_bio_get_ctx(); a NULL head returns 1.  Each node has its key in the
+ * first 4 bytes and the next pointer at +0xd8; the first node whose key equals
+ * `key` is written to *out and 0 is returned, otherwise 1. */
+int cr_ctx_find_node(void **out, unsigned key)
+{
+    void *head;
+    int r = cr_bio_get_ctx(&head, 0);
+    if (r != 0)
+        return r;
+    void *node = head;
+    if (!node)
+        return 1;
+    for (;;) {
+        void *next = *(void **)((char *)node + 0xd8);
+        unsigned k = *(uint32_t *)node;
+        if (k == key) { *out = node; return 0; }
+        if (!next)
+            return 1;
+        node = next;
+    }
+}
+
 /* 0x180030340 — calibration/data blob lookup by selector.
  * Transcribed from disassembly: store 0 into both outputs, then switch(sel):
  *   0 -> ptr=0,    len=0,     ret 0
