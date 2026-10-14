@@ -1543,6 +1543,89 @@ static void test_fft_real_n(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fft_real_n\n");
 }
 
+/* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
+static void test_obj_init_12fe0(void)
+{
+    typedef int (WINAPI *v_i_ppp)(void *, void *, void *);
+    v_i_ppp v = (v_i_ppp)fn_at(RVA(0x180012fe0));
+    v_v_p vfree = (v_v_p)fn_at(RVA(0x18000f570));
+    begin("cr_obj_init_12fe0");
+    int bad = g_fail;
+
+    enum { OBJ = 0x90 };
+    static u8 ov[OBJ], oc[OBJ];
+    static u8 a2buf[0x20], a3buf[0x30], q[0x20], s[0x40], r[0x30];
+    static u8 srcdata[16 * 16];
+
+    for (int t = 0; t < 3000; t++) {
+        int w  = 1 + (int)(rnd() % 16);
+        int h  = 1 + (int)(rnd() % 16);
+        int wq = w, hq = h;
+        if (rnd() % 6 == 0) wq = w + 1;              /* force w mismatch */
+        int a2null = (int)(rnd() % 7) == 0;
+        int hasimg = (int)(rnd() % 6) != 0;
+        int sflag  = (int)(rnd() % 2);
+        int ax     = (int)(rnd() % 40) - 4;
+
+        for (size_t i = 0; i < sizeof srcdata; i++) srcdata[i] = (u8)rnd();
+        for (size_t i = 0; i < sizeof q; i++) q[i] = (u8)rnd();
+
+        *(int16_t *)(a2buf + 0x00) = (int16_t)w;
+        *(int16_t *)(a2buf + 0x02) = (int16_t)h;
+        *(void  **)(a2buf + 0x10)  = hasimg ? (void *)srcdata : NULL;
+
+        *(int16_t *)(q + 0xc) = (int16_t)wq;
+        *(int16_t *)(q + 0xe) = (int16_t)hq;
+        *(void  **)(a3buf + 0x08) = q;
+        s[0x3d] = (u8)sflag;
+        *(void **)(a3buf + 0x10) = s;
+        *(int16_t *)(r + 0x20) = (int16_t)ax;
+        *(void **)(a3buf + 0x28) = r;
+
+        memset(ov, 0xA5, OBJ); memset(oc, 0xA5, OBJ);
+        int rv = v(ov, a2null ? NULL : a2buf, a3buf);
+        int rc = cr_obj_init_12fe0(oc, a2null ? NULL : a2buf, a3buf);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+
+        /* scalar ranges (pointer slots at 0x18,0x38,0x58,0x88 excluded) */
+        cmp_buf("s00", ov + 0x00, oc + 0x00, 0x18, (u32)t);
+        cmp_buf("s20", ov + 0x20, oc + 0x20, 0x18, (u32)t);
+        cmp_buf("s40", ov + 0x40, oc + 0x40, 0x18, (u32)t);
+        cmp_buf("s60", ov + 0x60, oc + 0x60, 0x28, (u32)t);
+
+        #define PNULL(off) do { \
+            if ((*(void **)(ov + (off)) != NULL) != \
+                (*(void **)(oc + (off)) != NULL)) \
+                mismatch("p" #off, (u32)t, 0, 0); } while (0)
+        PNULL(0x18); PNULL(0x38); PNULL(0x58); PNULL(0x88);
+        #undef PNULL
+
+        if (rv == 0) {
+            int iw = *(int *)(ov + 0x20), ih = *(int *)(ov + 0x24);
+            int sw = *(int *)(ov + 0x40), sh = *(int *)(ov + 0x44);
+            if (*(void **)(ov + 0x18) && *(void **)(oc + 0x18))
+                cmp_buf("img8", *(void **)(ov + 0x18), *(void **)(oc + 0x18),
+                        (size_t)(iw * ih), (u32)t);
+            if (*(void **)(ov + 0x38) && *(void **)(oc + 0x38))
+                cmp_buf("img16", *(void **)(ov + 0x38), *(void **)(oc + 0x38),
+                        (size_t)(2 * sw * sh), (u32)t);
+            if (*(void **)(ov + 0x58) && *(void **)(oc + 0x58)) {
+                int stride = *(int *)(ov + 0x50);
+                int bmh = *(int *)(ov + 0x54);
+                cmp_buf("bm", *(void **)(ov + 0x58), *(void **)(oc + 0x58),
+                        (size_t)(((stride + 31) >> 5) * bmh * 4), (u32)t);
+            }
+            if (*(void **)(ov + 0x88) && *(void **)(oc + 0x88))
+                cmp_buf("cnt", *(void **)(ov + 0x88), *(void **)(oc + 0x88),
+                        (size_t)(2 * *(int16_t *)(ov + 0x80)), (u32)t);
+
+            vfree(ov);
+            cr_free_obj_flags(oc);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_obj_init_12fe0\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -7103,6 +7186,7 @@ int main(int argc, char **argv)
     test_ctx_find_node();
     test_fir_ctx_init();
     test_fft_real_n();
+    test_obj_init_12fe0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

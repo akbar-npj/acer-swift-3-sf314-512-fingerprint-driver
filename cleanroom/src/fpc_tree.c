@@ -455,6 +455,102 @@ int cr_obj_init_17ca0(void *a1, void *a2, int mode)
     return 0;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x180012fe0 — object constructor (bind-or-allocate image + bitmap + count).
+ *   int fn(void *a1, void *a2, void *a3)
+ *
+ * a2 (source image descriptor): +0x00 i16 w, +0x02 i16 h, +0x10 void *pixels.
+ * a3 (config): +0x08 -> {i16 w@+0xc, i16 h@+0xe}, +0x10 -> {u8 flag@+0x3d},
+ * +0x28 -> {i16 count@+0x20}.
+ * a1 (dest, >= 0x90 bytes): +0x10 u8 cr_image, +0x30 s16 cr_image,
+ * +0x50 packed bitmap, +0x74 u32 free-flag, +0x80 i16 count, +0x88 ptr.
+ *
+ * Zeroes a1 (0x90 bytes) plus the four pointer slots, then:
+ *   a2 == NULL          -> allocate the u8 image (w,h from a3+8) and blank it,
+ *                          free-flag = -1
+ *   a2->pixels == NULL  -> return 1
+ *   a2->w/h != a3+8 w/h -> return 0x69
+ *   else                -> bind a1+0x10 to a2->pixels, free-flag = -2
+ * then always allocates the packed bitmap (w,h from a3+8).  If the count at
+ * a3+0x28 is > 0, allocates 2*count zeroed bytes at a1+0x88 and stores the
+ * count at a1+0x80.  If a3+0x10's byte at +0x3d is non-zero, allocates and
+ * blanks the s16 image at a1+0x30.  Any post-allocation failure runs
+ * cr_free_obj_flags(a1) and returns the error; success returns 0.
+ * ------------------------------------------------------------------------ */
+int cr_obj_init_12fe0(void *a1, void *a2, void *a3)
+{
+    uint8_t       *o = (uint8_t *)a1;
+    const uint8_t *c = (const uint8_t *)a3;
+    const uint8_t *q = *(const uint8_t *const *)(c + 8);
+
+    cr_fill(o, 0, 0x90);
+    *(void **)(o + 0x58) = NULL;
+    *(void **)(o + 0x18) = NULL;
+    *(void **)(o + 0x88) = NULL;
+    *(void **)(o + 0x38) = NULL;
+
+    int edi;
+    if (a2 == NULL) {
+        edi = (int)cr_image_alloc_u8((int *)(o + 0x10),
+                                     *(const int16_t *)(q + 0xc),
+                                     *(const int16_t *)(q + 0xe));
+        if (edi != 0)
+            return edi;
+        cr_rect_fill_u8((cr_image *)(o + 0x10), 0);
+        *(uint32_t *)(o + 0x74) = 0xffffffffu;
+    } else {
+        const uint8_t *s   = (const uint8_t *)a2;
+        const uint8_t *pix = *(const uint8_t *const *)(s + 0x10);
+        if (pix == NULL)
+            return 1;
+        if (*(const int16_t *)(s + 0) != *(const int16_t *)(q + 0xc))
+            return 0x69;
+        if (*(const int16_t *)(s + 2) != *(const int16_t *)(q + 0xe))
+            return 0x69;
+        edi = (int)cr_image_set((cr_image *)(o + 0x10), (void *)pix,
+                                *(const int16_t *)(s + 0),
+                                *(const int16_t *)(s + 2));
+        if (edi != 0)
+            return edi;
+        *(uint32_t *)(o + 0x74) = 0xfffffffeu;
+    }
+
+    edi = cr_bitmap_alloc((uint32_t *)(o + 0x50),
+                          (uint32_t)*(const int16_t *)(q + 0xc),
+                          (uint32_t)*(const int16_t *)(q + 0xe));
+    if (edi != 0)
+        goto fail;
+
+    {
+        const uint8_t *r = *(const uint8_t *const *)(c + 0x28);
+        int ax = *(const int16_t *)(r + 0x20);
+        if (ax > 0) {
+            edi = cr_malloc_aligned16((void **)(o + 0x88), (size_t)(2 * ax));
+            if (edi != 0)
+                goto fail;
+            *(int16_t *)(o + 0x80) = (int16_t)ax;
+            cr_fill(*(void **)(o + 0x88), 0, 2 * ax);
+        }
+    }
+
+    {
+        const uint8_t *s2 = *(const uint8_t *const *)(c + 0x10);
+        if (*(const uint8_t *)(s2 + 0x3d) == 0)
+            return 0;
+        edi = cr_image_alloc_s16((int *)(o + 0x30),
+                                 *(const int16_t *)(q + 0xc),
+                                 *(const int16_t *)(q + 0xe));
+        if (edi != 0)
+            goto fail;
+        cr_rect_fill_u16((cr_image *)(o + 0x30), 0);
+    }
+    return 0;
+
+fail:
+    cr_free_obj_flags(o);
+    return edi;
+}
+
 /* ======================================================================== *
  *  Batch 49 — higher-level destructors / accessors
  * ======================================================================== */
