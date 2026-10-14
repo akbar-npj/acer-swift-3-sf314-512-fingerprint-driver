@@ -453,6 +453,7 @@ int      cr_image_alloc_u8(int *desc, int w, int h);         /* 0x18001d820 */
 int      cr_image_alloc_s16(int *desc, int w, int h);        /* 0x18003d790 */
 void     cr_free_obj_flags(void *obj);                       /* 0x18000f570 */
 int      cr_bitmap_alloc(uint32_t *desc, uint32_t w, uint32_t h);  /* 0x180029750 */
+int      cr_obj_init_17ca0(void *p1, void *p2, int mode);    /* 0x180017ca0 */
 
 /* ---- batch 49: higher-level destructors / accessors ---------------------- */
 int      cr_clz_or32(uint32_t x);                            /* 0x180039390 */

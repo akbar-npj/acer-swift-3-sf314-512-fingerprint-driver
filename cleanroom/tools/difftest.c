@@ -1056,6 +1056,118 @@ static void test_feature_qualify(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_feature_qualify\n");
 }
 
+/* ---- batch 67: image/scan object-graph initialiser (0x180017ca0) -------- */
+static void setup_p2_17ca0(u8 *p2, u8 *img, u32 *bm, int16_t *ns,
+                           int w, int h, int bw, int tag, int p78,
+                           int n, int src_offx)
+{
+    memset(p2, 0x5A, 0x90);
+    *(int *)(p2 + 0x00) = tag;
+    *(int *)(p2 + 0x10) = w;   *(int *)(p2 + 0x14) = h;      /* src cr_image a,b */
+    *(void **)(p2 + 0x18) = img;
+    *(int *)(p2 + 0x20) = w;   *(int *)(p2 + 0x24) = h;
+    *(int *)(p2 + 0x28) = 0;   *(int *)(p2 + 0x2c) = 0;
+    *(int *)(p2 + 0x50) = bw;  *(int *)(p2 + 0x54) = h;      /* bmp cr_image a,b */
+    *(void **)(p2 + 0x58) = bm;
+    *(int *)(p2 + 0x60) = bw;  *(int *)(p2 + 0x64) = h;
+    *(int *)(p2 + 0x68) = src_offx;  *(int *)(p2 + 0x6c) = 0;
+    *(int *)(p2 + 0x78) = p78;
+    *(int16_t *)(p2 + 0x80) = (int16_t)n;
+    *(void **)(p2 + 0x88) = ns;
+}
+
+static void test_obj_init_17ca0(void)
+{
+    typedef int (WINAPI *v_i_ppi)(void *, void *, int);
+    v_i_ppi v = (v_i_ppi)fn_at(RVA(0x180017ca0));
+    v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+    begin("cr_obj_init_17ca0");
+    int bad = g_fail;
+
+    static u8 p1v[0x58], p1c[0x58], p2v[0x90], p2c[0x90];
+    static u8 imgV[4096], imgC[4096];
+    static u32 bmV[2048], bmC[2048];
+    static int16_t nsV[64], nsC[64];
+
+    for (int t = 0; t < 4000; t++) {
+        int mode = (int)(rnd() % 2u);
+        int w = (int)(rnd() % 24u) + 1;
+        int h = (int)(rnd() % 4u) + 1;
+        int n = (int)(rnd() % 16u);
+        int bw = (w + 0x1f) & ~0x1f;
+        int tag = (int)(rnd() % 0x10000u) + 1;
+        int p78 = (int)(rnd() % 0x1000u);
+        int sox = (int)(rnd() % 32u);
+
+        for (size_t i = 0; i < sizeof imgV; i++) { u8 x = (u8)rnd(); imgV[i] = x; imgC[i] = x; }
+        for (size_t i = 0; i < 2048; i++) { u32 x = rnd(); bmV[i] = x; bmC[i] = x; }
+        for (int i = 0; i < 64; i++) { int16_t x = (int16_t)rnd(); nsV[i] = x; nsC[i] = x; }
+
+        memset(p1v, 0xA5, sizeof p1v); memset(p1c, 0xA5, sizeof p1c);
+        setup_p2_17ca0(p2v, imgV, bmV, nsV, w, h, bw, tag, p78, n, sox);
+        setup_p2_17ca0(p2c, imgC, bmC, nsC, w, h, bw, tag, p78, n, sox);
+
+        int rv = v(p1v, p2v, mode);
+        int rc = cr_obj_init_17ca0(p1c, p2c, mode);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+
+        /* scalars */
+        if (*(int *)(p1v + 0x40) != *(int *)(p1c + 0x40))
+            mismatch("f40", (u32)t, *(u32 *)(p1v + 0x40), *(u32 *)(p1c + 0x40));
+        if (*(int16_t *)(p1v + 0x44) != *(int16_t *)(p1c + 0x44))
+            mismatch("f44", (u32)t, (u32)*(int16_t *)(p1v + 0x44),
+                     (u32)*(int16_t *)(p1c + 0x44));
+        if (*(int *)(p1v + 0x50) != *(int *)(p1c + 0x50))
+            mismatch("f50", (u32)t, *(u32 *)(p1v + 0x50), *(u32 *)(p1c + 0x50));
+        /* image #1 descriptor +0..0x1c, image #2 +0x20..0x3c */
+        for (int off = 0; off < 0x40; off += 4) {
+            if (off == 8 || off == 0x28) continue;   /* pointers compared below */
+            u32 a = *(u32 *)(p1v + off), b = *(u32 *)(p1c + off);
+            if (a != b) mismatch("img", (u32)t, a, b);
+        }
+        /* pointer nullness */
+        if ((*(void **)(p1v + 8) != NULL) != (*(void **)(p1c + 8) != NULL))
+            mismatch("p8", (u32)t, 0, 0);
+        if ((*(void **)(p1v + 0x28) != NULL) != (*(void **)(p1c + 0x28) != NULL))
+            mismatch("p28", (u32)t, 0, 0);
+        if ((*(void **)(p1v + 0x48) != NULL) != (*(void **)(p1c + 0x48) != NULL))
+            mismatch("p48", (u32)t, 0, 0);
+
+        if (rv == 0) {
+            /* image #1 data (allocated only in mode!=1) */
+            if (mode != 1 && *(void **)(p1v + 8) && *(void **)(p1c + 8))
+                cmp_buf("img1", *(void **)(p1v + 8), *(void **)(p1c + 8),
+                        (u32)(w * h), (u32)t);
+            /* packed bitmap data */
+            if (*(void **)(p1v + 0x28) && *(void **)(p1c + 0x28))
+                cmp_buf("bmp", *(void **)(p1v + 0x28), *(void **)(p1c + 0x28),
+                        (u32)((bw >> 5) * h * 4), (u32)t);
+            /* helper fields + int16 payload */
+            u8 *hv = *(u8 **)(p1v + 0x48), *hc = *(u8 **)(p1c + 0x48);
+            if (hv && hc) {
+                if (*(int16_t *)(hv + 0x40) != *(int16_t *)(hc + 0x40))
+                    mismatch("hn", (u32)t, (u32)*(int16_t *)(hv + 0x40),
+                             (u32)*(int16_t *)(hc + 0x40));
+                if (n > 0 && *(void **)(hv + 0x48) && *(void **)(hc + 0x48))
+                    cmp_buf("hbuf", *(void **)(hv + 0x48), *(void **)(hc + 0x48),
+                            (u32)(2 * n), (u32)t);
+            }
+        }
+
+        /* free, mirroring the object's ownership */
+        if (rv == 0) {
+            u8 *hv = *(u8 **)(p1v + 0x48), *hc = *(u8 **)(p1c + 0x48);
+            if (hv && n > 0 && *(void **)(hv + 0x48)) {
+                vsfree((void **)(hv + 0x48)); cr_sized_free((void **)(hc + 0x48));
+            }
+            if (mode != 1) { vsfree((void **)(p1v + 8)); cr_sized_free((void **)(p1c + 8)); }
+            vsfree((void **)(p1v + 0x28)); cr_sized_free((void **)(p1c + 0x28));
+            vsfree((void **)(p1v + 0x48)); cr_sized_free((void **)(p1c + 0x48));
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_obj_init_17ca0\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6606,6 +6718,7 @@ int main(int argc, char **argv)
     test_obj_ctor_20aa0();
     test_gaussian_fir_2pass();
     test_feature_qualify();
+    test_obj_init_17ca0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

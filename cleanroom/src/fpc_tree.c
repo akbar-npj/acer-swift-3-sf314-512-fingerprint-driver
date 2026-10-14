@@ -380,6 +380,81 @@ int cr_bitmap_alloc(uint32_t *desc, uint32_t w, uint32_t h)
     return 0;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x180017ca0 — build an image/scan object graph from a source descriptor.
+ *   int fn(void *p1, void *p2, int mode):   rcx=p1, rdx=p2, r8d=mode
+ *
+ * p2 layout (source):  +0x00 i32 tag, +0x10 cr_image src (a,b,data@+0x18,
+ * w@+0x20, h@+0x24, offx@+0x28, offy@+0x2c), +0x50 cr_image bmp-src,
+ * +0x78 i32, +0x80 i16 n, +0x88 ptr i16 array.
+ * p1 layout (dest): +0x00 cr_image #1, +0x20 cr_image #2 (packed bitmap),
+ * +0x40 i32, +0x44 i16, +0x48 ptr (0x60 helper), +0x50 i32.
+ *
+ * Allocates the 0x60 helper at p1+0x48; clears p1's #1 data ptr (+8) and #2
+ * data ptr (+0x28) and sets +0x44 = -1.  mode==1 binds p1's #1 image to the
+ * p2+0x18 buffer via cr_image_set and blanks the p2+0x10 descriptor; otherwise
+ * allocates p1's #1 image (u8, w=p2[0x20], h=p2[0x24]) and copies p2+0x10 into
+ * it.  Always allocates the packed bitmap at p1+0x20 and extracts p2+0x50 into
+ * it.  If n = (i16)p2[0x80] > 0, allocates 2n bytes under the helper (+0x48)
+ * and copies n int16 from p2[0x88].  Stores (u16)p2[0] at p1+0x44 and p2[0x78]
+ * at p1+0x40.  Returns 0, or the first callee error.
+ * ------------------------------------------------------------------------ */
+int cr_obj_init_17ca0(void *a1, void *a2, int mode)
+{
+    uint8_t *p1 = (uint8_t *)a1, *p2 = (uint8_t *)a2;
+    int w = *(int *)(p2 + 0x20);
+    int h = *(int *)(p2 + 0x24);
+    int r = cr_alloc_60_init((void **)(p1 + 0x48));
+    if (r != 0)
+        return r;
+
+    *(void **)(p1 + 8) = NULL;
+    *(int16_t *)(p1 + 0x44) = (int16_t)-1;
+    *(void **)(p1 + 0x28) = NULL;
+
+    if (mode == 1) {
+        r = (int)cr_image_set((cr_image *)p1, *(void **)(p2 + 0x18), w, h);
+        if (r != 0)
+            return r;
+        r = (int)cr_image_set((cr_image *)(p2 + 0x10), NULL, 0, 0);
+        if (r != 0)
+            return r;
+        *(int *)(p1 + 0x50) = -2;
+    } else {
+        r = cr_image_alloc_u8((int *)p1, w, h);
+        if (r != 0)
+            return r;
+        r = (int)cr_image_copy_u8((cr_image *)p1,
+                                  (const cr_image *)(p2 + 0x10));
+        if (r != 0)
+            return r;
+    }
+
+    r = cr_bitmap_alloc((uint32_t *)(p1 + 0x20), (uint32_t)w, (uint32_t)h);
+    if (r != 0)
+        return r;
+    r = cr_bitmap_extract_shift((cr_image *)(p1 + 0x20),
+                                (const cr_image *)(p2 + 0x50));
+    if (r != 0)
+        return r;
+
+    int16_t n = *(int16_t *)(p2 + 0x80);
+    if (n > 0) {
+        uint8_t *obj = *(uint8_t **)(p1 + 0x48);
+        r = cr_malloc_aligned16((void **)(obj + 0x48), (size_t)(2 * n));
+        if (r != 0)
+            return r;
+        *(int16_t *)(obj + 0x40) = n;
+        const int16_t *src = *(const int16_t **)(p2 + 0x88);
+        int16_t       *dst = *(int16_t **)(obj + 0x48);
+        for (int i = 0; i < n; i++)
+            dst[i] = src[i];
+    }
+    *(int16_t *)(p1 + 0x44) = *(int16_t *)(p2 + 0x00);
+    *(int *)(p1 + 0x40) = *(int *)(p2 + 0x78);
+    return 0;
+}
+
 /* ======================================================================== *
  *  Batch 49 — higher-level destructors / accessors
  * ======================================================================== */
