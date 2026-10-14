@@ -594,6 +594,65 @@ int cr_stretch_14bit(cr_image *img, const cr_image *mask, int and_mask,
     return 0;
 }
 
+/* 0x180023cb0 — the float twin of cr_stretch_14bit (0x1800281a0).
+ *
+ * Same shape: `mode` (arg6, low byte) 0 -> no-op returning 0, 1 -> take the
+ * masked min/max, 2 -> take the masked 0/100% percentiles (nbin=512), anything
+ * else -> 0x69.  It then rescales the float image in place:
+ *   count>0 && hi>lo : v = (p - lo) * (255.0f / (hi - lo)); store 0 if !(v>0)
+ *                      else min(v, 255.0f)
+ *   otherwise        : v = p; store 0 if !(v>0) else min(v, 255.0f)
+ * The clamp is the vendor's `ucomiss; ja` + `minss` pair, i.e. plain
+ * `v > 0.0f` and `(v < 255.0f) ? v : 255.0f`.  Arg order/positions match the
+ * vendor exactly: (img, mask, and_mask, frac_lo, frac_hi, mode). */
+int cr_stretch_f32(cr_image *img, const cr_image *mask, int and_mask,
+                   float frac_lo, float frac_hi, int mode)
+{
+    uint8_t mb = (uint8_t)mode;
+
+    if (mb == 0)
+        return 0;
+
+    float lo = 0.0f, hi = 0.0f;
+    int count = 0;
+    if (mb == 1) {
+        cr_masked_minmax_f32(&lo, &hi, &count, img, mask, (uint8_t)and_mask);
+    } else if (mb == 2) {
+        int r = cr_masked_hist_percentiles_f32(&lo, &hi, &count, img, mask,
+                                               (uint8_t)and_mask, frac_lo,
+                                               frac_hi, 512);
+        if (r != 0)
+            return r;
+        /* The percentile path clamps the window to the output range before the
+         * rescale (the min/max path does not): hi = min(hi,255), lo = max(lo,0). */
+        if (hi > 255.0f) hi = 255.0f;
+        if (0.0f > lo)   lo = 0.0f;
+    } else {
+        return 0x69;
+    }
+
+    int total = img->h * img->w;
+    float *d = (float *)img->data;
+
+    if (count > 0 && hi > lo) {
+        float scale = 255.0f / (hi - lo);
+        if (total > 0) {
+            for (int i = 0; i < total; i++) {
+                float v = (d[i] - lo) * scale + 0.0f;
+                d[i] = (v > 0.0f) ? ((v < 255.0f) ? v : 255.0f) : 0.0f;
+            }
+        }
+    } else {
+        if (total > 0) {
+            for (int i = 0; i < total; i++) {
+                float v = d[i];
+                d[i] = (v > 0.0f) ? ((v < 255.0f) ? v : 255.0f) : 0.0f;
+            }
+        }
+    }
+    return 0;
+}
+
 /* 0x180037330 — sum + count of the masked pixels in a centred square box.
  *
  * `idx` is a linear pixel index into an image `W x H` (row-major, stride W):

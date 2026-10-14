@@ -1556,6 +1556,55 @@ static void test_hist_percentiles_f32(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_masked_hist_percentiles_f32\n");
 }
 
+/* ---- batch 62: float 0..255 percentile stretch (0x180023cb0) ------------- */
+static void test_stretch_f32(void)
+{
+    typedef int (WINAPI *v_strf)(void *, const void *, int, float, float, int);
+    v_strf v = (v_strf)fn_at(RVA(0x180023cb0));
+    begin("cr_stretch_f32");
+    int bad = g_fail;
+
+    enum { MAXW = 32, MAXH = 32, NP = MAXW * MAXH };
+    static float   pv[NP], pc[NP];
+    static uint8_t mbuf[NP];
+    static cr_image iv, ic, mv, mc;
+
+    for (int t = 0; t < 6000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int total = w * h;
+        int mode = (int)(rnd() % 5);                    /* 0..4 incl. 0x69 */
+        int and_mask = (int)(rnd() % 256);
+        int use_mask = (int)(rnd() % 3) != 0;
+        float f_lo = (float)(rnd() % 201) / 200.0f;
+        float f_hi = (float)(rnd() % 201) / 200.0f;
+
+        for (int i = 0; i < total; i++) {
+            pv[i] = pc[i] = (float)((int)(rnd() % 4001) - 2000) * 0.125f;
+            mbuf[i] = (uint8_t)rnd();
+        }
+        if ((mode == 1 || mode == 2) && (rnd() % 4) == 0) {
+            /* constant image -> hi == lo -> the clamp-only branch */
+            float c = (float)((int)(rnd() % 4001) - 2000) * 0.125f;
+            for (int i = 0; i < total; i++) pv[i] = pc[i] = c;
+        }
+
+        cr_image_set(&iv, pv, w, h);
+        cr_image_set(&ic, pc, w, h);
+        cr_image_set(&mv, mbuf, w, h);
+        cr_image_set(&mc, mbuf, w, h);
+        const cr_image *mpv = use_mask ? &mv : NULL;
+        const cr_image *mpc = use_mask ? &mc : NULL;
+
+        int rv = v(&iv, mpv, and_mask, f_lo, f_hi, mode);
+        int rc = cr_stretch_f32(&ic, mpc, and_mask, f_lo, f_hi, mode);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("f32", (const unsigned char *)pv, (const unsigned char *)pc,
+                (u32)(total * 4), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_stretch_f32\n");
+}
+
 
 /* ---- batch 61: Harris-style corner response (0x1800305f0) ---------------- */
 static void test_harris_response(void)
@@ -8034,6 +8083,7 @@ int main(int argc, char **argv)
     test_struct_tensor_aniso();
     test_struct_tensor_dispatch();
     test_hist_percentiles_f32();
+    test_stretch_f32();
     test_harris_response();
     test_bio_init();
     test_bio_get_ctx();
