@@ -5756,6 +5756,68 @@ static void test_tree_batch59(void)
     }
 }
 
+/* ---- batch 60: Gaussian-derivative blur pair + box-median filter -------- */
+static void test_tree_batch60(void)
+{
+    /* cr_gauss_deriv_blur_pair: separate vendor/clean output+source buffers. */
+    {
+        enum { W = 64, H = 48, CAP = W * H };
+        static int16_t sv[CAP], sc[CAP], o1v[CAP], o1c[CAP], o2v[CAP], o2c[CAP];
+        cr_image svi, sci, o1vi, o1ci, o2vi, o2ci;
+        typedef uint32_t (WINAPI *p60_pair)(cr_image *, cr_image *, const cr_image *, float);
+        p60_pair vfn = (p60_pair)fn_at(RVA(0x18002b930));
+
+        begin("cr_gauss_deriv_blur_pair");
+        int bad = g_fail;
+        for (int t = 0; t < 2000; t++) {
+            for (int i = 0; i < CAP; i++) sv[i] = (int16_t)rnd();
+            memcpy(sc, sv, sizeof sv);
+            memset(o1v, 0x5A, sizeof o1v); memset(o1c, 0x5A, sizeof o1c);
+            memset(o2v, 0x5A, sizeof o2v); memset(o2c, 0x5A, sizeof o2c);
+            cr_image_set(&svi, sv, W, H); cr_image_set(&sci, sc, W, H);
+            cr_image_set(&o1vi, o1v, W, H); cr_image_set(&o1ci, o1c, W, H);
+            cr_image_set(&o2vi, o2v, W, H); cr_image_set(&o2ci, o2c, W, H);
+            float sigma = (float)(rnd() % 1000) * 0.01f + 0.3f;
+            uint32_t rv = vfn(&o1vi, &o2vi, &svi, sigma);
+            uint32_t rc = cr_gauss_deriv_blur_pair(&o1ci, &o2ci, &sci, sigma);
+            if (rv != rc) mismatch("ret", (u32)t, rv, rc);
+            if (rv == 0) {
+                cmp_buf("o1", (u8 *)o1v, (u8 *)o1c, sizeof o1v, (u32)t);
+                cmp_buf("o2", (u8 *)o2v, (u8 *)o2c, sizeof o2v, (u32)t);
+            }
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_blur_pair\n");
+    }
+
+    /* cr_box_median_u8: 8-bit box median, several window sizes. */
+    {
+        enum { W = 40, H = 30, CAP = W * H };
+        static uint8_t sv[CAP], sc[CAP], ov[CAP], oc[CAP];
+        cr_image svi, sci, ovi, oci;
+        typedef uint32_t (WINAPI *p60_med)(cr_image *, const cr_image *, uint16_t);
+        p60_med vfn = (p60_med)fn_at(RVA(0x1800256e0));
+
+        for (int n = 1; n <= 9; n += 2) {
+            char nm[48]; snprintf(nm, sizeof nm, "cr_box_median_u8(n=%d)", n);
+            begin(nm);
+            int bad = g_fail;
+            for (int t = 0; t < 500; t++) {
+                for (int i = 0; i < CAP; i++) sv[i] = (uint8_t)rnd();
+                memcpy(sc, sv, sizeof sv);
+                memset(ov, 0x5A, sizeof ov); memset(oc, 0x5A, sizeof oc);
+                cr_image_set(&svi, sv, W, H); cr_image_set(&sci, sc, W, H);
+                cr_image_set(&ovi, ov, W, H); cr_image_set(&oci, oc, W, H);
+                uint32_t rv = vfn(&ovi, &svi, (uint16_t)n);
+                uint32_t rc = cr_box_median_u8(&oci, &sci, (uint16_t)n);
+                if (rv != rc) mismatch("ret", (u32)t, rv, rc);
+                if (rv == 0)
+                    cmp_buf("out", ov, oc, sizeof ov, (u32)t);
+            }
+            if (g_fail == bad) end(); else printf("  FAIL %s\n", nm);
+        }
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -6036,6 +6098,9 @@ int main(int argc, char **argv)
 
     printf("\n== batch 59: gaussian-blur wrapper + blit-to-subview wrappers ==\n");
     test_tree_batch59();
+
+    printf("\n== batch 60: Gaussian-derivative blur pair + box-median filter ==\n");
+    test_tree_batch60();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

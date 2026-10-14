@@ -598,4 +598,10 @@ uint32_t cr_blit_fillborder_s16(cr_image *dst, const cr_image *src,
                                 int top, int bottom, int left, int right,
                                 uint16_t fill);                        /* 0x18003cf00 */
 
+/* ---- batch 60: Gaussian-derivative blur pair + box-median filter -------- */
+uint32_t cr_gauss_deriv_blur_pair(cr_image *o1, cr_image *o2,
+                                  const cr_image *src, float sigma);  /* 0x18002b930 */
+uint32_t cr_box_median_u8(cr_image *out, const cr_image *src,
+                          uint16_t n);                               /* 0x1800256e0 */
+
 #endif /* FPC_BEP_H */

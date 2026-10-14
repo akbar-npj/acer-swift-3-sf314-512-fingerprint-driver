@@ -467,6 +467,13 @@ side effects, never raw pointer values.
 | `0x180046a80` | `fpc_bio_bep_sw23_f439d0d904` | `cr_blit_extend_s16` | Same prologue; border op is `cr_image_border_extend_s16` (edge-replicate). |
 | `0x18003cf00` | `fpc_bio_bep_sw23_c61d1d8196` | `cr_blit_fillborder_s16` | Same prologue; border op is `cr_image_fill_border(&sub,top,bottom,left,right,fill)`. |
 
+### Batch 60 — Gaussian-derivative blur pair + box-median filter
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18002b930` | `fpc_bio_bep_sw23_784ee12a49` | `cr_gauss_deriv_blur_pair` | Builds 15-tap g (Gaussian) + dg (derivative) windows via `cr_gaussian_deriv_windows_q15`, then writes two separable blurs of the source (dims from `src->w/src->h`): `o1 = rows(dg)+cols(g)`, `o2 = rows(g)+cols(dg)`. Both row passes read the same source data. Out-of-range dims → `0x69` (h) or `1` (w); guard failures short-circuit. |
+| `0x1800256e0` | `fpc_bio_bep_sw23_62b3ad8b73` | `cr_box_median_u8` | n×n box median over an 8-bit image with clamped borders: gather the centred window into a scratch buffer (alloc'd by `cr_malloc_aligned16`), run `(n*n+1)>>1` forward bubble-sort passes, emit `scratch[(n*n-1)/2]`. Scratch freed by `cr_sized_free`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

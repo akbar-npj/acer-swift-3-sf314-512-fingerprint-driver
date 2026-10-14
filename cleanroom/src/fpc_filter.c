@@ -1139,3 +1139,120 @@ void cr_gauss_blur7_pair(cr_image *a, cr_image *b, float sigma)
             if (cr_fir7_s16(b, b, coef) == 0)
                 cr_fir7_s16_col(b, b, coef);
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002b930 — separable blur pair using a 15-tap Gaussian / derivative
+ * window.  Builds g (Gaussian) and dg (derivative) via
+ * cr_gaussian_deriv_windows_q15, then for the source image (dims from
+ * src->w/src->h) writes two blurred outputs:
+ *   o1 = rows(dg) then cols(g)
+ *   o2 = rows(g) then cols(dg)
+ * Both row passes read from the *same* source data.  Out-of-range dims
+ * return 0x69 (h out of range) or 1 (w out of range); an alloc/guard
+ * failure short-circuits.
+ * ------------------------------------------------------------------------ */
+uint32_t cr_gauss_deriv_blur_pair(cr_image *o1, cr_image *o2,
+                                  const cr_image *src, float sigma)
+{
+    int16_t g[16], dg[16], d2g[20];
+    uint32_t r;
+    /* Vendor returns early if the window build fails; our implementation is a
+     * pure expf computation and cannot fail, so we always continue. */
+    cr_gaussian_deriv_windows_q15(g, dg, d2g, sigma, 15);
+
+    int w = src->w, h = src->h;
+    if ((uint32_t)(w - 0x10) < 0xf1) {
+        int16_t *o1d  = (int16_t *)o1->data;
+        int16_t *srcd = (int16_t *)src->data;
+        r = cr_fir_reflect_rows(o1d, srcd, dg, 15, w, h);
+        if ((int)r != 0)
+            return r;
+        if ((uint32_t)(h - 0x10) < 0xf1) {
+            r = cr_fir_reflect(o1d, o1d, g, 15, w, h);
+            if ((int)r != 0)
+                return r;
+            if (0xf0 < (uint32_t)(w - 0x10))
+                return 1;
+            int16_t *o2d = (int16_t *)o2->data;
+            r = cr_fir_reflect_rows(o2d, srcd, g, 15, w, h);
+            if ((int)r != 0)
+                return r;
+            if ((uint32_t)(h - 0x10) < 0xf1)
+                return cr_fir_reflect(o2d, o2d, dg, 15, w, h);
+        }
+        return 0x69;
+    }
+    return 1;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800256e0 — n*n box median filter over an 8-bit image, borders clamped.
+ *   uint32_t fn(cr_image *out, cr_image *src, uint16_t n):
+ *     scratch = cr_malloc_aligned16(n*n);
+ *     for each output pixel (orow,orow-col): gather the n*n source window
+ *       centred on (ocol,orow) with clamped indices into scratch, then run
+ *       (n*n+1)>>1 forward bubble-sort passes and emit scratch[(n*n-1)/2].
+ *     cr_sized_free(scratch).
+ * ------------------------------------------------------------------------ */
+uint32_t cr_box_median_u8(cr_image *out, const cr_image *src, uint16_t n)
+{
+    void   *scratch = NULL;
+    uint32_t r = cr_malloc_aligned16(&scratch, (size_t)n * (size_t)n);
+    if (r == 0) {
+        int      w  = src->w, h = src->h;
+        uint8_t *sd = (uint8_t *)src->data;
+        uint8_t *od = (uint8_t *)out->data;
+        int      nn = (int)n * (int)n;
+
+        if (h > 0) {
+            int iVar17 = -((int)(n - 1) / 2);
+            int orow   = 0;
+            do {
+                if (w > 0) {
+                    int ocol = 0;
+                    do {
+                        if (n != 0) {
+                            int wr = 0;
+                            do {
+                                int srow = iVar17 + orow + wr;
+                                if (srow < 0)      srow = 0;
+                                if (srow > h - 1)  srow = h - 1;
+                                int wc = 0;
+                                do {
+                                    int scol = iVar17 + ocol + wc;
+                                    if (scol < 0)      scol = 0;
+                                    if (scol > w - 1)  scol = w - 1;
+                                    ((uint8_t *)scratch)[wr * n + wc] =
+                                        sd[scol + srow * w];
+                                    wc++;
+                                } while (wc != (int)n);
+                                wr++;
+                            } while (wr != (int)n);
+                        }
+                        int passes = (nn + 1) >> 1;
+                        while (passes-- > 0) {
+                            if (nn > 1) {
+                                int k = 0;
+                                do {
+                                    uint8_t b3 = ((uint8_t *)scratch)[k];
+                                    uint8_t b2 = ((uint8_t *)scratch)[k + 1];
+                                    if (b3 < b2) {
+                                        ((uint8_t *)scratch)[k]     = b2;
+                                        ((uint8_t *)scratch)[k + 1] = b3;
+                                    }
+                                    k++;
+                                } while (k != nn - 1);
+                            }
+                        }
+                        od[orow * w + ocol] =
+                            ((uint8_t *)scratch)[(nn - 1) / 2];
+                        ocol++;
+                    } while (ocol != w);
+                }
+                orow++;
+            } while (orow != h);
+        }
+        cr_sized_free(&scratch);
+    }
+    return r;
+}
