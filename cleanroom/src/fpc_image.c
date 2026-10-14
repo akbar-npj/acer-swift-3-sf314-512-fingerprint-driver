@@ -516,8 +516,11 @@ void cr_saturation_score(int *out, const cr_pixbuf *s)
  *     shift <  0 : sh = ((uint8_t)-b) & 31;
  *                  rnd = (int32_t)(int16_t)(1u << sh) >> 1;   (16-bit trunc)
  *                  out = (uint16_t)((int32_t)((uint32_t)in + (uint32_t)rnd) >> sh)
- *   (The vendor splits rows into pairs for speed; the flat form below is
- *    bit-identical, including the odd trailing row.)
+ *   The vendor walks the rows in PAIRS and its tail fix-up re-writes the
+ *   penultimate row instead of the last one, so for an ODD height the final
+ *   row of `dst` is left untouched (bit-for-bit parity requires reproducing
+ *   that, uninitialised tail row included).  Rows written:
+ *     h <= 0 -> 0 ;  h == 1 -> 1 ;  h >= 2 -> ((h-2) & ~1) + 2.
  * ------------------------------------------------------------------------ */
 void cr_u8_to_u16_shifted(cr_image *dst, const cr_image *src, int shift)
 {
@@ -525,21 +528,22 @@ void cr_u8_to_u16_shifted(cr_image *dst, const cr_image *src, int shift)
     const uint8_t *s = (const uint8_t *)src->data;
     uint16_t *d = (uint16_t *)dst->data;
     uint8_t b = (uint8_t)shift;
+    int nrows = (h <= 0) ? 0 : (h == 1) ? 1 : (((h - 2) & ~1) + 2);
 
     if (shift >= 1) {
         unsigned sh = b & 31u;
-        for (int r = 0; r < h; r++)
+        for (int r = 0; r < nrows; r++)
             for (int c = 0; c < w; c++)
                 d[(long long)r * w + c] =
                     (uint16_t)((uint16_t)s[(long long)r * w + c] << sh);
     } else if (shift == 0) {
-        for (int r = 0; r < h; r++)
+        for (int r = 0; r < nrows; r++)
             for (int c = 0; c < w; c++)
                 d[(long long)r * w + c] = (uint16_t)s[(long long)r * w + c];
     } else {
         unsigned sh = ((uint8_t)(-b)) & 31u;
         int32_t rnd = (int32_t)(int16_t)(uint16_t)(1u << sh) >> 1;
-        for (int r = 0; r < h; r++)
+        for (int r = 0; r < nrows; r++)
             for (int c = 0; c < w; c++) {
                 uint32_t v = (uint32_t)s[(long long)r * w + c] + (uint32_t)rnd;
                 d[(long long)r * w + c] = (uint16_t)((int32_t)v >> sh);

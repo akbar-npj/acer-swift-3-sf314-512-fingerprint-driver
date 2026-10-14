@@ -738,5 +738,7 @@ int      cr_gauss_deriv_triple_guarded(void *o1, void *o2, void *o3,
 int      cr_struct_tensor_aniso(cr_image *dst, const cr_image *src); /* 0x1800331f0 */
 int      cr_struct_tensor_dispatch(cr_image *dst, const cr_image *src,
                                    const void *flag_obj);           /* 0x18003ced0 */
+int      cr_harris_response(cr_image *dst, const cr_image *src,
+                            float coef, float sigma);               /* 0x1800305f0 */
 
 #endif /* FPC_BEP_H */

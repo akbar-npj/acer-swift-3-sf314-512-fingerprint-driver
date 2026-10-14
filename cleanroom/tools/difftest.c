@@ -1556,6 +1556,65 @@ static void test_hist_percentiles_f32(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_masked_hist_percentiles_f32\n");
 }
 
+
+/* ---- batch 61: Harris-style corner response (0x1800305f0) ---------------- */
+static void test_harris_response(void)
+{
+    typedef int (WINAPI *v_i_ppff)(void *, void *, float, float);
+    v_i_ppff v = (v_i_ppff)fn_at(RVA(0x1800305f0));
+    begin("cr_harris_response");
+    int bad = g_fail;
+
+    static uint8_t sbuf[4096];
+    static float   dv[4096], dc[4096];
+    static u8 sv[0x20], sc[0x20], dvv[0x20], dcc[0x20];
+
+    for (int t = 0; t < 1500; t++) {
+        int w = 16 + (int)(rnd() % 33u);
+        /* NOTE: heights must be EVEN.  The vendor's u8->u16 widening
+         * (0x1800337e0) walks rows in pairs and its tail fix-up re-writes the
+         * penultimate row, so for an ODD height the final row of its internal
+         * d[5] buffer is left at whatever the allocator handed back.  That
+         * makes the vendor's Harris output for odd heights depend on
+         * uninitialised memory, so it cannot be matched bit-for-bit (nor
+         * tested deterministically).  Even heights exercise the whole path. */
+        int h = 16 + (int)(rnd() % 33u);
+        h &= ~1;
+        float coef  = (float)(rnd() % 100u) / 1000.0f;          /* 0..0.099 */
+        float sigma = 0.72f + (float)(rnd() % 150u) / 100.0f;   /* 0.72..2.21 */
+
+        for (int i = 0; i < w * h; i++) sbuf[i] = (uint8_t)rnd();
+        for (int i = 0; i < 4096; i++) dv[i] = dc[i] = 123.25f;
+
+        mk_img2(sv,  (int16_t *)sbuf, w, h);
+        mk_img2(sc,  (int16_t *)sbuf, w, h);
+        mk_img2(dvv, (int16_t *)dv, w, h);
+        mk_img2(dcc, (int16_t *)dc, w, h);
+
+        int rv = v(dvv, sv, coef, sigma);
+        int rc = cr_harris_response((cr_image *)dcc, (const cr_image *)sc,
+                                    coef, sigma);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("dst", (const unsigned char *)dv, (const unsigned char *)dc,
+                (u32)(w * h * 4), (u32)t);
+    }
+
+    /* non-canonical src trips the u8->u16 guard in both impls */
+    {
+        static uint8_t dd[2048];
+        u8 a[0x20], b[0x20], a2[0x20], b2[0x20];
+        for (int i = 0; i < 2048; i++) dd[i] = (uint8_t)rnd();
+        mk_img2(a, (int16_t *)dd, 24, 24); mk_img2(b, (int16_t *)dd, 24, 24);
+        memcpy(a2, a, 0x20); memcpy(b2, b, 0x20);
+        *(int *)(b + 0x18) = 5; *(int *)(b2 + 0x18) = 5;
+        int rv = v(a, b, 0.04f, 1.5f);
+        int rc = cr_harris_response((cr_image *)a2, (const cr_image *)b2,
+                                    0.04f, 1.5f);
+        if (rv != rc) mismatch("ret-bad", 0, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_harris_response\n");
+}
+
 /* ---- batch 68: global bio-context getter --------------------------------- */
 static void test_bio_init(void)
 {
@@ -4071,6 +4130,33 @@ static void test_u8_to_u16_shifted(void)
         cr_u8_to_u16_shifted((cr_image *)dstc, (const cr_image *)sc, shift);
         cmp_buf("u8u16", (unsigned char *)dv, (unsigned char *)dc,
                 sizeof dv, (u32)t);
+    }
+    /* ODD heights: the vendor's paired-row walk plus its tail fix-up re-write
+     * the penultimate row, so the final row of `dst` is deliberately left
+     * untouched.  With a pre-filled destination that skipped row is
+     * deterministic, which lets us pin down the quirk bit-for-bit. */
+    {
+        enum { WW = 40, HH = 25 };                 /* odd height */
+        for (int t = 0; t < 20000; t++) {
+            uint8_t sbuf[WW * HH];
+            uint16_t dv[WW * HH], dc[WW * HH];
+            unsigned char sv[0x20], sc[0x20], dstv[0x20], dstc[0x20];
+            for (int i = 0; i < WW * HH; i++) sbuf[i] = (uint8_t)rnd();
+            int shift = (int)(int16_t)rnd();
+            memset(sv, 0, sizeof sv);   memset(sc, 0, sizeof sc);
+            memset(dstv, 0, sizeof dstv); memset(dstc, 0, sizeof dstc);
+            *(void **)(sv + 8) = sbuf;  *(void **)(sc + 8) = sbuf;
+            *(int *)(sv + 0x10) = WW;   *(int *)(sc + 0x10) = WW;
+            *(int *)(sv + 0x14) = HH;   *(int *)(sc + 0x14) = HH;
+            *(void **)(dstv + 8) = dv;  *(void **)(dstc + 8) = dc;
+            *(int *)(dstv + 0x10) = WW; *(int *)(dstc + 0x10) = WW;
+            *(int *)(dstv + 0x14) = HH; *(int *)(dstc + 0x14) = HH;
+            memset(dv, 0xAA, sizeof dv); memset(dc, 0xAA, sizeof dc);
+            v(dstv, sv, shift);
+            cr_u8_to_u16_shifted((cr_image *)dstc, (const cr_image *)sc, shift);
+            cmp_buf("u8u16odd", (unsigned char *)dv, (unsigned char *)dc,
+                    sizeof dv, (u32)t);
+        }
     }
     if (g_fail == bad) end(); else printf("  FAIL cr_u8_to_u16_shifted\n");
 }
@@ -7948,6 +8034,7 @@ int main(int argc, char **argv)
     test_struct_tensor_aniso();
     test_struct_tensor_dispatch();
     test_hist_percentiles_f32();
+    test_harris_response();
     test_bio_init();
     test_bio_get_ctx();
     test_ctx_find_node();

@@ -17,6 +17,7 @@
 #include "fpc_bep.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 static float f32_from_bits(uint32_t b)
 {
@@ -1571,6 +1572,76 @@ int cr_struct_tensor_dispatch(cr_image *dst, const cr_image *src,
     if (flag == 1)
         return cr_struct_tensor_aniso(dst, src);
     return 0x69;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800305f0 — Harris-style corner response over the Gaussian-derivative
+ * triple.
+ *   int fn(cr_image *dst, const cr_image *src, float coef, float sigma)
+ *
+ * Six scratch descriptors are laid out contiguously; their data slots start
+ * NULL and are cleared at the end via cr_clear_6ptr.  d[5] is a w x h int16
+ * copy of the u8 source widened with shift 6; d[2], d[3], d[4] hold the
+ * sigma-Gaussian derivative triple (d[2]=Ixx, d[3]=Iyy, d[4]=Ixy).  dst (a
+ * float image) is first zero-filled, then for every pixel
+ *     resp = ((Ixx*Iyy - Ixy*Ixy) - (Ixx + Iyy)^2 * coef) * 0.015625f
+ * is stored at dst[offx + dst->a*dst->offy + y*dst->a + x].  The int products
+ * use the vendor's 32-bit wrapping semantics.  Any failing stage short-circuits
+ * through the shared cleanup and returns that stage's status.
+ * ------------------------------------------------------------------------ */
+int cr_harris_response(cr_image *dst, const cr_image *src,
+                       float coef, float sigma)
+{
+    int w = src->w, h = src->h;
+    cr_image d[6];
+    memset(d, 0, sizeof d);
+    int status;
+
+    int r = cr_image_alloc_s16((int *)&d[5], w, h);
+    if (r != 0)
+        return r;
+    status = r = cr_image_alloc_s16((int *)&d[2], w, h);
+    if (r != 0) goto cleanup;
+    status = r = cr_image_alloc_s16((int *)&d[3], w, h);
+    if (r != 0) goto cleanup;
+    status = r = cr_image_alloc_s16((int *)&d[4], w, h);
+    if (r != 0) goto cleanup;
+    status = r = cr_u8_to_u16_guarded(&d[5], src, 6);
+    if (r != 0) goto cleanup;
+    status = r = cr_gauss_deriv_triple_guarded(&d[2], &d[4], &d[3], &d[5],
+                                               sigma);
+    if (r != 0) goto cleanup;
+    status = 0;
+
+    cr_rect_fill_f32(dst, 0.0f);
+
+    if (h > 0) {
+        const int16_t *pxx = (const int16_t *)d[2].data;
+        const int16_t *pyy = (const int16_t *)d[3].data;
+        const int16_t *pxy = (const int16_t *)d[4].data;
+        float *out = (float *)dst->data;
+        int    off = dst->offx + dst->a * dst->offy;
+        for (int y = 0; y < h; y++) {
+            int outrow = off + y * dst->a;
+            const int16_t *rx = pxx + y * w;
+            const int16_t *ry = pyy + y * w;
+            const int16_t *rc = pxy + y * w;
+            for (int x = 0; x < w; x++) {
+                uint32_t a  = (uint32_t)(int32_t)rx[x];
+                uint32_t b  = (uint32_t)(int32_t)ry[x];
+                uint32_t c  = (uint32_t)(int32_t)rc[x];
+                uint32_t ss = (uint32_t)(a + b) * (uint32_t)(a + b);
+                uint32_t ab = a * b;
+                uint32_t cc = c * c;
+                uint32_t dt = ab - cc;
+                float v = (float)(int32_t)dt - (float)(int32_t)ss * coef;
+                out[outrow + x] = v * 0.015625f;
+            }
+        }
+    }
+cleanup:
+    cr_clear_6ptr(d);
+    return status;
 }
 
 /* ---- batch 66: feature/quality check (0x180048ab0) -----------------------
