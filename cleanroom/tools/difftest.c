@@ -1410,6 +1410,55 @@ static void test_gauss_deriv_triple_guarded(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_triple_guarded\n");
 }
 
+/* ---- batch 61: structure-tensor anisotropy image ------------------------- */
+static void test_struct_tensor_aniso(void)
+{
+    typedef int (WINAPI *v_i_pp)(void *, void *);
+    v_i_pp v = (v_i_pp)fn_at(RVA(0x1800331f0));
+    begin("cr_struct_tensor_aniso");
+    int bad = g_fail;
+
+    static int16_t srcv[4096], srcc[4096], dstv[4096], dstc[4096];
+    static u8 sv[0x20], sc[0x20], dv[0x20], dc[0x20];
+
+    for (int t = 0; t < 2000; t++) {
+        int w = 16 + (int)(rnd() % 33u);              /* 16..48 */
+        int h = 16 + (int)(rnd() % 33u);              /* 16..48 */
+
+        for (int i = 0; i < w * h; i++) {
+            int16_t x = (int16_t)rnd();
+            srcv[i] = x; srcc[i] = x;
+        }
+        for (int i = 0; i < 4096; i++)
+            dstv[i] = dstc[i] = (int16_t)0x5A5A;
+
+        mk_img2(sv, srcv, w, h);
+        mk_img2(sc, srcc, w, h);
+        mk_img2(dv, dstv, w, h);
+        mk_img2(dc, dstc, w, h);
+
+        int rv = v(dv, sv);
+        int rc = cr_struct_tensor_aniso((cr_image *)dc, (const cr_image *)sc);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("dst", (const unsigned char *)dstv, (const unsigned char *)dstc,
+                (u32)(w * h * 2), (u32)t);
+    }
+
+    /* non-canonical src must trip the triple's 0x69 guard in both impls */
+    {
+        static int16_t dd[2048];
+        u8 a[0x20], b[0x20], a2[0x20], b2[0x20];
+        for (int i = 0; i < 2048; i++) dd[i] = (int16_t)rnd();
+        mk_img2(a, dd, 24, 24); mk_img2(b, dd, 24, 24);
+        memcpy(a2, a, 0x20); memcpy(b2, b, 0x20);
+        *(int *)(b + 0x18) = 5; *(int *)(b2 + 0x18) = 5;   /* offx != 0 */
+        int rv = v(a, b);
+        int rc = cr_struct_tensor_aniso((cr_image *)a2, (const cr_image *)b2);
+        if (rv != rc) mismatch("ret-bad", 0, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_struct_tensor_aniso\n");
+}
+
 /* ---- batch 68: global bio-context getter --------------------------------- */
 static void test_bio_init(void)
 {
@@ -7799,6 +7848,7 @@ int main(int argc, char **argv)
     test_cordic_atan_q15();
     test_gauss_deriv_triple();
     test_gauss_deriv_triple_guarded();
+    test_struct_tensor_aniso();
     test_bio_init();
     test_bio_get_ctx();
     test_ctx_find_node();

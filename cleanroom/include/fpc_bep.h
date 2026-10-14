@@ -730,5 +730,6 @@ uint32_t cr_box_median_u8(cr_image *out, const cr_image *src,
 /* ---- batch 61: validated 3-output Gaussian-derivative triple ------------- */
 int      cr_gauss_deriv_triple_guarded(void *o1, void *o2, void *o3,
                                        const void *src, float sigma); /* 0x180030070 */
+int      cr_struct_tensor_aniso(cr_image *dst, const cr_image *src); /* 0x1800331f0 */
 
 #endif /* FPC_BEP_H */

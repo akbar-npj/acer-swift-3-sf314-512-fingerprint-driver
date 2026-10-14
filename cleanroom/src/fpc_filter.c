@@ -1473,6 +1473,87 @@ int cr_gaussian_fir_2pass(void *a1, void *a2, float sigma)
     }
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x1800331f0 — structure-tensor anisotropy image, Gaussian-smoothed.
+ *   int fn(cr_image *dst, const cr_image *src)
+ *
+ * Takes w,h from src, builds three w x h int16 scratch descriptors (t0,t1,t2)
+ * and allocates one pool of three 2*w*h-byte blocks into their data fields.
+ * Fills them with the sigma=1.5 Gaussian-derivative triple (t0=Ixx, t2=Ixy,
+ * t1=Iyy), then for each of src->a * h samples forms the 2x2 structure tensor
+ *     M = [[Ixx, Ixy], [Ixy, Iyy]]
+ * and writes its anisotropy into dst:
+ *     b2 = Ixy*Ixy
+ *     if (b2 >= ~1e-12) {           // off-diagonal significant
+ *         s  = (Iyy + Ixx) * 0.5f;  // trace/2
+ *         d  = s*s - (Ixx*Iyy - b2);
+ *         rt = cr_sqrtf(d);
+ *         l1 = s + rt;  l2 = s - rt;
+ *     } else { l1 = Ixx; l2 = Iyy; }
+ *     l1 = fabsf(l1); l2 = fabsf(l2);
+ *     dst[i] = (int16_t)trunc( cr_sqrtf((l1-l2)^2) /
+ *                              cr_sqrtf(l1*l1 + l2*l2) * 16383.0f );
+ * Finally dst is smoothed in place with cr_gaussian_fir_2pass(dst,dst,1.0f).
+ * The scratch pool is always freed; the last stage's status is returned.
+ * ------------------------------------------------------------------------ */
+int cr_struct_tensor_aniso(cr_image *dst, const cr_image *src)
+{
+    int w = src->w, h = src->h;
+    cr_image t0, t1, t2;
+    /* pool header is a 0x10-byte object: {void *base; u8 n; u8 4; u8 pad[6]} */
+    void *hdr[2] = { NULL, NULL };
+    uint32_t r;
+
+    r = cr_image_set(&t0, NULL, w, h); if (r != 0) return (int)r;
+    r = cr_image_set(&t1, NULL, w, h); if (r != 0) return (int)r;
+    r = cr_image_set(&t2, NULL, w, h); if (r != 0) return (int)r;
+
+    int32_t  wh    = w * h;
+    uint32_t bytes = (uint32_t)((int64_t)wh * 2);
+    r = (uint32_t)cr_pool_alloc3(hdr, &t0.data, bytes, &t1.data, bytes,
+                                 &t2.data, bytes);
+    if (r != 0) return (int)r;
+
+    int rr = cr_gauss_deriv_triple_guarded(&t0, &t2, &t1, src, 1.5f);
+    if (rr != 0) {
+        cr_sized_free_if(hdr);
+        return rr;
+    }
+
+    int n = src->a * h;
+    if (n > 0) {
+        const int16_t *pxx = (const int16_t *)t0.data;
+        const int16_t *pyy = (const int16_t *)t1.data;
+        const int16_t *pxy = (const int16_t *)t2.data;
+        int16_t *out = (int16_t *)dst->data;
+        for (int i = 0; i < n; i++) {
+            float a = (float)pyy[i];        /* Iyy */
+            float b = (float)pxy[i];        /* Ixy */
+            float c = (float)pxx[i];        /* Ixx */
+            float l1 = c, l2 = a;
+            float b2 = b * b;
+            if (!(0x1.197998p-40f > b2)) {
+                float s    = (a + c) * 0.5f;
+                float det  = c * a - b2;
+                float disc = s * s - det;
+                float root = cr_sqrtf(disc);
+                l1 = s + root;
+                l2 = s - root;
+            }
+            if (0.0f > l1) l1 = -l1;
+            if (0.0f > l2) l2 = -l2;
+            float num = cr_sqrtf((l1 - l2) * (l1 - l2));
+            float den = cr_sqrtf(l1 * l1 + l2 * l2);
+            float v   = num / den;
+            out[i] = (int16_t)(int)(v * 16383.0f);
+        }
+    }
+
+    rr = cr_gaussian_fir_2pass(dst, dst, 1.0f);
+    cr_sized_free_if(hdr);
+    return rr;
+}
+
 /* ---- batch 66: feature/quality check (0x180048ab0) -----------------------
  * Validates nothing (no early return on inputs); computes a running temporal
  * average of p1[0x10] into one of two (cnt,dst) buffer pairs — selected by
