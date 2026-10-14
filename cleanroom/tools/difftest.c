@@ -1510,6 +1510,71 @@ static void test_fir_ctx_init(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir_ctx_init\n");
 }
 
+/* ---- batch 68: byte-output streaming-FIR ctx initialiser ---------------- */
+static void test_fir_ctx_init_i8(void)
+{
+    typedef int (WINAPI *v_i_ppfii)(void *, const void *, float, int, int);
+    v_i_ppfii v = (v_i_ppfii)fn_at(RVA(0x18003a6b0));
+    v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+    begin("cr_fir_ctx_init_i8");
+    int bad = g_fail;
+
+    enum { MAXD = 8192 };
+    static u8 img[MAXD];
+
+    for (int t = 0; t < 2000; t++) {
+        int w = 4 * (1 + (int)(rnd() % 16));     /* 4..64, multiple of 4 */
+        int h = 3 + (int)(rnd() % 62);
+        int n = 3 + 2 * (int)(rnd() % 7);        /* odd 3..15 */
+        float sigma = (float)(rnd() % 1000) / 500.0f;
+        int flag = (int)(rnd() % 4);
+        int square = (int)(rnd() % 5) != 0;
+        int nooff  = (int)(rnd() % 5) != 0;
+        int unaligned = (int)(rnd() % 8) == 0;   /* break w%4==0 */
+
+        for (int i = 0; i < w * h && i < MAXD; i++)
+            img[i] = (u8)rnd();
+
+        cr_image dv, dc;
+        cr_image_set(&dv, img, w, h);
+        cr_image_set(&dc, img, w, h);
+        if (!square) { dv.a = w + 1; dc.a = w + 1; }
+        if (!nooff)  { dv.offx = 3;  dc.offx = 3; }
+        if (unaligned) {                 /* keep a == w but break w%4==0 */
+            dv.a = w + 1; dv.w = w + 1;
+            dc.a = w + 1; dc.w = w + 1;
+        }
+
+        cr_fir_row_ctx cv, cc;
+        memset(&cv, 0xAA, sizeof cv);
+        memset(&cc, 0xAA, sizeof cc);
+
+        int rv = v(&cv, &dv, sigma, n, flag);
+        int rc = cr_fir_ctx_init_i8(&cc, &dc, sigma, n, flag);
+
+        if (rv != rc) {
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        } else if (rv == 0) {
+            if (cv.n != cc.n || cv.row != cc.row ||
+                cv.coef_off != cc.coef_off || cv.out_off != cc.out_off ||
+                cv.scratch_off != cc.scratch_off)
+                mismatch("ctx", (u32)t, (u32)cv.out_off, (u32)cc.out_off);
+
+            cmp_buf("coef", (u8 *)cv.base, (u8 *)cc.base,
+                    (size_t)(4 * n - 2), (u32)t);
+            cmp_buf("ring", (u8 *)cv.base + 4 * n, (u8 *)cc.base + 4 * n,
+                    (size_t)(w * n), (u32)t);
+            cmp_buf("scr", (u8 *)cv.base + w * n + 4 * n,
+                    (u8 *)cc.base + w * n + 4 * n,
+                    (size_t)(w + n - 1), (u32)t);
+
+            if (cv.base) vsfree(&cv.base);
+            if (cc.base) cr_sized_free(&cc.base);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fir_ctx_init_i8\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7185,6 +7250,7 @@ int main(int argc, char **argv)
     test_bio_get_ctx();
     test_ctx_find_node();
     test_fir_ctx_init();
+    test_fir_ctx_init_i8();
     test_fft_real_n();
     test_obj_init_12fe0();
 
