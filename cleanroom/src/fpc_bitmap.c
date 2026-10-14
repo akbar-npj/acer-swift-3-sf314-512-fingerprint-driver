@@ -490,3 +490,74 @@ int cr_bitmap_centroid(const cr_bitmap_desc *bm, int win_h, int win_w,
 
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003f780 — threshold an int16 image, morphological-open the mask, and
+ * mark the byte image where the opened mask is clear.
+ *
+ *   img    (a1): u8 image; +0x10 w, +0x14 h, +0x08 data
+ *   src    (a2): int16 image sharing img's width; +0x08 data
+ *   thresh (r8d): compared as int16
+ *
+ * Allocates a bitmap of width round_up(w + 12, 32) and height h + 12, sets
+ * bit (j+6, i+6) for every src pixel with `src[i*w+j] < (int16)thresh`, erodes
+ * then dilates it (5 passes each), then writes 0x10 into img[i*w+j] wherever
+ * the opened bitmap bit is clear.  Returns the bitmap-alloc status.
+ * ------------------------------------------------------------------------ */
+int cr_thresh_open_mark(cr_image *img, const cr_image *src, int thresh)
+{
+    const int w = img->w;
+    const int h = img->h;
+    cr_image bmp;
+    int st;
+
+    int w2 = w + 0x2b;
+    if (w2 < 0)
+        w2 = w + 0x4a;
+    w2 &= ~0x1f;
+
+    st = cr_bitmap_alloc((uint32_t *)&bmp, (uint32_t)w2, (uint32_t)(h + 0xc));
+    if (st != 0)
+        return st;
+
+    if (h <= 0) {
+        cr_bitmap_erode(&bmp, &bmp, 5);
+        cr_bitmap_dilate(&bmp, &bmp, 5);
+        cr_cleanup_ptr8_b(&bmp);
+        return st;
+    }
+
+    {
+        const int32_t  stride = bmp.a;              /* desc[0] */
+        uint32_t      *bits   = (uint32_t *)bmp.data;
+        const int16_t *s      = (const int16_t *)src->data;
+        for (int i = 0; i < h; i++) {
+            if (w <= 0)
+                break;
+            for (int j = 0; j < w; j++) {
+                if (s[i * w + j] < (int16_t)thresh) {
+                    int idx = (i + 6) * (int)stride + (j + 6);
+                    bits[idx >> 5] |= 1u << ((j + 6) & 31);
+                }
+            }
+        }
+    }
+
+    cr_bitmap_erode(&bmp, &bmp, 5);
+    cr_bitmap_dilate(&bmp, &bmp, 5);
+
+    {
+        uint8_t *d = (uint8_t *)img->data;
+        for (int i = 0; i < h; i++) {
+            if (w <= 0)
+                break;
+            for (int j = 0; j < w; j++) {
+                if (cr_bitmap_get(&bmp, j + 6, i + 6) == 0)
+                    d[i * w + j] = 0x10;
+            }
+        }
+    }
+
+    cr_cleanup_ptr8_b(&bmp);
+    return st;
+}

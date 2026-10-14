@@ -1867,6 +1867,88 @@ static void test_haar16_orient(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_haar16_orient\n");
 }
 
+/* ---- batch 74: orientation field + threshold/open/mark ------------------ */
+static void test_orient_map_haar(void)
+{
+    typedef int (WINAPI *v_om)(void *, void *, float);
+    v_om v = (v_om)fn_at(RVA(0x18003f970));
+    begin("cr_orient_map_haar");
+    int bad = g_fail;
+
+    enum { MAXW = 12, MAXH = 12, SRCCAP = 8192, NPC = 16 * 16 };
+    static uint8_t srcbuf[SRCCAP];
+    static uint8_t iv[NPC], ic[NPC];
+    static cr_orient_ctx cv, cc;
+    static cr_image sv, sc;
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 8 + (int)(rnd() % (MAXW - 8));   /* 8..11 */
+        int h = 8 + (int)(rnd() % (MAXH - 8));   /* 8..11 */
+        int stride = 4 * w;
+
+        for (int i = 0; i < SRCCAP; i++) srcbuf[i] = (uint8_t)rnd();
+        for (int i = 0; i < NPC; i++) { iv[i] = (uint8_t)rnd(); ic[i] = iv[i]; }
+
+        int offx = (int)(rnd() % 3), offy = (int)(rnd() % 3);
+        int dx = (int)(rnd() % 3), dy = (int)(rnd() % 3);
+        float sigma = (float)(1 + (int)(rnd() % 12)) * 0.5f;
+
+        memset(&cv, 0, sizeof cv); memset(&cc, 0, sizeof cc);
+        cv.img.a = w; cv.img.b = h; cv.img.w = w; cv.img.h = h; cv.img.data = iv;
+        cv.dx = dx; cv.dy = dy;
+        cc.img = cv.img; cc.img.data = ic; cc.dx = dx; cc.dy = dy;
+
+        memset(&sv, 0, sizeof sv); memset(&sc, 0, sizeof sc);
+        sv.a = stride; sv.data = srcbuf; sv.offx = offx; sv.offy = offy;
+        sc = sv;
+
+        int rv = v(&cv, &sv, sigma);
+        int rc = cr_orient_map_haar(&cc, &sc, sigma);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("img", iv, ic, (size_t)(w * h), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_orient_map_haar\n");
+}
+
+static void test_thresh_open_mark(void)
+{
+    typedef int (WINAPI *v_tom)(void *, void *, int);
+    v_tom v = (v_tom)fn_at(RVA(0x18003f780));
+    begin("cr_thresh_open_mark");
+    int bad = g_fail;
+
+    enum { MAXW = 24, MAXH = 24, NPC = 32 * 32 };
+    static int16_t sbuf[NPC];
+    static uint8_t iv[NPC], ic[NPC];
+    static cr_image iv_i, ic_i, sv, sc;
+
+    for (int t = 0; t < 4000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        if (t % 7 == 0) h = -(int)(rnd() % 4);       /* exercise h<=0 */
+        if (t % 9 == 0) w = -(int)(rnd() % 4);       /* exercise w<=0 */
+
+        for (int i = 0; i < NPC; i++) sbuf[i] = (int16_t)rnd();
+        for (int i = 0; i < NPC; i++) { iv[i] = (uint8_t)rnd(); ic[i] = iv[i]; }
+
+        int thresh = (int)(rnd() % 0x10000) - 0x8000;   /* int16 range */
+
+        iv_i.a = w; iv_i.b = h; iv_i.data = iv; iv_i.w = w; iv_i.h = h;
+        iv_i.offx = 0; iv_i.offy = 0;
+        ic_i = iv_i; ic_i.data = ic;
+        memset(&sv, 0, sizeof sv); memset(&sc, 0, sizeof sc);
+        sv.data = sbuf; sv.w = w; sv.h = h;
+        sc = sv;
+
+        int rv = v(&iv_i, &sv, thresh);
+        int rc = cr_thresh_open_mark(&ic_i, &sc, thresh);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (w > 0 && h > 0)
+            cmp_buf("img", iv, ic, (size_t)(w * h), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_thresh_open_mark\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7073,7 +7155,7 @@ static void test_tree_batch58(void)
 
 static void test_tree_batch59(void)
 {
-    typedef void     (WINAPI *p59_v_ppf)(cr_image *, cr_image *, float);
+    typedef int      (WINAPI *p59_v_ppf)(cr_image *, cr_image *, float);
     typedef uint32_t (WINAPI *p59_u_ppiiiii)(cr_image *, const cr_image *,
                                              int, int, int, int);
     typedef uint32_t (WINAPI *p59_u_ppiiiiih)(cr_image *, const cr_image *,
@@ -7097,8 +7179,9 @@ static void test_tree_batch59(void)
             cr_image ai, bi, aci, bci;
             cr_image_set(&ai, av, w, h);  cr_image_set(&bi, bv, w, h);
             cr_image_set(&aci, ac, w, h); cr_image_set(&bci, bc, w, h);
-            v(&ai, &bi, sigma);
-            cr_gauss_blur7_pair(&aci, &bci, sigma);
+            int rv = v(&ai, &bi, sigma);
+            int rc = cr_gauss_blur7_pair(&aci, &bci, sigma);
+            if (rv != rc) { mismatch("gb7-ret", (u32)t, (u32)rv, (u32)rc); continue; }
             cmp_buf("gb7-a", (u8 *)av, (u8 *)ac, sizeof av, (u32)t);
             cmp_buf("gb7-b", (u8 *)bv, (u8 *)bc, sizeof bv, (u32)t);
         }
@@ -7551,6 +7634,8 @@ int main(int argc, char **argv)
     test_bandpass_diff_i8();
     test_bandpass_dispatch();
     test_haar16_orient();
+    test_orient_map_haar();
+    test_thresh_open_mark();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -158,3 +158,43 @@ int cr_haar16_orient(cr_image *re, cr_image *im, const cr_image *src,
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003f970 — per-pixel orientation field from the Haar accumulator.
+ *
+ *   ctx   (a1): a cr_orient_ctx (u8 image + dx@+0x28 / dy@+0x2c)
+ *   src   (a2): source descriptor fed to cr_haar16_orient
+ *   sigma (xmm2): Gaussian blur scale
+ *
+ * Allocates two int16 images of ctx->img's size, fills them with the
+ * (Re, Im) Haar accumulator, blurs both with a 7-tap Gaussian, and (if the
+ * blur reports success) writes the per-pixel orientation angle into
+ * ctx->img via cr_atan2_image_u8.  Returns the first failure status, else the
+ * blur's status (0).  The scratch images are always freed.
+ * ------------------------------------------------------------------------ */
+int cr_orient_map_haar(cr_orient_ctx *ctx, const cr_image *src, float sigma)
+{
+    const int w = ctx->img.w;
+    const int h = ctx->img.h;
+    cr_image a1, a2;
+    int st;
+
+    st = cr_image_alloc_s16((int *)&a1, w, h);
+    if (st != 0)
+        return st;
+
+    st = cr_image_alloc_s16((int *)&a2, w, h);
+    if (st != 0) {
+        cr_cleanup_ptr8_clear(&a1);
+        return st;
+    }
+
+    cr_haar16_orient(&a1, &a2, src, ctx);
+    st = cr_gauss_blur7_pair(&a1, &a2, sigma);
+    if (st == 0)
+        cr_atan2_image_u8(&ctx->img, &a1, &a2);
+
+    cr_cleanup_ptr8_clear(&a1);
+    cr_cleanup_ptr8_clear(&a2);
+    return st;
+}

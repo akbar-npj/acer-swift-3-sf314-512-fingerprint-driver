@@ -192,6 +192,24 @@ void     cr_orient_pick(uint8_t *arr, uint8_t *flag, int *out,
  * `src->a` byte row stride).  src->data origin is offset by pt->{0x28,0x2c}. */
 int      cr_haar16_orient(cr_image *re, cr_image *im, const cr_image *src,
                           const void *pt);                            /* 0x180014e70 */
+
+/* Orientation-map context: a u8 image plus the source point offset consumed by
+ * cr_haar16_orient (dx@+0x28, dy@+0x2c). */
+typedef struct {
+    cr_image img;      /* +0x00 */
+    int32_t  _p[2];    /* +0x20, +0x24 */
+    int32_t  dx;       /* +0x28 */
+    int32_t  dy;       /* +0x2c */
+} cr_orient_ctx;
+
+/* Allocate two int16 scratch images, run cr_haar16_orient + a 7-tap Gaussian
+ * blur, then write the orientation map into ctx->img. */
+int      cr_orient_map_haar(cr_orient_ctx *ctx, const cr_image *src,
+                            float sigma);                             /* 0x18003f970 */
+/* Threshold an int16 image into a bordered bitmap, open it, mark the byte
+ * image where the opened mask is clear. */
+int      cr_thresh_open_mark(cr_image *img, const cr_image *src,
+                             int thresh);                             /* 0x18003f780 */
 float    cr_atan2_deg(float a, float b);                              /* 0x1800391b0 */
 void     cr_sincos_f32(float *out_cos, float *out_sin, float x);      /* 0x18000eca0 */
 
@@ -669,7 +687,7 @@ int      cr_bilinear_angle_sample(const cr_angle_field *d,
                                   int px, int py);                  /* 0x18003e7a0 */
 
 /* ---- batch 59: gaussian-blur wrapper + blit-to-subview wrappers ---------- */
-void     cr_gauss_blur7_pair(cr_image *a, cr_image *b, float sigma); /* 0x180034740 */
+int      cr_gauss_blur7_pair(cr_image *a, cr_image *b, float sigma); /* 0x180034740 */
 uint32_t cr_blit_mirror_s16(cr_image *dst, const cr_image *src,
                             int top, int bottom, int left, int right); /* 0x180024fa0 */
 uint32_t cr_blit_extend_s16(cr_image *dst, const cr_image *src,
