@@ -1949,6 +1949,68 @@ static void test_thresh_open_mark(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_thresh_open_mark\n");
 }
 
+/* ---- 0x18003fe20: quarter-res orientation field + coord-pair resample ---- */
+static void test_angle_field_downsample(void)
+{
+    typedef int (WINAPI *v_afd)(void *, void *, void *);
+    v_afd v = (v_afd)fn_at(RVA(0x18003fe20));
+    begin("cr_angle_field_downsample");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 40, NPC = 64 * 64, CFGN = 0x40 };
+    static uint8_t coords[NPC];       /* in_coords: 2*count (x,y) bytes */
+    static uint8_t av_out[NPC];       /* vendor output buffer */
+    static uint8_t ac_out[NPC];       /* clean output buffer */
+    static int16_t sbuf[NPC];         /* a2 source (sw,sh up to 47) */
+    static cr_image sv, sc;
+    static cr_af_ds_desc av_d, ac_d;  /* a1 descriptor (NOT a cr_image) */
+    static uint8_t cfg[CFGN];
+
+    for (int t = 0; t < 4000; t++) {
+        /* Keep a2 large enough that its quarter field is >= 4x4: the 7-tap
+         * blur reads x[0..2] up front and x[n-1] in its tail, so fields with a
+         * dimension < 4 make the vendor (and any faithful copy) read past the
+         * malloc'd field buffer -- an allocator-dependent result that cannot be
+         * matched bit-for-bit.  The real caller always passes large images. */
+        int sw = 20 + (int)(rnd() % (MAXW - 12));
+        int sh = 20 + (int)(rnd() % (MAXH - 12));
+        int h  = 1 + (int)(rnd() % (MAXH / 2));
+        if (t % 11 == 0) h = 0;            /* exercise count<=0 (no loop) */
+
+        int qw = (sw > 4 ? sw - 4 : sw - 1) >> 2;
+        int qh = (sh > 4 ? sh - 4 : sh - 1) >> 2;
+        if (qw < 1) qw = 1;
+        if (qh < 1) qh = 1;
+
+        /* The resample loop reads 2*count coord bytes (x@2i, y@2i+1) and writes
+         * count angle bytes. Coordinates must stay inside the quarter field (as
+         * the real caller guarantees); out-of-range coords make the vendor
+         * sample out of bounds. */
+        for (int i = 0; i < h * 2; i++)
+            coords[i] = (uint8_t)(rnd() % (uint32_t)(i & 1 ? qh : qw));
+        for (int i = 0; i < NPC; i++) sbuf[i] = (int16_t)rnd();
+        for (int i = 0; i < CFGN; i++) cfg[i] = (uint8_t)rnd();
+        *(float *)(cfg + 0x30) = (float)((rnd() % 1000) * 0.01f - 5.0f);
+
+        memset(av_out, 0, sizeof av_out);
+        memset(ac_out, 0, sizeof ac_out);
+        av_d.in_coords = coords; av_d.pad08 = 0;
+        av_d.out_buf   = av_out; av_d.pad18 = 0; av_d.count = h;
+        ac_d = av_d; ac_d.out_buf = ac_out;
+
+        memset(&sv, 0, sizeof sv); memset(&sc, 0, sizeof sc);
+        sv.data = sbuf; sv.w = sw; sv.h = sh; sv.offx = 0; sv.offy = 0;
+        sc = sv;
+
+        int rv = v(&av_d, &sv, cfg);
+        int rc = cr_angle_field_downsample(&ac_d, &sc, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0 && h > 0)
+            cmp_buf("a1", av_out, ac_out, (size_t)h, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_angle_field_downsample\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -5696,7 +5758,7 @@ static void test_tree_batch52(void)
 
     /* --- cr_image_alloc_quarter (0x180026d00) ------------------------------ */
     {
-        typedef void (WINAPI *v_v_ppii)(cr_image *, int, int);
+        typedef int (WINAPI *v_v_ppii)(cr_image *, int, int);
         v_v_ppii v = (v_v_ppii)fn_at(RVA(0x180026d00));
         begin("cr_image_alloc_quarter");
         int bad = g_fail;
@@ -5706,8 +5768,10 @@ static void test_tree_batch52(void)
             int w = (int)(rnd() % 32u), h = (int)(rnd() % 32u);
             if (rnd() % 8u == 0) w = -(int)(rnd() % 4u);
             if (rnd() % 8u == 0) h = -(int)(rnd() % 4u);
-            v((cr_image *)va, w, h);
-            cr_image_alloc_quarter((cr_image *)ca, w, h);
+            int vr = v((cr_image *)va, w, h);
+            int cr = cr_image_alloc_quarter((cr_image *)ca, w, h);
+            if (vr != cr)
+                mismatch("q-ret", (u32)t, (u32)vr, (u32)cr);
             /* compare descriptor fields, excluding the data pointer at +8
              * (its value necessarily differs between the two allocators) */
             if (memcmp(va, ca, 8) != 0 ||
@@ -7636,6 +7700,7 @@ int main(int argc, char **argv)
     test_haar16_orient();
     test_orient_map_haar();
     test_thresh_open_mark();
+    test_angle_field_downsample();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

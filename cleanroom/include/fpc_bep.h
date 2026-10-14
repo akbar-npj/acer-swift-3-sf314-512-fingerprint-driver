@@ -206,6 +206,24 @@ typedef struct {
  * blur, then write the orientation map into ctx->img. */
 int      cr_orient_map_haar(cr_orient_ctx *ctx, const cr_image *src,
                             float sigma);                             /* 0x18003f970 */
+/* Descriptor for cr_angle_field_downsample (0x18003fe20).  This is NOT a
+ * cr_image: a1 carries two separate caller buffers plus a count.
+ *   +0x00 in_coords : u8 array of 2*count bytes (x@2i, y@2i+1)
+ *   +0x10 out_buf   : u8 array of count bytes (angle>>1 written here)
+ *   +0x20 count     : int32 number of (x,y) coordinate pairs            */
+typedef struct {
+    void    *in_coords;   /* +0x00 */
+    void    *pad08;       /* +0x08 */
+    void    *out_buf;     /* +0x10 */
+    void    *pad18;       /* +0x18 */
+    int32_t  count;       /* +0x20 */
+} cr_af_ds_desc;
+
+/* Build a quarter-resolution orientation field of `a2`, then write `count`
+ * downsampled angles into out_buf by bilinear-sampling that field at the
+ * (x,y) byte pairs stored in in_coords. */
+int      cr_angle_field_downsample(cr_af_ds_desc *a1, const cr_image *a2,
+                                   const void *cfg);                 /* 0x18003fe20 */
 /* Threshold an int16 image into a bordered bitmap, open it, mark the byte
  * image where the opened mask is clear. */
 int      cr_thresh_open_mark(cr_image *img, const cr_image *src,
@@ -528,7 +546,7 @@ void     cr_free_4slot_guard(void *obj);                     /* 0x180046490 */
 void     cr_clear_6ptr(void *obj);                           /* 0x180011890 */
 int      cr_bit_alloc(void **out, int n);                    /* 0x18001f080 */
 int      cr_image_alloc_f32(cr_image *img, int w, int h);    /* 0x18001e8b0 */
-void     cr_image_alloc_quarter(cr_image *img, int w, int h); /* 0x180026d00 */
+int      cr_image_alloc_quarter(cr_image *img, int w, int h); /* 0x180026d00 */
 int      cr_copy_image_fields(void *a, void *b);             /* 0x1800357a0 */
 int      cr_sqrt_q16(uint32_t x);                            /* 0x180038a50 */
 int      cr_u8_to_u16_guarded(cr_image *dst, const cr_image *src,

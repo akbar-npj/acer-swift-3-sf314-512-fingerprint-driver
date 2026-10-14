@@ -852,9 +852,10 @@ int cr_image_alloc_f32(cr_image *img, int w, int h)
  * byte image of size ((w',h') >> 2), where w' = (w >= 4) ? w-4 : w-1 (and
  * likewise for h).  The four fixed fields live at +0x20..+0x2c, which
  * cr_image_alloc_u8 does not touch.
- *   void fn(cr_image *img, int w, int h)
+ *   int fn(cr_image *img, int w, int h)   (tail-call, so it returns the
+ *   cr_image_alloc_u8 status)
  * ------------------------------------------------------------------------ */
-void cr_image_alloc_quarter(cr_image *img, int w, int h)
+int cr_image_alloc_quarter(cr_image *img, int w, int h)
 {
     int32_t *d = (int32_t *)img;
     d[8]  = 0x40;
@@ -863,7 +864,7 @@ void cr_image_alloc_quarter(cr_image *img, int w, int h)
     d[11] = 2;
     int wi = (w - 4 > -1) ? w - 4 : w - 1;
     int hi = (h - 4 > -1) ? h - 4 : h - 1;
-    cr_image_alloc_u8(d, wi >> 2, hi >> 2);
+    return cr_image_alloc_u8(d, wi >> 2, hi >> 2);
 }
 
 /* ------------------------------------------------------------------------ *

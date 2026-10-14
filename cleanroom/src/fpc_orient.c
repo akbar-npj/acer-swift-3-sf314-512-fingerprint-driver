@@ -18,6 +18,7 @@
  * right by one.
  */
 #include "fpc_bep.h"
+#include <string.h>
 
 void cr_orient_pick(uint8_t *arr, uint8_t *flag, int *out,
                     const uint8_t *const *src, const int16_t *coeff,
@@ -197,4 +198,54 @@ int cr_orient_map_haar(cr_orient_ctx *ctx, const cr_image *src, float sigma)
     cr_cleanup_ptr8_clear(&a1);
     cr_cleanup_ptr8_clear(&a2);
     return st;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003fe20 — build a quarter-resolution orientation field of the source
+ * image (a2), then for each of the `count` (x,y) byte pairs in in_coords
+ * bilinear-sample that field and write (angle>>1) into out_buf.
+ *
+ *   int fn(cr_af_ds_desc *a1, const cr_image *a2, const void *cfg):
+ *     cr_orient_ctx q;
+ *     int st = cr_image_alloc_quarter(&q.img, a2->w, a2->h);
+ *     if (st) { cr_sized_free(&a1->out_buf); return st; }
+ *     int r = cr_orient_map_haar(&q, a2, *(float*)((char*)cfg + 0x30));
+ *     if (r) { cr_sized_free(&a1->out_buf); cr_cleanup_ptr8_guard(&q); return r; }
+ *     for (i = 0; i < a1->count; i++) {
+ *         uint8_t x = in_coords[2*i], y = in_coords[2*i+1];
+ *         int ang = cr_bilinear_angle_sample(&q, (x<<4)+8, (y<<4)+8);
+ *         out_buf[i] = (int8_t)(ang >> 1);
+ *     }
+ *     cr_cleanup_ptr8_guard(&q);
+ *     return r;
+ * ------------------------------------------------------------------------ */
+int cr_angle_field_downsample(cr_af_ds_desc *a1, const cr_image *a2,
+                              const void *cfg)
+{
+    cr_orient_ctx q;
+    memset(&q, 0, sizeof q);
+    int st = cr_image_alloc_quarter(&q.img, a2->w, a2->h);
+    if (st != 0) {
+        cr_sized_free(&a1->out_buf);
+        return st;
+    }
+    int r = cr_orient_map_haar(&q, a2,
+                               *(const float *)((const char *)cfg + 0x30));
+    if (r != 0) {
+        cr_sized_free(&a1->out_buf);
+        cr_cleanup_ptr8_guard(&q);
+        return r;
+    }
+    int n = a1->count;
+    const uint8_t *in = (const uint8_t *)a1->in_coords;
+    uint8_t *out = (uint8_t *)a1->out_buf;
+    for (int i = 0; i < n; i++) {
+        int px = ((int)in[2 * i] << 4) + 8;
+        int py = ((int)in[2 * i + 1] << 4) + 8;
+        int ang = cr_bilinear_angle_sample((cr_angle_field *)&q, px, py);
+        /* vendor: sar al, 1 -- arithmetic shift of the *signed low byte* */
+        out[i] = (uint8_t)(int8_t)((int8_t)ang >> 1);
+    }
+    cr_cleanup_ptr8_guard(&q);
+    return r;
 }
