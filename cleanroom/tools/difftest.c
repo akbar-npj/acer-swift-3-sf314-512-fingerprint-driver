@@ -569,6 +569,68 @@ static void test_dot_f32(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_dot_f32\n");
 }
 
+/* ---- FFT forward/inverse (0x18003d490 / 0x1800244a0) ------------------ */
+typedef uint32_t (WINAPI *v_u32_pppu)(float *, const float *, uint32_t);
+
+static void test_fft(void)
+{
+    v_u32_pppu vf = (v_u32_pppu)fn_at(RVA(0x18003d490));
+    v_u32_pppu vi = (v_u32_pppu)fn_at(RVA(0x1800244a0));
+    static const uint32_t ns[] = { 8, 16, 32, 64, 128, 256 };
+
+    for (int k = 0; k < (int)(sizeof ns / sizeof ns[0]); k++) {
+        uint32_t n = ns[k];
+
+        begin("cr_fft_fwd");
+        int bad = g_fail;
+        for (int t = 0; t < 6000; t++) {
+            float inv[512], inc[512], outv[512], outc[512];
+            for (uint32_t i = 0; i < 2u * n; i++) { inv[i] = cr_u2f(rnd()); inc[i] = inv[i]; }
+            memset(outv, 0x55, sizeof outv);
+            memset(outc, 0x55, sizeof outc);
+            uint32_t rv = vf(outv, inv, n);
+            uint32_t rc = cr_fft_fwd(outc, inc, n);
+            if (rv != rc) mismatch("ret", n, rv, rc);
+            cmp_buf("out", (const unsigned char *)outv, (const unsigned char *)outc,
+                    2u * n * sizeof(float), (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_fft_fwd\n");
+
+        begin("cr_fft_inv");
+        bad = g_fail;
+        for (int t = 0; t < 6000; t++) {
+            float inv[512], inc[512], outv[512], outc[512];
+            for (uint32_t i = 0; i < 2u * n; i++) { inv[i] = cr_u2f(rnd()); inc[i] = inv[i]; }
+            memset(outv, 0x55, sizeof outv);
+            memset(outc, 0x55, sizeof outc);
+            uint32_t rv = vi(outv, inv, n);
+            uint32_t rc = cr_fft_inv(outc, inc, n);
+            if (rv != rc) mismatch("ret", n, rv, rc);
+            cmp_buf("out", (const unsigned char *)outv, (const unsigned char *)outc,
+                    2u * n * sizeof(float), (u32)t);
+        }
+        if (g_fail == bad) end(); else printf("  FAIL cr_fft_inv\n");
+    }
+
+    /* invalid sizes: vendor returns 0x69 and leaves out untouched */
+    static const uint32_t badn[] = { 0, 1, 2, 3, 4, 5, 6, 7, 9, 15, 31, 255, 257, 512, 1024 };
+    begin("cr_fft_invalid");
+    int bad = g_fail;
+    for (int t = 0; t < (int)(sizeof badn / sizeof badn[0]); t++) {
+        uint32_t n = badn[t];
+        float inv[1024], inc[1024], outv[1024], outc[1024];
+        for (uint32_t i = 0; i < 1024u; i++) { inv[i] = cr_u2f(rnd()); inc[i] = inv[i]; }
+        memset(outv, 0x55, sizeof outv);
+        memset(outc, 0x55, sizeof outc);
+        uint32_t rv = vf(outv, inv, n);
+        uint32_t rc = cr_fft_fwd(outc, inc, n);
+        if (rv != 0x69u || rc != 0x69u) mismatch("ret_bad", n, rv, rc);
+        cmp_buf("untouched", (const unsigned char *)outv, (const unsigned char *)outc,
+                sizeof outv, n);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fft_invalid\n");
+}
+
 /* ---- batch 4: rect fills, bitmap ops, misc leaves ---------------------- */
 
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
@@ -6101,6 +6163,9 @@ int main(int argc, char **argv)
 
     printf("\n== batch 60: Gaussian-derivative blur pair + box-median filter ==\n");
     test_tree_batch60();
+
+    printf("\n== vendor FFT (fwd/inv) ==\n");
+    test_fft();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

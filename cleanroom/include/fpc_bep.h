@@ -81,6 +81,12 @@ uint32_t cr_clz(uint32_t x);                                           /* 0x1800
 void     cr_sincos(int32_t *a, int32_t *b, uint32_t phase);            /* 0x18001b990 */
 float    cr_dot_f32(const float *a, const float *b, int n);            /* 0x18003b800 */
 
+/* FFT: hybrid radix-4 first stage (fused with bit-reversal) + radix-2 stages.
+ * out/in are interleaved complex arrays of n floats (n*2 floats total).
+ * n must be a power of two in [8,256]; other sizes return 0x69. */
+uint32_t cr_fft_fwd(float *out, const float *in, uint32_t n); /* 0x18003d490 */
+uint32_t cr_fft_inv(float *out, const float *in, uint32_t n); /* 0x1800244a0 */
+
 /* ---- image descriptor -------------------------------------------------- *
  * Matches the vendor layout the leaf functions touch:
  *   +0x00 w   +0x04 h   +0x08 data   +0x10 w   +0x14 h   +0x18 offx +0x1c offy
