@@ -524,6 +524,150 @@ int cr_masked_hist_percentiles_f32(float *out_lo, float *out_hi,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x18002fd40 — masked byte-intensity range from histogram percentiles.
+ *   int fn(int *out_lo, int *out_hi, int *out_count, const cr_image *img,
+ *          const cr_image *bitmap, float frac_lo, float frac_hi, int nbin)
+ *
+ * The byte sibling of cr_masked_hist_percentiles: cr_masked_minmax selects the
+ * pixels via the packed bitmap (a = row stride in bits, offx/offy origin) and
+ * seeds both int outputs with min / max.  If min == max or count <= 0 the
+ * function returns 0.
+ *
+ * An nbin-entry histogram over [min, max] is accumulated from the byte samples
+ * selected by the same bitmap:
+ *     scale = ((nbin - 1) << 10) / (max - min)      (0x400 when max == min)
+ *     bin   = clamp(((v - min) * scale + 0x200) >> 10, 0, nbin - 1)
+ * and the endpoints become the bin-quantised values
+ *     out_lo = min + k_lo*(max - min)/(nbin - 1)
+ *     out_hi = min + k_hi*(max - min)/(nbin - 1)
+ * where k_lo is the first bin whose forward cumulative count exceeds
+ * (int)(frac_lo * count) and k_hi is the last bin whose backward cumulative
+ * count exceeds (int)((1 - frac_hi) * count).  Degenerate paths keep the
+ * vendor's leftover operands (min for k_lo, max for k_hi) exactly.
+ * ------------------------------------------------------------------------ */
+int cr_masked_hist_percentiles_u8(int *out_lo, int *out_hi, int *out_count,
+                                  const cr_image *img, const cr_image *bitmap,
+                                  float frac_lo, float frac_hi, int nbin)
+{
+    int mn, mx;
+    cr_masked_minmax(&mn, &mx, out_count, img, bitmap);
+    int count = *out_count;
+
+    *out_lo = mn;
+    *out_hi = mx;
+    if (mn == mx)
+        return 0;
+    if (count <= 0)
+        return 0;
+
+    int *hist = NULL;
+    int r = cr_malloc_aligned16((void **)&hist, (size_t)((intptr_t)nbin * 4));
+    if (r != 0)
+        return r;
+
+    int nm1 = nbin - 1;
+
+    if (nbin > 0)
+        for (int i = 0; i < nbin; i++)
+            hist[i] = 0;
+
+    int scale = 0x400;
+    if (mx != mn)
+        scale = (int)((int64_t)(int32_t)((uint32_t)nm1 << 10) /
+                      (int64_t)(mx - mn));
+
+    int h = img->h, w = img->w;
+    if (h > 0) {
+        int bstride = bitmap->a;
+        const uint8_t *bm = (const uint8_t *)bitmap->data;
+        const uint8_t *px = (const uint8_t *)img->data;
+        int offx = bitmap->offx, offy = bitmap->offy;
+        int rowbase = 0;
+
+        for (int y = 0; y < h; y++) {
+            if (w > 0) {
+                int base = (offy + y) * bstride;
+                int end  = base + offx + w;
+                for (int eax = base + offx; eax < end; eax++) {
+                    uint32_t word = ((const uint32_t *)bm)[eax >> 5];
+                    if ((word >> ((eax - base) & 31)) & 1u) {
+                        int32_t v = (int32_t)((uint32_t)
+                            ((int32_t)px[rowbase + (eax - base - offx)] - mn) *
+                            (uint32_t)scale);
+                        v = (int32_t)((uint32_t)v + 0x200u);
+                        v >>= 10;
+                        if (v < 0) v = 0;
+                        if (v > nm1) v = nm1;
+                        hist[v]++;
+                    }
+                }
+            }
+            rowbase += w;
+        }
+    }
+
+    int dydx = mx - mn;
+    int lo;
+
+    if (nbin <= 0) {
+        lo = mn + (int)((int64_t)(int32_t)((uint32_t)mn *
+                                           (uint32_t)dydx) / nm1);
+    } else {
+        int target1 = (int)(frac_lo * (float)count);
+        if (target1 < hist[0]) {
+            lo = mn;
+        } else {
+            int cum = hist[0];
+            int k = 1;
+            for (;;) {
+                if (k == nbin) {
+                    lo = mn + (int)((int64_t)(int32_t)((uint32_t)mn *
+                                                       (uint32_t)dydx) / nm1);
+                    break;
+                }
+                int edx = k;
+                cum += hist[k];
+                k++;
+                if (target1 < cum) {
+                    lo = mn + (int)((int64_t)(int32_t)((uint32_t)edx *
+                                                       (uint32_t)dydx) / nm1);
+                    break;
+                }
+            }
+        }
+    }
+
+    int edi = mx;
+    if (nm1 >= 0) {
+        int target2 = (int)((1.0f - frac_hi) * (float)count);
+        int cum = hist[nbin - 1];
+        if (target2 < cum) {
+            edi = nm1;
+        } else {
+            int edx = nm1;
+            int idx = nbin - 2;
+            for (;;) {
+                edx -= 1;
+                if (edx == -1)
+                    break;
+                cum += hist[idx];
+                idx -= 1;
+                if (target2 < cum) {
+                    edi = edx;
+                    break;
+                }
+            }
+        }
+    }
+
+    *out_lo = lo;
+    *out_hi = mn + (int)((int64_t)(int32_t)((uint32_t)edi *
+                                            (uint32_t)dydx) / nm1);
+    cr_sized_free((void **)&hist);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x1800281a0 — in-place 14-bit contrast stretch of an int16 image.
  *   int fn(cr_image *img, const cr_image *mask, int and_mask,
  *          float frac_lo, float frac_hi, int mode)

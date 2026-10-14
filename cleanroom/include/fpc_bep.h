@@ -257,6 +257,10 @@ int      cr_masked_hist_percentiles_f32(float *out_lo, float *out_hi,
                                         const cr_image *mask, uint8_t and_mask,
                                         float frac_lo, float frac_hi,
                                         int nbin);                /* 0x18003c7f0 */
+int      cr_masked_hist_percentiles_u8(int *out_lo, int *out_hi,
+                                       int *out_count, const cr_image *img,
+                                       const cr_image *bitmap, float frac_lo,
+                                       float frac_hi, int nbin);  /* 0x18002fd40 */
 int      cr_stretch_14bit(cr_image *img, const cr_image *mask, int and_mask,
                           float frac_lo, float frac_hi, int mode);  /* 0x1800281a0 */
 int      cr_stretch_f32(cr_image *img, const cr_image *mask, int and_mask,

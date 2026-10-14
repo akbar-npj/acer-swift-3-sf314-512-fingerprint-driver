@@ -2126,6 +2126,63 @@ static void test_hist_percentiles(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_masked_hist_percentiles\n");
 }
 
+/* ---- batch 70b: masked byte-intensity histogram percentiles (0x18002fd40) - */
+static void test_hist_percentiles_u8(void)
+{
+    typedef int (WINAPI *v_hist_u8)(int *, int *, int *, const void *,
+                                    const void *, float, float, int);
+    v_hist_u8 v = (v_hist_u8)fn_at(RVA(0x18002fd40));
+    begin("cr_masked_hist_percentiles_u8");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 40, NP = MAXW * MAXH, MAXW_WORDS = 512 };
+    static uint8_t  pix[NP];
+    static uint32_t bits[MAXW_WORDS];
+    static cr_image img, bm;
+
+    for (int t = 0; t < 6000; t++) {
+        int w = 1 + (int)(rnd() % MAXW);
+        int h = 1 + (int)(rnd() % MAXH);
+        int total = w * h;
+        int mode = (int)(rnd() % 8);
+        int offx = (int)(rnd() % 6);
+        int offy = (int)(rnd() % 6);
+        int stride_bits = (2 + (int)(rnd() % 3)) * 32;   /* 64..128 bits */
+
+        for (int i = 0; i < total; i++) pix[i] = (uint8_t)rnd();
+        if (mode == 1) {                                 /* force min == max */
+            uint8_t c = (uint8_t)rnd();
+            for (int i = 0; i < total; i++) pix[i] = c;
+        }
+        for (int i = 0; i < MAXW_WORDS; i++) bits[i] = rnd();
+        if (mode == 2) {                                 /* force count == 0 */
+            for (int i = 0; i < MAXW_WORDS; i++) bits[i] = 0;
+        }
+
+        float f_lo = (float)(rnd() % 201) / 200.0f;      /* 0.0 .. 1.0 */
+        float f_hi = (float)(rnd() % 201) / 200.0f;
+        int nbin = 2 + (int)(rnd() % 512);               /* nm1 >= 1, no /0 */
+
+        cr_image_set(&img, pix, w, h);
+        cr_image_set(&bm, bits, w, h);
+        bm.a = stride_bits;
+        bm.offx = offx;
+        bm.offy = offy;
+
+        int lo_v = 0x11111111, hi_v = 0x22222222, ct_v = 0x33333333;
+        int lo_c = 0x11111111, hi_c = 0x22222222, ct_c = 0x33333333;
+
+        int rv = v(&lo_v, &hi_v, &ct_v, &img, &bm, f_lo, f_hi, nbin);
+        int rc = cr_masked_hist_percentiles_u8(&lo_c, &hi_c, &ct_c, &img, &bm,
+                                               f_lo, f_hi, nbin);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (lo_v != lo_c) mismatch("lo", (u32)t, (u32)lo_v, (u32)lo_c);
+        if (hi_v != hi_c) mismatch("hi", (u32)t, (u32)hi_v, (u32)hi_c);
+        if (ct_v != ct_c) mismatch("ct", (u32)t, (u32)ct_v, (u32)ct_c);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_hist_percentiles_u8\n");
+}
+
 /* ---- batch 70: in-place 14-bit contrast stretch (0x1800281a0) ---------- */
 static void test_stretch_14bit(void)
 {
@@ -8230,6 +8287,7 @@ int main(int argc, char **argv)
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
+    test_hist_percentiles_u8();
     test_stretch_14bit();
     test_bandpass_diff_i8();
     test_bandpass_dispatch();
