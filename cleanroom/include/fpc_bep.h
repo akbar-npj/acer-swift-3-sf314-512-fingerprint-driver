@@ -315,6 +315,21 @@ typedef struct {
 
 void     cr_saturation_score(int *out, const cr_pixbuf *s);          /* 0x1800356e0 */
 
+/* pointer-array slot descriptor consumed by cr_image_fill_desc (0x180020770):
+ * w/h at +0/+2, a type byte at +6, the source pixel pointer at +0x10. */
+typedef struct {
+    int16_t  w;       /* +0x00 */
+    int16_t  h;       /* +0x02 */
+    uint8_t  pad4[2]; /* +0x04 */
+    uint8_t  type;    /* +0x06 */
+    uint8_t  pad7;    /* +0x07 */
+    uint8_t  pad8[8]; /* +0x08 */
+    void    *src;     /* +0x10 */
+} cr_slot_desc;
+
+int      cr_image_fill_desc(void **arr, int idx, uint8_t shift,
+                            cr_image *dst);                          /* 0x180020770 */
+
 /* ---- batch 16: allocator wrappers -------------------------------------- */
 int      cr_malloc(void **out, size_t size);                         /* 0x180002fe0 */
 void     cr_free(void **p);                                          /* 0x180002fb0 */

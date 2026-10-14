@@ -187,3 +187,65 @@ uint32_t cr_round_dims_pow2(uint32_t *out_w, uint32_t *out_h,
     }
     return (uint32_t)r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180020770 — fill a u16 image from a pointer-array slot descriptor.
+ *   int fn(void **arr, int idx, uint8_t shift, cr_image *dst):
+ *     d = arr[idx];
+ *     if (d == NULL) return 0x69;
+ *     if (d->w != dst->w || d->h != dst->h) return 0x69;
+ *     if (d->type == 0x10) {                      // u16 source
+ *       cr_copy(dst->data, d->src, d->w * d->h * 2);
+ *       out = 0; r = cr_meta_get_u32(arr[idx + 7], 0x148, &out);
+ *       e = (r == 0) ? (int)out - 8 : 4;          // miss forces out := 0xc
+ *       return cr_copy_u16_shl_guarded(dst, dst, (uint8_t)(shift - e));
+ *     }
+ *     if (d->type == 8) {                         // u8 source -> u16
+ *       if (d->w * d->h > 0)
+ *         for (i = 0; i < d->w * d->h; i++)
+ *           ((uint16_t *)dst->data)[i] =
+ *               (uint16_t)(((const uint8_t *)d->src)[i] << (shift & 0x1f));
+ *       return 0;
+ *     }
+ *     return 0x69;
+ * ------------------------------------------------------------------------ */
+int cr_image_fill_desc(void **arr, int idx, uint8_t shift, cr_image *dst)
+{
+    cr_slot_desc *d = (cr_slot_desc *)arr[idx];
+
+    if (d == NULL)
+        return 0x69;
+
+    int w = (int)d->w;
+    int h = (int)d->h;
+
+    if (w != dst->w || h != dst->h)
+        return 0x69;
+
+    if (d->type == 0x10) {
+        cr_copy(dst->data, d->src, w * h * 2);
+
+        uint32_t out = 0;
+        int r = cr_meta_get_u32(arr[idx + 7], 0x148u, &out);
+        int e;
+        if (r == 0) {
+            e = (int)out - 8;
+        } else {
+            out = 0xc;
+            e = 4;
+        }
+        return cr_copy_u16_shl_guarded(dst, dst, (uint8_t)(shift - e));
+    }
+
+    if (d->type == 8) {
+        if (w * h > 0) {
+            const uint8_t *s = (const uint8_t *)d->src;
+            uint16_t *o = (uint16_t *)dst->data;
+            for (int i = 0; i < w * h; i++)
+                o[i] = (uint16_t)(s[i] << (shift & 0x1f));
+        }
+        return 0;
+    }
+
+    return 0x69;
+}
