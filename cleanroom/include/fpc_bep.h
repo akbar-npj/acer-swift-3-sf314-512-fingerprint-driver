@@ -346,6 +346,7 @@ void     cr_sized_free(void **p);                                    /* 0x18003b
 /* ---- batch 17: bitmap morphology (dilate / erode pair) ------------------ */
 void     cr_bitmap_dilate(cr_image *dst, const cr_image *src, int count); /* 0x180024cb0 */
 void     cr_bitmap_erode(cr_image *dst, const cr_image *src, int count);  /* 0x1800220e0 */
+int      cr_bitmap_fill_extents(cr_image *dst, const cr_image *src);      /* 0x18003f060 */
 void     cr_bitmap_extend_border(cr_image *bm, int left, int top,
                                  int right, int bottom);          /* 0x18003cb30 */
 int      cr_mask_boxmax_fir_clear(cr_image *out, const cr_image *src,

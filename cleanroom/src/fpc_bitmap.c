@@ -790,3 +790,101 @@ int cr_bitmap_unpack_boxmax_fir(cr_image *out, const cr_image *src,
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003f060 — fill the bitmap between the extreme set bits, first
+ * vertically (per word-column) then horizontally (per row).
+ *   int fn(cr_image *dst, const cr_image *src):
+ *     require both full (a==w, b==h, offx==offy==0) and same w,h, else 0x69;
+ *     wpr = w >> 5;  tmp = malloc(h * 4);
+ *     Phase 1 (vertical, per word-column c):
+ *        suffix[i] = OR_{j>=i} src[j][c]   (stored into tmp[i]);
+ *        prefix[i] = OR_{j<=i} src[j][c];
+ *        dst[i][c] = suffix[i] & prefix[i];      (bit set iff a set bit lies
+ *                                                 at-or-above and at-or-below i)
+ *     free(tmp);
+ *     Phase 2 (horizontal, per row): leftmost/rightmost nonzero word L/R;
+ *        words (L,R) exclusive get 0xffffffff; word[L] = smear_right(word[L]);
+ *        word[R] = smear_left(word[R]); when L==R: word[L] = smear_left & smear_right.
+ * ------------------------------------------------------------------------ */
+static uint32_t smear_right(uint32_t x)
+{
+    x |= x << 1;
+    x |= x << 2;
+    x |= x << 4;
+    x |= x << 8;
+    x |= x << 16;
+    return x;
+}
+
+static uint32_t smear_left(uint32_t x)
+{
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    return x;
+}
+
+int cr_bitmap_fill_extents(cr_image *dst, const cr_image *src)
+{
+    if (!(src->a == src->w && src->b == src->h &&
+          src->offx == 0 && src->offy == 0 &&
+          dst->a == dst->w && dst->b == dst->h &&
+          dst->offx == 0 && dst->offy == 0 &&
+          dst->w == src->w && dst->h == src->h))
+        return 0x69;
+
+    int w = src->w, h = src->h;
+    int wpr = w >> 5;
+    uint32_t *sp = (uint32_t *)src->data;
+    uint32_t *dp = (uint32_t *)dst->data;
+
+    uint32_t *tmp = NULL;
+    int r = cr_malloc_aligned16((void **)&tmp, (size_t)(h * 4));
+    if (r != 0)
+        return r;
+
+    if (wpr > 0) {
+        for (int c = 0; c < wpr; c++) {
+            uint32_t acc = 0;
+            for (int i = h - 1; i >= 0; i--) {
+                acc |= sp[(long long)i * wpr + c];
+                tmp[i] = acc;
+            }
+            uint32_t pre = 0;
+            for (int i = 0; i < h; i++) {
+                pre |= sp[(long long)i * wpr + c];
+                dp[(long long)i * wpr + c] = tmp[i] & pre;
+            }
+        }
+    }
+
+    cr_sized_free((void **)&tmp);
+
+    for (int row = 0; row < h; row++) {
+        if (wpr > 0) {
+            int L = -1, R = -1;
+            for (int i = 0; i < wpr; i++)
+                if (dp[(long long)row * wpr + i] != 0) {
+                    if (L < 0) L = i;
+                    R = i;
+                }
+            if (L >= 0) {
+                if (L + 1 < R)
+                    for (int i = L + 1; i < R; i++)
+                        dp[(long long)row * wpr + i] = 0xffffffffu;
+                uint32_t sl = smear_left(dp[(long long)row * wpr + R]);
+                uint32_t sr = smear_right(dp[(long long)row * wpr + L]);
+                if (R == L) {
+                    dp[(long long)row * wpr + L] = sl & sr;
+                } else {
+                    dp[(long long)row * wpr + L] = sr;
+                    dp[(long long)row * wpr + R] = sl;
+                }
+            }
+        }
+    }
+    return 0;
+}

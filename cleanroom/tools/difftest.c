@@ -3184,6 +3184,59 @@ static void test_bitmap_unpack_boxmax_fir(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_unpack_boxmax_fir\n");
 }
 
+/* 0x18003f060 — bitmap fill between extreme set bits (vertical then horizontal). */
+static void test_bitmap_fill_extents(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x18003f060));
+    begin("cr_bitmap_fill_extents");
+    int bad = g_fail;
+
+    enum { MAXH = 24, MAXWPR = 4, NW = MAXWPR * MAXH + 16 };
+    static u8 sbuf[NW * 4], dv[NW * 4], dc[NW * 4];
+    static cr_image sv, sc, ov, oc;
+
+    for (int t = 0; t < 20000; t++) {
+        int w = 32 * (1 + (int)(rnd() % MAXWPR));  /* 32,64,96,128 */
+        int h = 1 + (int)(rnd() % MAXH);
+        int wpr = w >> 5;
+        int nwords = wpr * h;
+
+        for (int i = 0; i < nwords * 4; i++) sbuf[i] = (u8)rnd();
+        for (int i = 0; i < nwords * 4; i++) { dv[i] = 0xAA; dc[i] = 0xAA; }
+
+        (void)cr_image_set(&sv, sbuf, w, h);
+        (void)cr_image_set(&sc, sbuf, w, h);
+        (void)cr_image_set(&ov, dv, w, h);
+        (void)cr_image_set(&oc, dc, w, h);
+
+        int rv = v(&ov, &sv);
+        int rc = cr_bitmap_fill_extents(&oc, &sc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", dv, dc, (size_t)(nwords * 4), (u32)t);
+    }
+
+    /* guard-failure paths: a != w or offx/offy set */
+    for (int t = 0; t < 2000; t++) {
+        int w = 32 * (1 + (int)(rnd() % MAXWPR));
+        int h = 1 + (int)(rnd() % MAXH);
+        int wpr = w >> 5;
+        for (int i = 0; i < wpr * h * 4; i++) sbuf[i] = (u8)rnd();
+        (void)cr_image_set(&sv, sbuf, w, h);
+        (void)cr_image_set(&sc, sbuf, w, h);
+        (void)cr_image_set(&ov, dv, w, h);
+        (void)cr_image_set(&oc, dc, w, h);
+        int mode = (int)(rnd() % 3);
+        if (mode == 0) { sv.a = w + 32; sc.a = w + 32; }
+        else if (mode == 1) { sv.offx = 1; sc.offx = 1; }
+        else { ov.h = h + 1; oc.h = h + 1; }
+        int rv = v(&ov, &sv);
+        int rc = cr_bitmap_fill_extents(&oc, &sc);
+        if (rv != rc) mismatch("gret", (u32)t, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_fill_extents\n");
+}
+
 static void test_rect_fills(void)
 {
     v_v_pb  v8  = (v_v_pb) fn_at(RVA(0x1800465a0));
@@ -8698,6 +8751,7 @@ int main(int argc, char **argv)
     test_mask_boxmax_fir_clear();
     test_bitmap_build_masked();
     test_bitmap_unpack_boxmax_fir();
+    test_bitmap_fill_extents();
 
     printf("\n== image slots ==\n");
     test_image_slots();
