@@ -607,6 +607,7 @@ typedef struct {
 
 int      cr_bandpass_diff_i8(cr_image *out, const cr_image *in,
                              const cr_bandpass_cfg *cfg);        /* 0x180019080 */
+int      cr_bandpass_dispatch(cr_image *img, const void *obj);   /* 0x180012f10 */
 int      cr_row_fir_i16(int16_t *out, cr_fir_row_ctx *ctx,
                         const cr_image *img, int target);        /* 0x18002af00 */
 int      cr_row_fir_i8(uint8_t *out, cr_fir_row_ctx *ctx,

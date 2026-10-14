@@ -1625,6 +1625,29 @@ int cr_bandpass_diff_i8(cr_image *out, const cr_image *in,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180012f10 — type-dispatch wrapper for the two-scale band-pass.
+ *   int fn(cr_image *img, const void *obj):
+ *     switch (*(const uint8_t*)obj) {
+ *       case 2: return cr_bandpass_diff_i8(img, img,
+ *                                         (cfg*)((const u8*)obj + 0xe4));
+ *       case 0: return 0;
+ *       default: return 0x69;
+ *     }
+ * The type-2 path runs the band-pass in place (out == in == img).
+ * ------------------------------------------------------------------------ */
+int cr_bandpass_dispatch(cr_image *img, const void *obj)
+{
+    uint8_t t = *(const uint8_t *)obj;
+    if (t == 2)
+        return cr_bandpass_diff_i8(img, img,
+                                   (const cr_bandpass_cfg *)
+                                       ((const uint8_t *)obj + 0xe4));
+    if (t == 0)
+        return 0;
+    return 0x69;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x18003e7a0 — bilinear orientation-field sampler.
  *   int fn(const cr_angle_field *d, int px, int py):
  *     Each byte of the field is an angle phase; the (cos,sin) vector is

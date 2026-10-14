@@ -1768,6 +1768,48 @@ static void test_bandpass_diff_i8(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bandpass_diff_i8\n");
 }
 
+/* ---- batch 72: band-pass type dispatch (0x180012f10) ------------------- */
+static void test_bandpass_dispatch(void)
+{
+    typedef int (WINAPI *v_disp)(void *, void *);
+    v_disp v = (v_disp)fn_at(RVA(0x180012f10));
+    begin("cr_bandpass_dispatch");
+    int bad = g_fail;
+
+    enum { MAXW = 48, MAXH = 32, NP = MAXW * MAXH, CFGBUF = 0x100 };
+    static uint8_t pv[NP], pc[NP];
+    static uint8_t av[CFGBUF], ac[CFGBUF];
+    static cr_image iv, ic;
+
+    for (int t = 0; t < 2000; t++) {
+        int w = 4 * (4 + (int)(rnd() % 9));    /* 16..48, multiple of 4 */
+        int h = 16 + (int)(rnd() % 16);         /* 16..31 */
+        if (rnd() % 6 == 0) h = 4 + (int)(rnd() % 12);   /* sometimes too small */
+
+        for (int i = 0; i < NP; i++) { pv[i] = (uint8_t)rnd(); pc[i] = pv[i]; }
+        for (int i = 0; i < CFGBUF; i++) { av[i] = (uint8_t)rnd(); ac[i] = av[i]; }
+
+        int type = (int)(rnd() % 4);
+        av[0] = (uint8_t)type; ac[0] = (uint8_t)type;
+
+        float s9  = 0.5f + (float)(rnd() % 200) / 100.0f;
+        float s15 = 0.5f + (float)(rnd() % 200) / 100.0f;
+        *(float *)(av + 0xe4) = s9;  *(float *)(ac + 0xe4) = s9;
+        *(float *)(av + 0xe8) = s15; *(float *)(ac + 0xe8) = s15;
+        av[0xf0] = 0; ac[0xf0] = 0;             /* cfg->flag */
+
+        cr_image_set(&iv, pv, w, h);
+        cr_image_set(&ic, pc, w, h);
+
+        int rv = v(&iv, av);
+        int rc = cr_bandpass_dispatch(&ic, ac);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv != 0) continue;
+        cmp_buf("out", pv, pc, (size_t)(w * h), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bandpass_dispatch\n");
+}
+
 /* ---- batch 68: n-point real transform from an (n/2)-point complex FFT --- */
 static void test_fft_real_n(void)
 {
@@ -7450,6 +7492,7 @@ int main(int argc, char **argv)
     test_hist_percentiles();
     test_stretch_14bit();
     test_bandpass_diff_i8();
+    test_bandpass_dispatch();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
