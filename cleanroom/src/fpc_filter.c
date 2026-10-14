@@ -1775,18 +1775,22 @@ int cr_feature_qualify(void *a1, void *a3, float k)
 }
 
 /* ------------------------------------------------------------------------ *
- * 0x18001f2f0 — separable box SUM of a byte image (window k, edge-clamped).
+ * 0x18001f2f0 — separable box SUM of a byte image (window k).
  *   int fn(void **dst_buf, const cr_image *src, int k):
  *     tmp = malloc(w*h);
  *     half = (k - 1) / 2;
- *     tmp[r][c] = (uint8_t) Σ_{d=-half..half} src[r][clamp(c+d, 0, w-1)];
- *     (*dst_buf)[r][c] = (uint8_t) Σ_{d=-half..half} tmp[clamp(r+d, 0, h-1)][c];
- *     free(tmp); return status;
- *   `dst_buf` points at the destination data pointer (the caller passes
- *   &img->data, so src and dst alias; the intermediate tmp makes it safe).
- *   Both passes truncate to a byte (mod 256).  The vendor's pointer walk is
- *   only well defined for w >= k+1 and h >= k+1 (smaller sizes read/write past
- *   the row), which the difftest respects.
+ *     Phase 1 (horizontal, src -> tmp): for each row r, for each col j,
+ *        sum over d=-half..half of BASE[pos(j,d)] where
+ *          pos = j+d;  BASE[neg] = BASE[0] (clamp at left),
+ *                       BASE[>=w] = BASE[w-1] (clamp at right),
+ *                       else BASE[pos].
+ *     Phase 2 (vertical, tmp -> *dst_buf): for each col c, for each row i,
+ *        sum over d=-half..half of TBASE[pos(i,d)] where
+ *          pos = i+d;  TBASE[neg] = TBASE[0] (clamp top),
+ *                       TBASE[>=h] = TBASE[h-1] (clamp bottom),
+ *                       else TBASE[pos].
+ *   Both passes accumulate in 32-bit and truncate to a byte (mod 256) only at
+ *   the final store, matching the vendor's `mov byte [...], al`.
  * ------------------------------------------------------------------------ */
 int cr_box_sum_u8(void **dst_buf, const cr_image *src, int k)
 {
@@ -1801,29 +1805,39 @@ int cr_box_sum_u8(void **dst_buf, const cr_image *src, int k)
     uint8_t *dp = (uint8_t *)*dst_buf;
     uint8_t *tp = (uint8_t *)tmp;
 
+    /* Phase 1 — horizontal (src -> tmp) */
     for (int row = 0; row < h; row++) {
-        for (int c = 0; c < w; c++) {
+        const uint8_t *base = sp + (long long)row * w;
+        const uint8_t edge = base[w - 1];     /* pinned trailing value (last col) */
+        for (int j = 0; j < w; j++) {
             int s = 0;
             for (int d = -half; d <= half; d++) {
-                int cc = c + d;
-                if (cc < 0) cc = 0;
-                else if (cc >= w) cc = w - 1;
-                s += sp[(long long)row * w + cc];
+                int pos = j + d;
+                int v;
+                if (pos < 0)      v = base[0];
+                else if (pos >= w) v = edge;          /* pin to last col */
+                else              v = base[pos];
+                s += v;
             }
-            tp[(long long)row * w + c] = (uint8_t)s;
+            tp[(long long)row * w + j] = (uint8_t)s;
         }
     }
 
-    for (int row = 0; row < h; row++) {
-        for (int c = 0; c < w; c++) {
+    /* Phase 2 — vertical (tmp -> dst) */
+    for (int col = 0; col < w; col++) {
+        const uint8_t *tbase = tp + col;
+        const uint8_t edge = tp[(long long)(h - 1) * w + col];  /* pinned bottom row */
+        for (int i = 0; i < h; i++) {
             int s = 0;
             for (int d = -half; d <= half; d++) {
-                int rr = row + d;
-                if (rr < 0) rr = 0;
-                else if (rr >= h) rr = h - 1;
-                s += tp[(long long)rr * w + c];
+                int pos = i + d;
+                int v;
+                if (pos < 0)      v = tbase[0];            /* clamp top */
+                else if (pos >= h) v = edge;               /* pin to last row */
+                else              v = tbase[(long long)pos * w];
+                s += v;
             }
-            dp[(long long)row * w + c] = (uint8_t)s;
+            dp[(long long)i * w + col] = (uint8_t)s;
         }
     }
 

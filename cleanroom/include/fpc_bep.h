@@ -346,6 +346,9 @@ void     cr_bitmap_dilate(cr_image *dst, const cr_image *src, int count); /* 0x1
 void     cr_bitmap_erode(cr_image *dst, const cr_image *src, int count);  /* 0x1800220e0 */
 void     cr_bitmap_extend_border(cr_image *bm, int left, int top,
                                  int right, int bottom);          /* 0x18003cb30 */
+int      cr_mask_boxmax_fir_clear(cr_image *out, const cr_image *src,
+                                  uint8_t maskbyte, int k, int niter,
+                                  float sigma);                  /* 0x180023900 */
 
 /* ---- batch 18: affine resample + 4-phase FIR --------------------------- */
 /* affine Q15 grid: x = x_org + row*x_row + col*x_col, y likewise */

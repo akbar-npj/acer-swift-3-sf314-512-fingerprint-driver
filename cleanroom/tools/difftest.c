@@ -3018,6 +3018,47 @@ static void test_grad_score_from_desc(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_grad_score_from_desc\n");
 }
 
+/* 0x180023900 — masked bitmap: box-sum, threshold, FIR, bit-2 clear. */
+static void test_mask_boxmax_fir_clear(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, uint8_t, int, int, float);
+    v_t v = (v_t)fn_at(RVA(0x180023900));
+    begin("cr_mask_boxmax_fir_clear");
+    int bad = g_fail;
+
+    enum { MAXW = 28, MAXH = 28, NP = MAXW * MAXH };
+    static u8 sv[NP + 64], sc[NP + 64];
+    static u8 ov[NP + 64], oc[NP + 64];
+    static cr_image sv_img, sc_img, ov_img, oc_img;
+
+    for (int t = 0; t < 20000; t++) {
+        int w = 4 + (int)(rnd() % (MAXW - 4));
+        int h = 4 + (int)(rnd() % (MAXH - 4));
+        uint8_t maskbyte = (uint8_t)(rnd() & 0xff);
+        int k = 1 + 2 * (int)(rnd() % 6);          /* odd: 1,3,5,7,9,11 */
+        if (k >= w) k = w - 1;
+        if (k >= h) k = h - 1;
+        if ((k & 1) == 0) k--;
+        int niter = (int)(rnd() % 4);
+        float sigma = (float)(rnd() % 1000) / 500.0f;
+
+        for (int i = 0; i < NP; i++) { sv[i] = (u8)rnd(); sc[i] = sv[i]; }
+        memset(ov, 0xAA, sizeof ov); memset(oc, 0xAA, sizeof oc);
+
+        cr_image_set(&sv_img, sv, w, h);
+        cr_image_set(&sc_img, sc, w, h);
+        cr_image_set(&ov_img, ov, w, h);
+        cr_image_set(&oc_img, oc, w, h);
+
+        int rv = v(&ov_img, &sv_img, maskbyte, k, niter, sigma);
+        int rc = cr_mask_boxmax_fir_clear(&oc_img, &sc_img, maskbyte, k,
+                                          niter, sigma);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", ov, oc, (size_t)(w * h), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_mask_boxmax_fir_clear\n");
+}
+
 static void test_rect_fills(void)
 {
     v_v_pb  v8  = (v_v_pb) fn_at(RVA(0x1800465a0));
@@ -8482,7 +8523,6 @@ int main(int argc, char **argv)
         return 0;
     }
 
-
     if (argc > 2 && strcmp(argv[2], "probe_lf") == 0) {
         /* Empirical tap geometry of 0x1800433b0 (7-tap vertical FIR).
          * in[r*n+c] = r+1, cfg[tap] = 32767  =>  out[orow*n+c] = input_row+1
@@ -8529,6 +8569,7 @@ int main(int argc, char **argv)
     test_metadata();
     test_image_fill_desc();
     test_grad_score_from_desc();
+    test_mask_boxmax_fir_clear();
 
     printf("\n== image slots ==\n");
     test_image_slots();

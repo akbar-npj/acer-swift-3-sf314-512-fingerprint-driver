@@ -651,3 +651,63 @@ int cr_thresh_open_mark(cr_image *img, const cr_image *src, int thresh)
     cr_cleanup_ptr8_b(&bmp);
     return st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180023900 — build a binary bitmap from a masked source, box-sum it,
+ * threshold at a full k*k window, optionally blur with a 7-tap FIR, then
+ * clear pixels whose source lacks bit 2.
+ *   int fn(cr_image *out, const cr_image *src, uint8_t maskbyte, int k,
+ *          int niter, float sigma):
+ *     n = src->h * src->w;
+ *     if (n > 0) for i: out->data[i] = (src->data[i] & maskbyte) ? 1 : 0;
+ *     if ((k & 1) == 0) return 0x69;
+ *     r = cr_box_sum_u8(&out->data, out, k);  if (r) return r;
+ *     if (n > 0) { kk = k*k; for i: out->data[i] = (out->data[i]==(uint8_t)kk)?0xff:0; }
+ *     if (niter > 0) for j: { r = cr_fir7_image_u8(out, out, sigma); if (r) return r; }
+ *     if (n > 0) for i: if ((src->data[i] & 4) == 0) out->data[i] = 0;
+ *     return 0;
+ * ------------------------------------------------------------------------ */
+int cr_mask_boxmax_fir_clear(cr_image *out, const cr_image *src,
+                             uint8_t maskbyte, int k, int niter, float sigma)
+{
+    int n = src->h * src->w;
+
+    if (n > 0) {
+        const uint8_t *s = (const uint8_t *)src->data;
+        uint8_t *o = (uint8_t *)out->data;
+        for (int i = 0; i < n; i++)
+            o[i] = (uint8_t)((s[i] & maskbyte) ? 1 : 0);
+    }
+
+    if ((k & 1) == 0)
+        return 0x69;
+
+    int r = cr_box_sum_u8(&out->data, out, k);
+    if (r != 0)
+        return r;
+
+    if (n > 0) {
+        uint8_t *o = (uint8_t *)out->data;
+        int kk = k * k;
+        for (int i = 0; i < n; i++)
+            o[i] = (o[i] == (uint8_t)kk) ? 0xff : 0;
+    }
+
+    if (niter > 0) {
+        for (int j = 0; j < niter; j++) {
+            r = cr_fir7_image_u8(out, out, sigma);
+            if (r != 0)
+                return r;
+        }
+    }
+
+    if (n > 0) {
+        const uint8_t *s = (const uint8_t *)src->data;
+        uint8_t *o = (uint8_t *)out->data;
+        for (int i = 0; i < n; i++)
+            if ((s[i] & 4) != 0)
+                o[i] = 0;
+    }
+
+    return 0;
+}
