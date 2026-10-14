@@ -1110,6 +1110,80 @@ void cr_splat_accum16(const float *pts, const float *alpha,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180021700 — streaming-FIR context initialiser + ring prefetch.
+ *   int fn(cr_fir_row_ctx *ctx, const cr_image *img, float sigma, int n, int flag)
+ *
+ * Validates a square, offset-free image with w == a, h == b, w >= n, h >= n,
+ * an odd tap count n > 2 and (flag & 0xff) == 0, else returns 1.
+ * Zeroes the 32-byte ctx, then allocates
+ *   size = 2*n*(w+2) + 2*(w+n-1)
+ * bytes and lays the workspace out as
+ *   +0        int16 coef[n] (+ mirror copy coef[n..2n-2] = coef[0..n-2])
+ *   +4n       int16 ring[n rows of width w]
+ *   +2n*(w+2) uint16 scratch for cr_u8_expand_convolve
+ * setting ctx->{n,row=-1,base,coef_off=0,out_off=4n,scratch_off=2n*(w+2)}.
+ * The ring is pre-filled: rows n/2..n-1 receive the horizontal FIR of source
+ * rows 0..n/2, and rows 0..n/2-1 are the vertical mirror of rows n-1..n/2+1.
+ * Returns 0 on success.
+ * ------------------------------------------------------------------------ */
+int cr_fir_ctx_init(cr_fir_row_ctx *ctx, const cr_image *img, float sigma,
+                    int n, int flag)
+{
+    if (!(img->a == img->w && img->b == img->h))
+        return 1;
+    if (img->offx != 0 || img->offy != 0)
+        return 1;
+    if (n <= 2)
+        return 1;
+    if ((n & 1) == 0)
+        return 1;
+    if (img->w < n)
+        return 1;
+    if (img->h < n)
+        return 1;
+    if ((flag & 0xff) != 0)
+        return 1;
+
+    int w = img->w;
+    cr_fill(ctx, 0, 0x20);
+
+    int size32 = 2 * n * (w + 2) + 2 * (w + n - 1);
+    size_t size = (size_t)(intptr_t)size32;
+    int r = cr_malloc_aligned16(&ctx->base, size);
+    if (r != 0)
+        return r;
+
+    uint8_t  *base = (uint8_t *)ctx->base;
+    int16_t  *coef = (int16_t *)base;                 /* coef_off = 0        */
+    int16_t  *ring = (int16_t *)(base + 4 * n);       /* out_off  = 4n       */
+    uint16_t *scr  = (uint16_t *)(base + 2 * n * (w + 2));
+
+    ctx->n           = n;
+    ctx->row         = -1;
+    ctx->coef_off    = 0;
+    ctx->out_off     = 4 * n;
+    ctx->scratch_off = 2 * n * (w + 2);
+
+    cr_gaussian_window_q15(coef, sigma, n);
+    for (int i = 0; i < n - 1; i++)
+        coef[n + i] = coef[i];
+
+    int h = n >> 1;
+    for (int i = 0; i <= h; i++) {
+        cr_u8_expand_convolve(ring + (size_t)(h + i) * w, scr,
+                              (const uint8_t *)img->data + (size_t)i * w,
+                              coef, w, n);
+    }
+    for (int k = 0; k < h; k++) {
+        int16_t *src = ring + (size_t)(n - 1 - k) * w;
+        int16_t *dst = ring + (size_t)k * w;
+        for (int j = 0; j < w; j++)
+            dst[j] = src[j];
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x18002af00 / 0x180010440 — streaming vertical FIR, one output row per call.
  *
  *   int fn(<i16|i8> *out, cr_fir_row_ctx *ctx, const cr_image *img, int target);

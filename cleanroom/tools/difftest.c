@@ -1450,6 +1450,66 @@ static void test_ctx_find_node(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_ctx_find_node\n");
 }
 
+/* ---- batch 68: streaming-FIR context initialiser ----------------------- */
+static void test_fir_ctx_init(void)
+{
+    typedef int (WINAPI *v_i_ppfii)(void *, const void *, float, int, int);
+    v_i_ppfii v = (v_i_ppfii)fn_at(RVA(0x180021700));
+    v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+    begin("cr_fir_ctx_init");
+    int bad = g_fail;
+
+    enum { MAXD = 8192 };
+    static u8 img[MAXD];
+
+    for (int t = 0; t < 2000; t++) {
+        int w = 3 + (int)(rnd() % 62);           /* 3..64 */
+        int h = 3 + (int)(rnd() % 62);
+        int n = 3 + 2 * (int)(rnd() % 7);        /* odd 3..15 */
+        float sigma = (float)(rnd() % 1000) / 500.0f;
+        int flag = (int)(rnd() % 4);
+        int square = (int)(rnd() % 5) != 0;      /* usually a==w, b==h */
+        int nooff  = (int)(rnd() % 5) != 0;
+
+        for (int i = 0; i < w * h && i < MAXD; i++)
+            img[i] = (u8)rnd();
+
+        cr_image dv, dc;
+        cr_image_set(&dv, img, w, h);
+        cr_image_set(&dc, img, w, h);
+        if (!square) { dv.a = w + 1; dc.a = w + 1; }
+        if (!nooff)  { dv.offx = 3;  dc.offx = 3; }
+
+        cr_fir_row_ctx cv, cc;
+        memset(&cv, 0xAA, sizeof cv);
+        memset(&cc, 0xAA, sizeof cc);
+
+        int rv = v(&cv, &dv, sigma, n, flag);
+        int rc = cr_fir_ctx_init(&cc, &dc, sigma, n, flag);
+
+        if (rv != rc) {
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        } else if (rv == 0) {
+            if (cv.n != cc.n || cv.row != cc.row ||
+                cv.coef_off != cc.coef_off || cv.out_off != cc.out_off ||
+                cv.scratch_off != cc.scratch_off)
+                mismatch("ctx", (u32)t, (u32)cv.out_off, (u32)cc.out_off);
+
+            cmp_buf("coef", (u8 *)cv.base, (u8 *)cc.base,
+                    (size_t)(4 * n - 2), (u32)t);
+            cmp_buf("ring", (u8 *)cv.base + 4 * n, (u8 *)cc.base + 4 * n,
+                    (size_t)(2 * n * w), (u32)t);
+            cmp_buf("scr", (u8 *)cv.base + 2 * n * (w + 2),
+                    (u8 *)cc.base + 2 * n * (w + 2),
+                    (size_t)(2 * (w + n - 1)), (u32)t);
+
+            if (cv.base) vsfree(&cv.base);
+            if (cc.base) cr_sized_free(&cc.base);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fir_ctx_init\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -7008,6 +7068,7 @@ int main(int argc, char **argv)
     test_bio_init();
     test_bio_get_ctx();
     test_ctx_find_node();
+    test_fir_ctx_init();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

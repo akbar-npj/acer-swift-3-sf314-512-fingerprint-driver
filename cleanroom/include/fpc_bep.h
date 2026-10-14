@@ -578,6 +578,8 @@ typedef struct {
     int32_t scratch_off;
 } cr_fir_row_ctx;
 
+int      cr_fir_ctx_init(cr_fir_row_ctx *ctx, const cr_image *img,
+                         float sigma, int n, int flag);          /* 0x180021700 */
 int      cr_row_fir_i16(int16_t *out, cr_fir_row_ctx *ctx,
                         const cr_image *img, int target);        /* 0x18002af00 */
 int      cr_row_fir_i8(uint8_t *out, cr_fir_row_ctx *ctx,
