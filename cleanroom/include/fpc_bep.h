@@ -597,6 +597,8 @@ void     cr_free_4slot_clear1(void *obj);                    /* 0x18003f940 */
 void     cr_free_3ptr_and8(void **a, void *b);               /* 0x1800140d0 */
 void     cr_free_9slot_clear6(void *obj);                    /* 0x180012f70 */
 int      cr_alloc_60_init(void **slot);                      /* 0x180038820 */
+int      cr_obj_ctor_20aa0(void *obj, void *buf, void *arg3, void *arg4,
+                           int arg5, const void *desc);       /* 0x180020aa0 */
 uint32_t cr_round_dims_pow2(uint32_t *out_w, uint32_t *out_h,
                             uint32_t w, uint32_t h, const void *cfg); /* 0x180027730 */
 void     cr_norm_corr_score(int *out, void *const *p2,

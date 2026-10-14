@@ -849,6 +849,86 @@ static void test_pixel_buf_setup(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_pixel_buf_setup\n");
 }
 
+/* ---- batch 65: object constructor (0x180020aa0) ------------------------ */
+static void test_obj_ctor_20aa0(void)
+{
+    typedef int (WINAPI *v_i_ppppip)(void *, void *, void *, void *, int, const void *);
+    v_i_ppppip v = (v_i_ppppip)fn_at(RVA(0x180020aa0));
+    v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+    begin("cr_obj_ctor_20aa0");
+    int bad = g_fail;
+    for (int t = 0; t < 8000; t++) {
+        static u8 desc[0x30];
+        static u8 ov[0x60], oc[0x60];
+        static u8 bufv[0x50], bufc[0x50];
+        for (size_t i = 0; i < sizeof desc; i++) desc[i] = (u8)rnd();
+        u8 sel = (rnd() % 2u) ? 2 : 5;
+        desc[0x24] = sel;
+        if (sel == 5) {
+            *(int32_t *)(desc + 0x14) = (int32_t)(rnd() % 32u) + 1;
+            desc[0x25] = (u8)(rnd() % 8u) + 1;
+            desc[0x26] = (u8)(rnd() % 8u) + 1;
+        } else {
+            *(int16_t *)(desc + 0x10) = (int16_t)((rnd() % 32u) + 1);
+        }
+        void *a3 = (void *)(uintptr_t)(0x1000 + (rnd() & 0xfffu));
+        void *a4 = (void *)(uintptr_t)(0x2000 + (rnd() & 0xfffu));
+        int a5 = (int)(rnd() % 0x1000u);
+
+        memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
+        memset(bufv, 0xA5, sizeof bufv); memset(bufc, 0xA5, sizeof bufc);
+        int rv = v(ov, bufv, a3, a4, a5, desc);
+        int rc = cr_obj_ctor_20aa0(oc, bufc, a3, a4, a5, desc);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        /* scalar fields the function is known to write (4-byte each) */
+        uint32_t fv, fc;
+        #define CMPFIELD(off) do { \
+            fv = *(uint32_t *)(ov + (off)); fc = *(uint32_t *)(oc + (off)); \
+            if (fv != fc) mismatch("f" #off, (u32)t, fv, fc); \
+        } while (0)
+        CMPFIELD(0x30); CMPFIELD(0x34); CMPFIELD(0x38); CMPFIELD(0x3c);
+        CMPFIELD(0x40); CMPFIELD(0x48); CMPFIELD(0x4c);
+        #undef CMPFIELD
+        /* pointer slots: compare nullness only */
+        if ((*(void **)(ov + 0x00) != NULL) != (*(void **)(oc + 0x00) != NULL))
+            mismatch("p0", (u32)t, 0, 0);
+        if ((*(void **)(ov + 0x08) != NULL) != (*(void **)(oc + 0x08) != NULL))
+            mismatch("p8", (u32)t, 0, 0);
+        if ((*(void **)(ov + 0x10) != NULL) != (*(void **)(oc + 0x10) != NULL))
+            mismatch("p10", (u32)t, 0, 0);
+        if ((*(void **)(ov + 0x18) != NULL) != (*(void **)(oc + 0x18) != NULL))
+            mismatch("p18", (u32)t, 0, 0);
+        if ((*(void **)(ov + 0x20) != NULL) != (*(void **)(oc + 0x20) != NULL))
+            mismatch("p20", (u32)t, 0, 0);
+        if ((*(void **)(ov + 0x28) != NULL) != (*(void **)(oc + 0x28) != NULL))
+            mismatch("p28", (u32)t, 0, 0);
+        /* case 5: compare the records buffer at +0x00 */
+        if (sel == 5 && rv == 0 && *(void **)(ov + 0x00)) {
+            int total = (int)desc[0x25] * (int)desc[0x26];
+            cmp_buf("records", *(void **)(ov + 0x00), *(void **)(oc + 0x00),
+                    (u32)(8u * (uint32_t)total), (u32)t);
+            vsfree((void **)(ov + 0x00)); cr_sized_free((void **)(oc + 0x00));
+            vsfree((void **)(ov + 0x18)); cr_sized_free((void **)(oc + 0x18));
+        }
+        if (sel == 2 && rv == 0) {
+            if (*(void **)(ov + 0x20)) { vsfree((void **)(ov + 0x20)); cr_sized_free((void **)(oc + 0x20)); }
+            if (*(void **)(ov + 0x28)) { vsfree((void **)(ov + 0x28)); cr_sized_free((void **)(oc + 0x28)); }
+        }
+    }
+    /* invalid selector -> 0x69 */
+    {
+        static u8 desc[0x30];
+        for (size_t i = 0; i < sizeof desc; i++) desc[i] = (u8)rnd();
+        desc[0x24] = 3;  /* != 2, != 5 */
+        static u8 ov[0x60], oc[0x60], bufv[0x50], bufc[0x50];
+        memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
+        int rv = v(ov, bufv, NULL, NULL, 0, desc);
+        int rc = cr_obj_ctor_20aa0(oc, bufc, NULL, NULL, 0, desc);
+        if (rv != rc) mismatch("ret-bad", 0, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_obj_ctor_20aa0\n");
+}
+
 /* build an image descriptor: a@+0, data@+8, w@+0x10, h@+0x14, offx@+0x18, offy@+0x1c */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h, int offx, int offy)
 {
@@ -6394,6 +6474,9 @@ int main(int argc, char **argv)
     printf("\n== batch 64: image-data dump + pixel-buffer setup ==\n");
     test_image_data_dump();
     test_pixel_buf_setup();
+
+    printf("\n== batch 65: object constructor (0x180020aa0) ==\n");
+    test_obj_ctor_20aa0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

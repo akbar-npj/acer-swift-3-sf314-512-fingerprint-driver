@@ -1026,3 +1026,88 @@ int cr_alloc_60_init(void **slot)
     }
     return r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180020aa0 — object constructor driven by a template descriptor.
+ *   int fn(void *obj, void *buf, void *arg3, void *arg4, int arg5,
+ *           const void *desc)
+ *
+ * Zeroes the 0x50-byte `buf`, clears the four sized-pointer slots of `obj`
+ * (+0x00, +0x18, +0x20, +0x28) and stores arg5 at +0x4c.  Then, based on the
+ * byte at desc+0x24:
+ *   sel == 2: allocate +0x20 (2*w10) and +0x28 (4*w10) from the int16 at
+ *             desc+0x10 (w10); store arg3/arg4 at +0x08/+0x10 and w10 at +0x48.
+ *             First allocation failing is tolerated (returns 0); a second
+ *             failure frees the object and returns the allocator error.
+ *   sel == 5: allocate +0x18 (2*d14, d14 = (int)desc+0x14) and +0x00
+ *             (8*b25*b26, b25 = desc+0x25, b26 = desc+0x26); fill the +0x00
+ *             buffer with 8-byte records {u16=0, u16=0xFFFF, float=1.0f}.
+ *             Store b25/+0x30, b26/+0x34, d14/+0x48.  A second-allocation
+ *             failure frees the object and returns the allocator error.
+ *   else: return 0x69.
+ * ------------------------------------------------------------------------ */
+int cr_obj_ctor_20aa0(void *obj, void *buf, void *arg3, void *arg4, int arg5,
+                       const void *desc)
+{
+    uint8_t *o = (uint8_t *)obj;
+    const uint8_t *d = (const uint8_t *)desc;
+
+    cr_fill(buf, 0, 0x50);
+    *(void **)(o + 0x00) = NULL;
+    *(void **)(o + 0x18) = NULL;
+    *(void **)(o + 0x20) = NULL;
+    *(void **)(o + 0x28) = NULL;
+    *(int *)(o + 0x4c) = arg5;
+
+    uint8_t sel = d[0x24];
+    if (sel == 2) {
+        int w10 = (int16_t)*(const uint16_t *)(d + 0x10);
+        *(uint32_t *)(o + 0x30) = 0;
+        *(uint32_t *)(o + 0x34) = 0;
+        *(uint32_t *)(o + 0x38) = 0;
+        *(uint32_t *)(o + 0x3c) = 0;
+        *(uint32_t *)(o + 0x40) = 0;
+        *(void **)(o + 0x08) = arg3;
+        *(void **)(o + 0x10) = arg4;
+        *(int *)(o + 0x48) = w10;
+        if (cr_malloc_aligned16((void **)(o + 0x20),
+                                (size_t)(uint32_t)(2u * (uint32_t)w10)) != 0)
+            return 0;                       /* tolerated */
+        if (cr_malloc_aligned16((void **)(o + 0x28),
+                                (size_t)(uint32_t)(4u * (uint32_t)w10)) != 0) {
+            cr_free_4slot(obj);
+            return 2;                        /* allocator error code */
+        }
+        return 0;
+    } else if (sel == 5) {
+        uint8_t b25 = d[0x25];
+        uint8_t b26 = d[0x26];
+        int d14 = *(const int32_t *)(d + 0x14);
+        *(void **)(o + 0x08) = arg3;
+        *(void **)(o + 0x10) = arg4;
+        *(uint32_t *)(o + 0x48) = (uint32_t)d14;
+        *(uint32_t *)(o + 0x30) = b25;
+        *(uint32_t *)(o + 0x34) = b26;
+        *(uint32_t *)(o + 0x40) = 0;
+        if (cr_malloc_aligned16((void **)(o + 0x18),
+                                (size_t)(uint32_t)(2u * (uint32_t)d14)) != 0)
+            return 0;                        /* tolerated */
+        int total = (int)b25 * (int)b26;
+        if (cr_malloc_aligned16((void **)(o + 0x00),
+                                (size_t)(uint32_t)(8u * (uint32_t)(uint32_t)total)) != 0) {
+            cr_free_4slot(obj);
+            return 2;                        /* allocator error code */
+        }
+        uint8_t *base = (uint8_t *)*(void **)(o + 0x00);
+        for (int r = 0; r < (int)b26; r++) {
+            for (int c = 0; c < (int)b25; c++) {
+                uint8_t *rec = base + (r * (int)b25 + c) * 8;
+                *(uint16_t *)(rec + 0) = 0;
+                *(uint16_t *)(rec + 2) = 0xFFFFu;
+                *(float   *)(rec + 4) = 1.0f;
+            }
+        }
+        return 0;
+    }
+    return 0x69u;
+}
