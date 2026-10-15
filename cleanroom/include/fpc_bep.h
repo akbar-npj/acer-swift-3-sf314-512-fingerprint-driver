@@ -890,5 +890,8 @@ uint64_t cr_block_conv_231a0(int16_t *out, const intptr_t *ptrs,
 uint64_t cr_structure_tensor_score_img(int16_t *out, int *geo,
                                        const cr_image *src,
                                        uint64_t param_4);         /* 0x180044270 */
+int      cr_template_ncc_35150(int16_t *out, const int16_t *data,
+                               const int16_t *ref, uint32_t radius,
+                               int w, int rows);                 /* 0x180035150 */
 
 #endif /* FPC_BEP_H */

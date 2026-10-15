@@ -3906,6 +3906,39 @@ static void test_structure_tensor_score_img(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_structure_tensor_score_img\n");
 }
 
+/* ---- batch 73d: column-major template NCC (0x180035150) ----------------- */
+static void test_template_ncc_35150(void)
+{
+    typedef int (WINAPI *fn_t)(int16_t *, int16_t *, int16_t *, uint32_t, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x180035150));
+    begin("cr_template_ncc_35150");
+    int bad = g_fail;
+
+    static int16_t data[256 * 16];
+    static int16_t ref[64];
+    static int16_t ov[256 * 16], oc[256 * 16];
+
+    for (int t = 0; t < 3000; t++) {
+        int w    = 4 + (int)(rnd() % 13u);              /* 4..16   */
+        int rows = 8 + (int)(rnd() % 60u);              /* 8..67   */
+        int radius = (int)(rnd() % (uint32_t)(rows + 1));/* 0..rows  */
+        for (int i = 0; i < w * rows; i++)
+            data[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+        for (int i = 0; i < radius; i++)
+            ref[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+
+        memset(ov, 0, sizeof ov);
+        memset(oc, 0, sizeof oc);
+        int rv = v(ov, data, ref, (uint32_t)radius, w, rows);
+        int rc = cr_template_ncc_35150(oc, data, ref, (uint32_t)radius, w, rows);
+        if (rv != rc)
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("out", (const unsigned char *)ov, (const unsigned char *)oc,
+                (u32)(w * rows * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_template_ncc_35150\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -10170,6 +10203,7 @@ int main(int argc, char **argv)
     test_structure_tensor_score();
     test_block_conv_231a0();
     test_structure_tensor_score_img();
+    test_template_ncc_35150();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
