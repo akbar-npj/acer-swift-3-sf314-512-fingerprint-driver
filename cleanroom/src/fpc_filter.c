@@ -2642,3 +2642,52 @@ int cr_linear_softmax2(float *out, const int *desc, const int *in_desc,
     }
     return st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180016bd0 — normalize an int16 image, then run the chain classifier.
+ *   int fn(float *out, const int *chain, const void *src_desc, int off,
+ *          int row)
+ *
+ * The image geometry is taken from the first chain stage: H = stages[1],
+ * W = stages[2] where stages = *(void**)((char*)chain + 0x8).  Allocates a
+ * W x H float image, then fills it with
+ *   img[row*W + c] = (float)(((int)src[idx + c] + 0x20) >> 6) / 255.0f
+ * where src = *(int16_t**)((char*)src_desc + 0x8), stride =
+ * *(int*)((char*)src_desc + 0x10) and idx = row_arg*stride + off (advancing by
+ * `stride` per image row).  Then runs cr_linear_softmax2(out, chain, &img, 0,
+ * 0), frees the image and returns that status (an allocator failure returns
+ * before the classifier).  The `>>` is an arithmetic shift of the 32-bit
+ * sign-extended sample.
+ * ------------------------------------------------------------------------ */
+int cr_chain_classify_i16(float *out, const int *chain, const void *src_desc,
+                          int off, int row)
+{
+    const int *stages = *(const int *const *)((const char *)chain + 0x8);
+    const int  H = stages[1];
+    const int  W = stages[2];
+    cr_image   img;
+    int        st;
+
+    st = cr_image_alloc_f32(&img, W, H);
+    if (st == 0) {
+        const int16_t *src    = *(const int16_t *const *)((const char *)src_desc + 0x8);
+        const int      stride = *(const int *)((const char *)src_desc + 0x10);
+        float         *data   = (float *)img.data;
+        int            idx    = row * stride + off;
+
+        if (H > 0) {
+            int dr = 0;
+            for (int r = 0; r < H; r++) {
+                if (W > 0)
+                    for (int c = 0; c < W; c++)
+                        data[dr + c] =
+                            (float)(((int)src[idx + c] + 0x20) >> 6) / 255.0f;
+                dr += W;
+                idx += stride;
+            }
+        }
+        st = cr_linear_softmax2(out, chain, (const int *)&img, 0, 0);
+        cr_cleanup_ptr8_clear_b(&img);
+    }
+    return st;
+}

@@ -3589,6 +3589,89 @@ static void test_linear_softmax2(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_linear_softmax2\n");
 }
 
+/* ---- batch 72b: int16 image normalise -> chain classifier (0x180016bd0) -- */
+static void test_chain_classify_i16(void)
+{
+    typedef int (WINAPI *fn_t)(float *, const int *, const void *, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x180016bd0));
+    begin("cr_chain_classify_i16");
+    int bad = g_fail;
+
+    enum { INMAX = 4096, NLM = 2 };
+    static int16_t src[INMAX];
+    static int   stage[12];
+    static int   chain_v[16], chain_c[16], src_v[16], src_c[16];
+    static int   lin_v[8 * NLM], lin_c[8 * NLM];
+    static float kt[2 * 25], bt[2];
+    static float lw[NLM][3 * 64], lb[NLM][3];
+
+    for (int t = 0; t < 400; t++) {
+        int off  = (int)(rnd() % 3);
+        int row  = (int)(rnd() % 2);
+        int H    = 8 + (int)(rnd() % 6);       /* 8..13 */
+        int W    = 8 + (int)(rnd() % 6);
+        int nk   = 1 + (int)(rnd() % 2);
+        int nch  = 1 + (int)(rnd() % 2);
+        int nlin = (int)(rnd() % 3);           /* 0..2 layers */
+        int stride = W + (int)(rnd() % 3);
+        int nout = ((H - 4) >> 1) * ((W - 4) >> 1) * nch;
+
+        for (int i = 0; i < INMAX; i++)
+            src[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+        for (int i = 0; i < 2 * 25; i++)
+            kt[i] = (float)((int)(rnd() % 2001) - 1000) / 250.0f;
+        for (int i = 0; i < 2; i++)
+            bt[i] = (float)((int)(rnd() % 2001) - 1000) / 100.0f;
+
+        for (int i = 0; i < 12; i++) stage[i] = 0;
+        stage[0] = 5; stage[1] = H; stage[2] = W;
+        stage[3] = nk; stage[5] = nch; stage[6] = 0;
+        *(float **)((char *)stage + 0x20) = kt;
+        *(float **)((char *)stage + 0x28) = bt;
+
+        memset(lin_v, 0, sizeof lin_v);
+        int cur = nout;
+        for (int l = 0; l < nlin; l++) {
+            int nl   = (int)(rnd() % 4);
+            int post = (int)(rnd() % 3);
+            int wmax = (nl > 0 && cur > 0) ? nl * cur : 0;
+            for (int i = 0; i < wmax; i++)
+                lw[l][i] = (float)((int)(rnd() % 4001) - 2000) / 200.0f;
+            for (int i = 0; i < nl; i++)
+                lb[l][i] = (float)((int)(rnd() % 2001) - 1000) / 50.0f;
+            lin_v[l * 8 + 0] = cur;
+            lin_v[l * 8 + 1] = nl;
+            lin_v[l * 8 + 2] = post;
+            *(float **)((char *)&lin_v[l * 8] + 0x10) = lw[l];
+            *(float **)((char *)&lin_v[l * 8] + 0x18) = lb[l];
+            cur = nl;
+        }
+        memcpy(lin_c, lin_v, sizeof lin_v);
+
+        memset(chain_v, 0, sizeof chain_v); memset(chain_c, 0, sizeof chain_c);
+        memset(src_v, 0, sizeof src_v);     memset(src_c, 0, sizeof src_c);
+        chain_v[0] = chain_c[0] = 1;
+        *(const int **)((char *)chain_v + 0x08) = stage;
+        *(const int **)((char *)chain_c + 0x08) = stage;
+        chain_v[4] = chain_c[4] = nlin;
+        *(const int **)((char *)chain_v + 0x18) = lin_v;
+        *(const int **)((char *)chain_c + 0x18) = lin_c;
+        chain_v[8] = chain_c[8] = 64;
+        *(const int16_t **)((char *)src_v + 0x08) = src;
+        *(const int16_t **)((char *)src_c + 0x08) = src;
+        *(int *)((char *)src_v + 0x10) = stride;
+        *(int *)((char *)src_c + 0x10) = stride;
+
+        float ov = 0.0f, oc = 0.0f;
+        int rv = v(&ov, chain_v, src_v, off, row);
+        int rc = cr_chain_classify_i16(&oc, chain_c, src_c, off, row);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0 && cr_f2u(ov) != cr_f2u(oc))
+            mismatch("out", (u32)t, cr_f2u(ov), cr_f2u(oc));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_chain_classify_i16\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9848,6 +9931,7 @@ int main(int argc, char **argv)
     test_fir_norm_rows_s16();
     test_sep_gauss_blur_s16();
     test_linear_softmax2();
+    test_chain_classify_i16();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
