@@ -2111,3 +2111,50 @@ int cr_filter_bank_max5x5_f32(void *outp, const void *inp, int offset, int strid
         cr_copy_or_relu(outp, outp, ocols * orows * nch, desc[6]);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180037d20 — run a chain of float filter-bank stages over one buffer.
+ *   int fn(void *buf, const int *chain, const int *in_desc, int off, int row)
+ *
+ * chain is an int[]: [0]=number of stages, (void**)&chain[2]=array of
+ * 48-byte stage descriptors (each 12 ints, laid out like the desc of
+ * cr_filter_bank_max5x5_f32 / _max3x3_f32).  in_desc is an int[]:
+ * [0]=stage-0 stride, (void**)&in_desc[2]=stage-0 input plane.
+ *
+ * Stage 0 runs a 5x5 float filter reading in_desc's plane with offset
+ * row*in_desc[0]+off and stride in_desc[0], writing straight into buf.
+ * Each later stage reads buf and writes its result to a scratch region at
+ * buf + H*W*nk floats, then copies the ((H-tag+1)/2)*((W-tag+1)/2)*nch
+ * outputs back to the head of buf.  Stage tag 5 -> 5x5 float filter, tag 3
+ * -> 3x3 float filter, any other tag -> error 0x69.  Returns 0, or the first
+ * failing stage's error code.
+ * ------------------------------------------------------------------------ */
+int cr_filter_chain_run(void *buf, const int *chain, const int *in_desc, int off, int row)
+{
+    float *b = (float *)buf;
+    const int *stages = *(const int *const *)((const char *)chain + 0x8);
+
+    int r = cr_filter_bank_max5x5_f32(buf, *(const void *const *)((const char *)in_desc + 0x8),
+                                      row * in_desc[0] + off, in_desc[0], (int *)stages);
+    if (r != 0)
+        return r;
+
+    for (int i = 1; i < chain[0]; i++) {
+        const int *d = stages + i * 12;              /* 48-byte descriptors */
+        int soff = d[1] * d[2] * d[3];
+        float *scratch = b + soff;
+        int e;
+        if (d[0] == 5)
+            e = cr_filter_bank_max5x5_f32(scratch, b, 0, 0, (int *)d);
+        else if (d[0] == 3)
+            e = cr_filter_bank_max3x3_f32(scratch, b, (int *)d);
+        else
+            return 0x69;
+        if (e != 0)
+            return e;
+        int n = ((d[1] - d[0] + 1) >> 1) * ((d[2] - d[0] + 1) >> 1) * d[5];
+        for (int j = 0; j < n; j++)
+            b[j] = scratch[j];
+    }
+    return 0;
+}

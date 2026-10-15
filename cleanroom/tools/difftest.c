@@ -3030,6 +3030,81 @@ static void test_filter_bank_max5x5_f32(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_filter_bank_max5x5_f32\n");
 }
 
+/* ---- batch 66: float filter-chain runner (0x180037d20) ----------------- */
+static void test_filter_chain_run(void)
+{
+    typedef int (WINAPI *v_i_ppPii)(void *, const int *, const int *, int, int);
+    v_i_ppPii v = (v_i_ppPii)fn_at(RVA(0x180037d20));
+    begin("cr_filter_chain_run");
+    int bad = g_fail;
+    enum { BUFN = 65536, NSMAX = 4 };
+    static float buf_v[BUFN], buf_c[BUFN];
+    static float in0_v[4096], in0_c[4096];
+    static int stage_v[NSMAX * 12], stage_c[NSMAX * 12];
+    static int chain_v[16], chain_c[16], ind_v[16], ind_c[16];
+    static float kt[NSMAX][9 * 25], bt[NSMAX][9];
+
+    for (int t = 0; t < 200; t++) {
+        int ns  = 1 + (int)(rnd() % NSMAX);
+        int off = (int)(rnd() % 3);
+        int row = (int)(rnd() % 2);
+
+        for (int i = 0; i < BUFN; i++) {
+            float x = (float)((int)(rnd() % 4001) - 2000) / 100.0f;
+            buf_v[i] = x; buf_c[i] = x;
+        }
+        for (int i = 0; i < 4096; i++) {
+            float x = (float)((int)(rnd() % 4001) - 2000) / 100.0f;
+            in0_v[i] = x; in0_c[i] = x;
+        }
+        for (int i = 0; i < 16; i++) {
+            chain_v[i] = chain_c[i] = 0;
+            ind_v[i] = ind_c[i] = 0;
+        }
+
+        int stride0 = 0;
+        for (int s = 0; s < ns; s++) {
+            int tag = (s == 0) ? 5 : ((int)(rnd() % 3) == 0 ? 3 : 5);
+            if (t % 53 == 0 && s == ns - 1) tag = 4;      /* bad tag sometimes */
+            int H   = 8 + (int)(rnd() % 10);              /* 8..17 */
+            int W   = 8 + (int)(rnd() % 10);
+            int nk  = 1 + (int)(rnd() % 2);
+            int nch = 1 + (int)(rnd() % 2);
+            int mode = (int)(rnd() % 3);
+            int nkt = nch * nk;
+            for (int i = 0; i < nkt * 25; i++)
+                kt[s][i] = (float)((int)(rnd() % 2001) - 1000) / 250.0f;
+            for (int i = 0; i < nch; i++)
+                bt[s][i] = (float)((int)(rnd() % 2001) - 1000) / 100.0f;
+            for (int k = 0; k < 12; k++) { stage_v[s*12+k] = 0; stage_c[s*12+k] = 0; }
+            stage_v[s*12+0] = stage_c[s*12+0] = tag;
+            stage_v[s*12+1] = stage_c[s*12+1] = H;
+            stage_v[s*12+2] = stage_c[s*12+2] = W;
+            stage_v[s*12+3] = stage_c[s*12+3] = nk;
+            stage_v[s*12+5] = stage_c[s*12+5] = nch;
+            stage_v[s*12+6] = stage_c[s*12+6] = mode;
+            *(float **)((char *)&stage_v[s*12] + 0x20) = kt[s];
+            *(float **)((char *)&stage_c[s*12] + 0x20) = kt[s];
+            *(float **)((char *)&stage_v[s*12] + 0x28) = bt[s];
+            *(float **)((char *)&stage_c[s*12] + 0x28) = bt[s];
+            if (s == 0) stride0 = W;
+        }
+        chain_v[0] = chain_c[0] = ns;
+        *(const int **)((char *)chain_v + 8) = stage_v;
+        *(const int **)((char *)chain_c + 8) = stage_c;
+        ind_v[0] = ind_c[0] = stride0;
+        *(const float **)((char *)ind_v + 8) = in0_v;
+        *(const float **)((char *)ind_c + 8) = in0_c;
+
+        int rv = v(buf_v, chain_v, ind_v, off, row);
+        int rc = cr_filter_chain_run(buf_c, chain_c, ind_c, off, row);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0)
+            cmp_buf("buf", (u8 *)buf_v, (u8 *)buf_c, BUFN * 4, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_filter_chain_run\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9279,6 +9354,7 @@ int main(int argc, char **argv)
     test_filter_bank_max5x5();
     test_filter_bank_max3x3_f32();
     test_filter_bank_max5x5_f32();
+    test_filter_chain_run();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
