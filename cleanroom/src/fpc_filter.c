@@ -3384,3 +3384,216 @@ int cr_template_ncc_35150(int16_t *out, const int16_t *data, const int16_t *ref,
     }
     return local_280;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800283d0 — column-major twin of 0x180035150.
+ *   int fn(int16_t *out, const int16_t *data, const int16_t *ref,
+ *          uint32_t radius, int rows, int w)
+ * The ABI order is (out, data, ref, radius, ROWS, W) — i.e. the last two
+ * arguments are swapped versus 0x180035150 — and `data`/`out` are stored
+ * COLUMN-MAJOR: element (r,c) lives at `r + c*rows`.  Per-column normalised
+ * cross-correlation is otherwise identical to 0x180035150; the three vertical
+ * bands are written with the same rounding shifts ((x+0x200)>>10 then
+ * (x*s+0x4000)>>15 for the top/bottom bands, (x*2+0x8000)>>16 for the middle
+ * tail).  NOTE Ghidra renders `x + 0x4000 >> 0xf` as (x+0x4000)>>15.  The two
+ * internal `goto invalidInstructionException` branches are unreachable
+ * (radius >= half for radius >= 1) and are omitted.
+ * ------------------------------------------------------------------------ */
+int cr_template_ncc_283d0(int16_t *out, const int16_t *data, const int16_t *ref,
+                          uint32_t radius, int rows, int w)
+{
+    if ((int)radius < 0)
+        radius = 0;
+    uint32_t uVar1 = (uint32_t)rows - 1u;
+    if ((int)uVar1 <= (int)radius)
+        radius = uVar1;
+    int half = (int)(radius >> 1);
+    long long lVar7 = (long long)half;
+
+    int16_t *local_250 = NULL;
+    int16_t *local_248 = NULL;
+    int      local_270 = cr_malloc_aligned16((void **)&local_250, (size_t)(lVar7 * 2));
+    if (local_270 == 0) {
+        local_270 = cr_malloc_aligned16((void **)&local_248, (size_t)(lVar7 * 2));
+        if (local_270 == 0) {
+            int iVar14_sum = 0;
+            if (0 < (int)radius) {
+                iVar14_sum = 0;
+                const int16_t *psVar9 = ref;
+                do {
+                    iVar14_sum += *psVar9++;
+                } while (psVar9 != ref + (long long)radius);
+            }
+            if (0 < half) {
+                const int16_t *psVar9 = ref + lVar7;
+                long long       lVar16 = 0;
+                uint32_t        uVar18 = (radius - 1) - (uint32_t)half;
+                do {
+                    int iVar12 = 0;
+                    const int16_t *psVar8 = psVar9;
+                    do {
+                        iVar12 += *psVar8++;
+                    } while (psVar8 != ref + (lVar7 - lVar16) +
+                                        (long long)uVar18 + 1);
+                    uVar18 += 1;
+                    psVar9 -= 1;
+                    local_250[lVar16] =
+                        (int16_t)((iVar14_sum << 10) / iVar12);
+                    lVar16 += 1;
+                } while ((int)radius - 1 != (int)uVar18);
+                lVar16 = 1;
+                for (;;) {
+                    int iVar12 = 0;
+                    const int16_t *psVar9b = ref;
+                    do {
+                        iVar12 += *psVar9b++;
+                    } while (psVar9b != ref +
+                                        (uint32_t)(half * 2 - (int)lVar16) + 1);
+                    local_248[lVar16 - 1] =
+                        (int16_t)((iVar14_sum << 10) / iVar12);
+                    lVar16 += 1;
+                    if ((uint64_t)(half - 1) + 2 == (uint64_t)lVar16)
+                        break;
+                }
+            }
+            if (0 < w) {
+                int      local_258 = 0;
+                int      iVar12     = rows - half;
+                long long lVar16    = (long long)iVar12;
+                int      col_base   = 0;
+                int16_t  local_240[256];
+                do {
+                    if (0 < rows) {
+                        long long lVar10 = 0;
+                        do {
+                            local_240[lVar10 / 2] =
+                                *(const int16_t *)(data +
+                                                  (long long)col_base +
+                                                  lVar10 / 2);
+                            lVar10 += 2;
+                        } while ((uint64_t)uVar1 * 2 + 2 != (uint64_t)lVar10);
+                    }
+                    if (0 < half) {
+                        uint32_t        uVar18 = (radius - 1) - (uint32_t)half;
+                        long long       lVar10 = 0;
+                        const int16_t  *psVar9 = ref + lVar7;
+                        int             iVar19 = half;
+                        do {
+                            int iVar15;
+                            if (iVar19 < (int)radius) {
+                                long long lVar13 = 0;
+                                iVar15 = 0;
+                                do {
+                                    const int16_t *psVar8 =
+                                        (const int16_t *)((long long)psVar9 +
+                                                          lVar13);
+                                    long long lVar5 =
+                                        lVar13 +
+                                        (long long)((iVar19 + (int)lVar10) -
+                                                    half) *
+                                            2;
+                                    lVar13 += 2;
+                                    iVar15 +=
+                                        (int)*psVar8 *
+                                        (int)*(const int16_t
+                                                   *)((long long)local_240 +
+                                                      lVar5);
+                                } while ((uint64_t)uVar18 * 2 + 2 !=
+                                         (uint64_t)lVar13);
+                                iVar15 = (iVar15 + 0x200) >> 10;
+                            } else {
+                                iVar15 = 0;
+                            }
+                            psVar9 -= 1;
+                            uVar18 += 1;
+                            out[col_base + (int)lVar10] =
+                                (int16_t)(((int32_t)iVar15 *
+                                           (int32_t)local_250[(int)lVar10] +
+                                           0x4000) >>
+                                          15);
+                            lVar10 += 1;
+                            iVar19 -= 1;
+                        } while (iVar19 != 0);
+                    }
+                    if (iVar12 < rows) {
+                        uint64_t        uVar11 = (uint64_t)(uint32_t)(half * 2);
+                        long long       lVar10  = lVar16;
+                        const int16_t  *psVar9  = local_240 + (lVar16 - lVar7);
+                        do {
+                            int iVar19 = (int)uVar11;
+                            int iVar15;
+                            if (iVar19 < 1) {
+                                iVar15  = 0;
+                                uVar11  = (uint64_t)(iVar19 - 1);
+                            } else {
+                                uVar11  = (uint64_t)(iVar19 - 1);
+                                long long lVar13 = 0;
+                                iVar19 = 0;
+                                do {
+                                    const int16_t *psVar8 =
+                                        (const int16_t *)((long long)ref +
+                                                          lVar13);
+                                    const int16_t *psVar2 =
+                                        (const int16_t *)((long long)psVar9 +
+                                                          lVar13);
+                                    lVar13 += 2;
+                                    iVar19 +=
+                                        (int)*psVar8 * (int)*psVar2;
+                                } while (uVar11 * 2 + 2 != (uint64_t)lVar13);
+                                iVar15 = (iVar19 + 0x200) >> 10;
+                            }
+                            psVar9 += 1;
+                            out[col_base + (int)lVar10] =
+                                (int16_t)(((int32_t)iVar15 *
+                                           (int32_t)
+                                               local_248[(int)lVar10 -
+                                                         (int)lVar16] +
+                                           0x4000) >>
+                                          15);
+                            lVar10 += 1;
+                        } while ((int)uVar11 != half);
+                    }
+                    if (half < iVar12) {
+                        int16_t       *puVar17 =
+                            (int16_t *)(out + (long long)(col_base + half));
+                        const int16_t *psVar9 = local_240;
+                        do {
+                            long long lVar10 = 0;
+                            int       iVar19 = 0;
+                            int16_t   uVar6  = 0;
+                            if (0 < (int)radius) {
+                                do {
+                                    const int16_t *psVar8 =
+                                        (const int16_t *)((long long)ref +
+                                                          lVar10);
+                                    const int16_t *psVar2 =
+                                        (const int16_t *)((long long)psVar9 +
+                                                          lVar10);
+                                    lVar10 += 2;
+                                    iVar19 +=
+                                        (int)*psVar8 * (int)*psVar2;
+                                } while (lVar10 !=
+                                         (long long)(radius - 1) * 2 + 2);
+                                uVar6 = (int16_t)((uint32_t)(iVar19 * 2 +
+                                                             0x8000) >>
+                                                 16);
+                            }
+                            psVar9 += 1;
+                            *puVar17 = uVar6;
+                            puVar17 += 1;
+                        } while (psVar9 !=
+                                 local_240 + (uint64_t)((iVar12 - half) - 1) +
+                                     1);
+                    }
+                    local_258 += 1;
+                    col_base += rows;
+                } while (local_258 != w);
+            }
+            cr_sized_free((void **)&local_250);
+            cr_sized_free((void **)&local_248);
+        } else {
+            cr_sized_free((void **)&local_250);
+        }
+    }
+    return local_270;
+}

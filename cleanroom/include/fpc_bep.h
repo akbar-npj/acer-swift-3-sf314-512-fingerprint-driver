@@ -893,5 +893,8 @@ uint64_t cr_structure_tensor_score_img(int16_t *out, int *geo,
 int      cr_template_ncc_35150(int16_t *out, const int16_t *data,
                                const int16_t *ref, uint32_t radius,
                                int w, int rows);                 /* 0x180035150 */
+int      cr_template_ncc_283d0(int16_t *out, const int16_t *data,
+                               const int16_t *ref, uint32_t radius,
+                               int rows, int w);                 /* 0x1800283d0 */
 
 #endif /* FPC_BEP_H */
