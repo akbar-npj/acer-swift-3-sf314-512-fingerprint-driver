@@ -272,3 +272,60 @@ int cr_fft_real_inv(float *p1, float *p2, unsigned n)
 
     return (int)cr_fft_inv(p1, p2, half);
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001d050 — scaled inverse real FFT (twin of cr_fft_real_fwd).
+ *   int fn(float *a1, unsigned n, float *a3)
+ *
+ * Guard n > 512 -> 0x69.  Repacks the n spectra of a1 into a3 with the
+ * unit-circle twiddle table (stride step = 512/n), runs
+ * cr_fft_real_inv(a3, a1, n), de-interleaves a3 back into a1
+ * (a1[2k]=a3[k], a1[2k+1]=a3[n-1-k]) and scales by
+ * scale_tab[cr_hi_bit_index(n)].
+ * ------------------------------------------------------------------------ */
+int cr_fft_real_bwd(float *a1, unsigned n, float *a3)
+{
+    static const float scale_tab[11] = {
+        1.4142135f, 1.0f, 0.70710677f, 0.5f, 0.35355338f, 0.25f,
+        0.17677669f, 0.125f, 0.088388346f, 0.0625f, 0.044194173f
+    };
+
+    if (n > 0x200u)
+        return 0x69;
+
+    float scale = scale_tab[cr_hi_bit_index(n)];
+    int half = (int)n >> 1;
+    a3[0] = a1[0] * 1.4142135f;
+    int step = 1024 / (int)(2u * n);             /* 512 / n */
+
+    if (half > 1) {
+        for (int k = 0; k < half - 1; k++) {
+            int i1 = 2 * step * (k + 1);
+            int i2 = 2 * step * ((int)n - 1 - k);
+            a3[2 + 2 * k] = a1[1 + k] * cr_fft_twiddle[i1]
+                          + a1[(int)n - 1 - k] * cr_fft_twiddle[i2];
+            a3[3 + 2 * k] = a1[(int)n - 1 - k] * cr_fft_twiddle[i2 + 1]
+                          - a1[1 + k] * cr_fft_twiddle[i1 + 1];
+        }
+    }
+    a3[1] = a1[half] * cr_fft_twiddle[step * (int)n];
+
+    uint32_t r = (uint32_t)cr_fft_real_inv(a3, a1, n);
+    if (r != 0)
+        return (int)r;
+
+    if (half == 0) {
+        if (n == 0)
+            return (int)r;
+    } else {
+        for (int k = 0; k < half; k++) {
+            a1[2 * k]     = a3[k];
+            a1[2 * k + 1] = a3[(int)n - 1 - k];
+        }
+    }
+
+    for (int i = 0; i < (int)n; i++)
+        a1[i] *= scale;
+
+    return (int)r;
+}

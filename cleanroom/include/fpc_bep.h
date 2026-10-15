@@ -108,6 +108,10 @@ int      cr_fft_real_fwd(float *a1, unsigned n, float *a3); /* 0x180029510 */
  * floats of scratch; n power of two in [16,512] else 0x69. */
 int      cr_fft_real_inv(float *p1, float *p2, unsigned n); /* 0x180045490 */
 
+/* scaled inverse real FFT: n spectra of a1 -> n scaled samples of a1, a3 is
+ * n floats of scratch; n power of two in [16,512] else 0x69. */
+int      cr_fft_real_bwd(float *a1, unsigned n, float *a3); /* 0x18001d050 */
+
 /* ---- data/blob accessors ---------------------------------------------- */
 uint32_t cr_get_calib_blob(uint64_t *p1, uint32_t *p2, uint8_t sel); /* 0x180030340 */
 void    *cr_bio_init(void);                                         /* 0x180048d40 */

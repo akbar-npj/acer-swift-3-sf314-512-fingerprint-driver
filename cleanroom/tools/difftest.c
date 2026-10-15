@@ -2832,6 +2832,39 @@ static void test_fft_real_inv(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fft_real_inv\n");
 }
 
+/* ---- batch 63: scaled inverse real FFT (0x18001d050) ------------------- */
+static void test_fft_real_bwd(void)
+{
+    typedef int (WINAPI *v_i_pup)(float *, unsigned, float *);
+    v_i_pup v = (v_i_pup)fn_at(RVA(0x18001d050));
+    begin("cr_fft_real_bwd");
+    int bad = g_fail;
+    enum { MAXN = 512 };
+    static float a1v[MAXN], a3v[MAXN], a1c[MAXN], a3c[MAXN];
+
+    for (int t = 0; t < 400; t++) {
+        unsigned n;
+        if (t % 4 == 3) {
+            n = rnd() % 700u;
+        } else {
+            n = 1u << (4 + (rnd() % 6));               /* 16..512 pow2 */
+        }
+        for (int i = 0; i < MAXN; i++) {
+            float f = (float)((int)(rnd() % 2001) - 1000) / 500.0f;
+            a1v[i] = f; a1c[i] = f;
+            a3v[i] = 123.0f; a3c[i] = 123.0f;
+        }
+        int rv = v(a1v, n, a3v);
+        int rc = cr_fft_real_bwd(a1c, n, a3c);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0) {
+            cmp_buf("a1", (u8 *)a1v, (u8 *)a1c, sizeof(float) * (size_t)n, (u32)t);
+            cmp_buf("a3", (u8 *)a3v, (u8 *)a3c, sizeof(float) * (size_t)n, (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fft_real_bwd\n");
+}
+
 /* ---- batch 62: 5x5 filter-bank + 2x2 max-pool (0x18002b100) ------------ */
 static void test_filter_bank_max5x5(void)
 {
@@ -9133,6 +9166,7 @@ int main(int argc, char **argv)
     test_fft_real_n();
     test_fft_real_fwd();
     test_fft_real_inv();
+    test_fft_real_bwd();
     test_filter_bank_max5x5();
     test_obj_init_12fe0();
     test_resize_pair_18000();

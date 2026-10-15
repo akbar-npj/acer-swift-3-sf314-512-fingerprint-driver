@@ -492,6 +492,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x18002b100` | `fpc_bio_bep_sw23_7716e4a534` | `cr_filter_bank_max5x5` | `int fn(void *out, const void *in, int offset, int stride, int *desc)`. Descriptor `int[]`: `[0]=5` (else `0x69`), `[1]=H`, `[2]=W`, `[3]=nk` (kernels = planes), `[5]=nch` (output channels), `[6]=post-flag`, `*(short**)&desc[8]`=kernel table (`nch*nk` kernels of 25 shorts), `*(short**)&desc[10]`=bias table (`nch` shorts). `stride<=0` defaults to `W`. Output is `nch` planes of `((H-4)/2) x ((W-4)/2)` shorts (rows **and** cols downsampled by 2). For each output pixel `(r,c)` the 5x5 kernel is correlated against the 6x6 input window at base `offset + 2r*stride + 2c`, evaluated at the four 2x2 sub-offsets `(dr,dc) ∈ {0,1}²`; the per-plane results are summed over all `nk` kernel/plane pairs (each kernel uses its own plane at `p*H*W`), then the four sums are **max-pooled** (wrapping 32-bit), biased by `bias[ch]*0x4000` and arithmetic-shifted right by 15. `flag==1` clamps the whole output non-negative via `cr_s16_clamp_nonneg(out,out,orows*ocols*nch)`. The vendor splits the 25 taps into 4 running accumulators (block A = kernel row 0 / input row 0 → sums `(0,0)+(0,1)`; block B loops 4× over kernel rows 0-1,1-2,2-3,3-4 paired with input rows 1..4 → sums `(1,0)+(1,1)` then `(0,0)+(0,1)`; tail = kernel row 4 / input row 5 → `(1,0)+(1,1)`); the rewrite is the equivalent closed-form sum over the 6x6 window. Passed the difftest on the first run. |
 
+### Batch 63 — scaled inverse real FFT
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18001d050` | `fpc_bio_bep_sw23_35b121b7ef` | `cr_fft_real_bwd` | `int fn(float *a1, unsigned n, float *a3)`. Twin of `cr_fft_real_fwd`: `n > 512` → `0x69`. Repacks the `n` spectra of `a1` into `a3` — `a3[0]=a1[0]*sqrt2`, and for `k = 0..n/2-2` with `i1=2*step*(k+1)`, `i2=2*step*(n-1-k)` (`step=512/n`): `a3[2+2k]=a1[1+k]*T[i1]+a1[n-1-k]*T[i2]`, `a3[3+2k]=a1[n-1-k]*T[i2+1]-a1[1+k]*T[i1+1]`; then `a3[1]=a1[n/2]*T[512]` — runs `cr_fft_real_inv(a3,a1,n)`, de-interleaves `a3` back into `a1` (`a1[2k]=a3[k]`, `a1[2k+1]=a3[n-1-k]` for `k<n/2`) and scales by `scale_tab[cr_hi_bit_index(n)]`. Passed the difftest on the first run. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
