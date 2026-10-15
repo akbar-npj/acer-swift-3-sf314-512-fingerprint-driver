@@ -888,3 +888,54 @@ int cr_bitmap_fill_extents(cr_image *dst, const cr_image *src)
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180044d10 — morphological margin extract.
+ *   int fn(cr_image *dst, const cr_image *src)
+ *
+ * Allocates a scratch packed bitmap of width `src->w` rounded to a multiple
+ * of 32 (with the negative-width correction `+0x2b`/`+0x4a`) and height
+ * `src->h + 12`, then blits `src` into it at bit column 6 / row 6.  The
+ * scratch is dilated(5), eroded(5), extent-filled, given a 6-pixel all-ones
+ * border frame, and eroded(10) again.  Finally the scratch is re-tagged
+ * (offx=offy=6, w=src->w, h=src->h) and right-shift-extracted into `dst`.
+ * Returns 0, or the first failing callee's status; the scratch is always
+ * freed (except when the initial allocation itself fails).
+ * ------------------------------------------------------------------------ */
+int cr_bitmap_margin_extract(cr_image *dst, const cr_image *src)
+{
+    const int iVar1 = src->w;
+    const int iVar2 = src->h;
+    cr_image  bmp;
+    int       st;
+
+    int w2 = iVar1 + 0x2b;
+    if (w2 < 0)
+        w2 = iVar1 + 0x4a;
+    w2 &= ~0x1f;
+
+    st = cr_bitmap_alloc((uint32_t *)&bmp, (uint32_t)w2, (uint32_t)(iVar2 + 0xc));
+    if (st != 0)
+        return st;
+
+    st = cr_bitmap_copy_shift(&bmp, src, 6, 6);
+    if (st == 0) {
+        cr_bitmap_dilate(&bmp, &bmp, 5);
+        cr_bitmap_erode(&bmp, &bmp, 5);
+        st = cr_bitmap_fill_extents(&bmp, &bmp);
+        if (st == 0) {
+            st = cr_bitmap_border_set(&bmp, 6, 6, w2 - (iVar1 + 6), 6, 1);
+            if (st == 0) {
+                cr_bitmap_erode(&bmp, &bmp, 10);
+                bmp.w    = iVar1;
+                bmp.h    = iVar2;
+                bmp.offx = 6;
+                bmp.offy = 6;
+                st = cr_bitmap_extract_shift(dst, &bmp);
+            }
+        }
+    }
+
+    cr_cleanup_ptr8_b(&bmp);
+    return st;
+}

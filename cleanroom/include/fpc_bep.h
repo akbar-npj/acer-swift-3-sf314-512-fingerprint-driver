@@ -850,4 +850,7 @@ int      cr_harris_local_max_grid(cr_grid *grid, const cr_image *src,
                                   const cr_image *mask,
                                   const cr_harris_max_cfg *cfg);       /* 0x180023e70 */
 
+/* ---- batch 69: morphological margin extract ------------------------------ */
+int      cr_bitmap_margin_extract(cr_image *dst, const cr_image *src); /* 0x180044d10 */
+
 #endif /* FPC_BEP_H */

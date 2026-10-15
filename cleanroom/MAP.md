@@ -534,6 +534,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x180040930` | `fpc_bio_bep_sw23_d96d96a682.part.0` | `cr_fft2d_real_bwd` | `int fn(float *out, int orows, int ocols, float *in, uint nrows, uint ncols)`. Guards `(uint)(nrows-16) <= 0x1f0 && (uint)(ncols-16) <= 0x1f0` (i.e. both in `[16,512]`), else `0x69`. Allocates scratch `max(nrows,ncols)` floats + column buffer `nrows` floats via `cr_malloc_aligned16`. Row pass: `nrows` in-place length-`ncols` `cr_fft_real_bwd` over `in` (**return values ignored**). Column pass: for `ocols` columns starting at `in + iVar5` (`iVar5=(ncols-ocols)/2`), gather the `nrows` samples (stride `ncols`), run length-`nrows` `cr_fft_real_bwd`, then write `colbuf[iVar4 .. orows+iVar4)` (`iVar4=(nrows-orows)/2`) to `out` at row stride `ocols`. Returns 0, an allocator status, or the failing column FFT's error code. Both halves `(nrows-orows)/2`/`(ncols-ocols)/2` are *signed* divisions (truncate toward zero). Passed the difftest on the first run. |
 
+### Batch 69 — morphological margin extract
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180044d10` | `fpc_bio_bep_sw23_eea97c0bb8` | `cr_bitmap_margin_extract` | `int fn(cr_image *dst, const cr_image *src)`. `iVar1=src->w`, `iVar2=src->h`. Scratch packed bitmap of width `w2` and height `iVar2+0xc`, where `w2 = ((iVar1+0x2b >= 0) ? iVar1+0x2b : iVar1+0x4a) & ~0x1f` (the signed `trunc((w+43)/32)*32` idiom, reused verbatim from `cr_thresh_open_mark`). Sequence: `cr_bitmap_alloc(temp,w2,h+12)` (early-return its status on failure, **without** cleanup); `cr_bitmap_copy_shift(temp,src,6,6)`; `cr_bitmap_dilate(temp,temp,5)`; `cr_bitmap_erode(temp,temp,5)`; `cr_bitmap_fill_extents(temp,temp)`; `cr_bitmap_border_set(temp,6,6,w2-(iVar1+6),6,1)`; `cr_bitmap_erode(temp,temp,10)`; then re-tag `temp->w=iVar1, temp->h=iVar2, temp->offx=temp->offy=6` and `cr_bitmap_extract_shift(dst,temp)`. Always `cr_cleanup_ptr8_b(temp)` at the end (except the alloc-failure early return). Returns 0 or the first failing callee's status. All 8 callees were already implemented. Passed the difftest on the first run. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

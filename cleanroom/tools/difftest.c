@@ -3253,6 +3253,61 @@ static void test_fft2d_real_bwd(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fft2d_real_bwd\n");
 }
 
+/* ---- batch 69: morphological margin extract (0x180044d10) -------------- */
+/* Allocates a round_up(w+43,32) x (h+12) scratch bitmap, blits src at (6,6),
+ * dilates(5)/erodes(5)/extent-fills/borders(6)/erodes(10), then extracts the
+ * 6-margin window into dst.  `dst` needs offx==offy==0 and src->a >= dst->a. */
+static void test_bitmap_margin_extract(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x180044d10));
+    begin("cr_bitmap_margin_extract");
+    int bad = g_fail;
+
+    enum { MAXW = 48, MAXH = 24, NP = 4096 };
+    static uint32_t sbuf[NP], dbuf[NP], dbufc[NP];
+    static cr_image sv, sc, dv, dc;
+
+    for (int t = 0; t < 20000; t++) {
+        int w  = 1 + (int)(rnd() % MAXW);        /* src->w */
+        int h  = 1 + (int)(rnd() % MAXH);        /* src->h */
+        int sa = ((w + 31) >> 5) << 5;           /* src stride (bits) */
+        int dh = 1 + (int)(rnd() % MAXH);        /* dst->h */
+        int dw = 1 + (int)(rnd() % MAXW);        /* dst->w */
+        int da = ((dw + 31) >> 5) << 5;          /* dst stride (bits) */
+
+        for (int i = 0; i < NP; i++) {
+            uint32_t u = (uint32_t)rnd();
+            sbuf[i] = u; dbuf[i] = u; dbufc[i] = u;
+        }
+
+        memset(&sv, 0, sizeof sv); memset(&sc, 0, sizeof sc);
+        sv.a = sa; sv.b = h; sv.data = sbuf; sv.w = w; sv.h = h;
+        sv.offx = 0; sv.offy = 0;
+        sc = sv;
+
+        memset(&dv, 0, sizeof dv); memset(&dc, 0, sizeof dc);
+        dv.a = da; dv.b = dh; dv.data = dbuf; dv.w = dw; dv.h = dh;
+        dv.offx = 0; dv.offy = 0;
+        dc = dv; dc.data = dbufc;
+
+        /* exercise the two guards on ~1/8 of the runs */
+        switch (t & 15) {
+        case 1:  sv.offx = 1; sc.offx = 1; break;              /* copy_shift 0x69 */
+        case 2:  dv.a = (((w + 43) >> 5) << 5) + 32;           /* src->a < dst->a */
+                 dc.a = dv.a; break;
+        default: break;
+        }
+
+        int rv = v(&dv, &sv);
+        int rc = cr_bitmap_margin_extract(&dc, &sc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("dst", (unsigned char *)dbuf, (unsigned char *)dbufc,
+                sizeof dbuf, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_margin_extract\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9506,6 +9561,7 @@ int main(int argc, char **argv)
     test_filter_bank_max3x3_i16();
     test_filter_chain_run_i16();
     test_fft2d_real_bwd();
+    test_bitmap_margin_extract();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
