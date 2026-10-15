@@ -3844,6 +3844,68 @@ static void test_block_conv_231a0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_block_conv_231a0\n");
 }
 
+/* ---- batch 73c: structure-tensor from u8 image (0x180044270) ----------- */
+static void test_structure_tensor_score_img(void)
+{
+    typedef uint64_t (WINAPI *fn_t)(int16_t *, int *, void *, uint64_t);
+    fn_t v = (fn_t)fn_at(RVA(0x180044270));
+    begin("cr_structure_tensor_score_img");
+    int bad = g_fail;
+
+    static uint8_t sbuf[4096];
+    static int16_t ov[4], oc[4];
+    static u8      geo[0x20];                 /* mask descriptor  */
+    static u8      obj[0x10];
+    static u8      srcimg[0x30];              /* cr_image-shaped u8 source */
+    static u32     bits[512];
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 8 + (int)(rnd() % 25u);        /* 8..32 */
+        int h = 8 + (int)(rnd() % 25u);        /* 8..32 */
+
+        for (int i = 0; i < w * h; i++)
+            sbuf[i] = (uint8_t)(rnd() % 256);
+
+        /* src cr_image: a=w, b=h, data=sbuf, w, h, offx=0, offy=0 */
+        memset(srcimg, 0, 0x30);
+        *(int *)(srcimg + 0x00) = w;
+        *(int *)(srcimg + 0x04) = h;
+        *(void **)(srcimg + 0x08) = sbuf;
+        *(int *)(srcimg + 0x10) = w;
+        *(int *)(srcimg + 0x14) = h;
+        *(int *)(srcimg + 0x18) = 0;           /* offx */
+        *(int *)(srcimg + 0x1c) = 0;           /* offy */
+
+        /* mask descriptor (geo): stride = w, bits plane, x/y offset = 0 */
+        int stride = w;
+        for (int i = 0; i < 512; i++) bits[i] = 0;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int bi = y * stride + x;
+                if (rnd() & 1u)
+                    bits[bi >> 5] |= 1u << (bi & 31);
+            }
+        memset(geo, 0, 0x20);
+        *(int *)(geo + 0x00) = stride;
+        *(void **)(geo + 0x08) = bits;
+        *(int *)(geo + 0x18) = 0;
+        *(int *)(geo + 0x1c) = 0;
+
+        *(float *)(obj + 8) = 0.5f + (float)(rnd() % 300u) / 100.0f;
+
+        ov[0] = oc[0] = 0x1234;
+        uint64_t rv = v(ov, (int *)geo, srcimg, (uint64_t)obj);
+        uint64_t rc = cr_structure_tensor_score_img(oc, (int *)geo,
+                                                   (const cr_image *)srcimg,
+                                                   (uint64_t)obj);
+        if ((int)rv != (int)rc)
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (ov[0] != oc[0])
+            mismatch("out", (u32)t, (u32)(uint16_t)ov[0], (u32)(uint16_t)oc[0]);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_structure_tensor_score_img\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -10107,6 +10169,7 @@ int main(int argc, char **argv)
     test_chain_classify_i16();
     test_structure_tensor_score();
     test_block_conv_231a0();
+    test_structure_tensor_score_img();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

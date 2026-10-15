@@ -3132,3 +3132,52 @@ uint64_t cr_block_conv_231a0(int16_t *out, const intptr_t *ptrs, const void *des
         cr_s16_clamp_nonneg(out, out, iVar4 * iVar2);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180044270 — structure-tensor score computed from a u8 source image.
+ *   ulonglong fn(undefined2 *out, int *geo, longlong *src, longlong param_4):
+ *     w = src->w;  h = src->h;
+ *     r = cr_image_set(&local_60, 0, w, h);
+ *     if (r == 0) {
+ *       r = cr_pool_alloc1(hdr, &local_58, w*h*2);   // i16 scratch for copy
+ *       if (r == 0) {
+ *         // the allocated buffer is the pixel store for local_60 (decompiler
+ *         // drops the assignment local_60.data = local_58; w*h*2 == i16 size)
+ *         local_60.data = local_58;
+ *         r2 = cr_u8_to_u16_guarded(&local_60, src, 6);   // copy/shift ×2^6
+ *         if (r2 == 0)
+ *           r2 = cr_structure_tensor_score(out, geo, &local_60, (char*)param_4);
+ *         cr_sized_free_if(hdr);
+ *         r = r2;
+ *       }
+ *     }
+ *     return r;
+ * ------------------------------------------------------------------------ */
+uint64_t cr_structure_tensor_score_img(int16_t *out, int *geo,
+                                       const cr_image *src, uint64_t param_4)
+{
+    int      w = src->w;
+    int      h = src->h;
+    uint32_t uVar3;
+    uint32_t local_74;
+    cr_image local_60;
+    void    *local_70[2];
+    void    *local_58[3];
+
+    uVar3 = cr_image_set(&local_60, NULL, w, h);
+    if ((int)uVar3 == 0) {
+        uVar3 = (uint32_t)cr_pool_alloc1((void **)local_70, (void **)local_58,
+                                         (uint32_t)((int64_t)w * h * 2));
+        if ((int)uVar3 == 0) {
+            local_60.data = local_58[0];
+            local_74 = (uint32_t)cr_u8_to_u16_guarded(&local_60, src, 6);
+            if (local_74 == 0)
+                local_74 = (uint32_t)cr_structure_tensor_score(out, geo,
+                                                               &local_60,
+                                                               (const char *)param_4);
+            cr_sized_free_if((void **)local_70);
+            uVar3 = local_74;
+        }
+    }
+    return (uint64_t)uVar3;
+}

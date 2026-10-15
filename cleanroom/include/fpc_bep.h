@@ -887,5 +887,8 @@ uint64_t cr_structure_tensor_score(int16_t *out, const int *mask_desc,
                                    const char *obj);               /* 0x180029870 */
 uint64_t cr_block_conv_231a0(int16_t *out, const intptr_t *ptrs,
                              const void *desc);                   /* 0x1800231a0 */
+uint64_t cr_structure_tensor_score_img(int16_t *out, int *geo,
+                                       const cr_image *src,
+                                       uint64_t param_4);         /* 0x180044270 */
 
 #endif /* FPC_BEP_H */
