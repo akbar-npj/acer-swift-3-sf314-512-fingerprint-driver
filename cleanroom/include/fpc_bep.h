@@ -550,6 +550,11 @@ int      cr_corr_kbank(int32_t *out, const int16_t *in, const int16_t *kbank,
                        const int16_t *selarr, long long unused,
                        int ow, int oh, int iw, int ih, int K);           /* 0x180038ac0 */
 
+/* 5x5 filter-bank correlation + 2x2 max-pool over nch channels (descriptor
+ * driven); see fpc_filter.c for the desc layout. */
+int      cr_filter_bank_max5x5(void *out, const void *in, int offset,
+                               int stride, int *desc);                   /* 0x18002b100 */
+
 /* ---- batch 47: object-tree lifecycle helpers + image-data accessors ------- *
  * These call into the sized allocator (cr_malloc / cr_sized_free), so their
  * observable contract is guard behaviour + NULL-ing, not pointer identity. */

@@ -1844,3 +1844,84 @@ int cr_box_sum_u8(void **dst_buf, const cr_image *src, int k)
     cr_sized_free(&tmp);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002b100 — 5x5 filter-bank correlation with 2x2 max-pooling.
+ *   int fn(void *out, const void *in, int offset, int stride, int *desc)
+ *
+ * desc is an int[]: [0]=5 tag, [1]=H, [2]=W, [3]=nk (kernels/planes),
+ * [5]=nch (output channels), [6]=post-flag, (short**)&desc[8]=kernel table
+ * (nch*nk kernels of 25 shorts), (short**)&desc[10]=bias table (nch shorts).
+ * stride <= 0 defaults to W.  Output is nch planes of ((H-4)/2) x ((W-4)/2)
+ * shorts.  For each output pixel the 5x5 kernel is correlated against a 6x6
+ * input window at the four 2x2 sub-offsets; the plane sum over all nk
+ * kernels/planes is max-pooled across the four offsets, biased by
+ * bias[ch]*0x4000 and arithmetic-shifted right by 15.  flag==1 clamps the
+ * whole output non-negative via cr_s16_clamp_nonneg.
+ * ------------------------------------------------------------------------ */
+int cr_filter_bank_max5x5(void *outp, const void *inp, int offset, int stride, int *desc)
+{
+    int16_t *out = (int16_t *)outp;
+    const int16_t *in = (const int16_t *)inp;
+
+    if (desc[0] != 5)
+        return 0x69;
+
+    int nch  = desc[5];                      /* channels */
+    int nk   = desc[3];                      /* kernels per channel / planes */
+    int H    = desc[1];
+    int W    = desc[2];
+    if (stride <= 0)
+        stride = W;
+    int orows = (H - 4) >> 1;
+    int ocols = (W - 4) >> 1;
+    const int16_t *kern = *(const int16_t **)((const char *)desc + 0x20);
+    const int16_t *bias = *(const int16_t **)((const char *)desc + 0x28);
+
+    if (nch > 0) {
+        int16_t *orow = out;
+        for (int ch = 0; ch < nch; ch++) {
+            int bias_shifted = (int)bias[ch] * 0x4000;
+            int row_off = 0;
+            for (int r = 0; r < orows; r++) {
+                for (int c = 0; c < ocols; c++) {
+                    int32_t val;
+                    if (nk > 0) {
+                        const int16_t *plane = in + offset + row_off + 2 * c;
+                        int64_t a00 = 0, a01 = 0, a10 = 0, a11 = 0;
+                        for (int p = 0; p < nk; p++) {
+                            const int16_t *K  = kern + p * 25;
+                            const int16_t *pl = plane + p * H * W;
+                            for (int i = 0; i < 5; i++) {
+                                for (int j = 0; j < 5; j++) {
+                                    int kv = K[i * 5 + j];
+                                    a00 += (int64_t)kv * pl[i * stride + j];
+                                    a01 += (int64_t)kv * pl[i * stride + j + 1];
+                                    a10 += (int64_t)kv * pl[(i + 1) * stride + j];
+                                    a11 += (int64_t)kv * pl[(i + 1) * stride + j + 1];
+                                }
+                            }
+                        }
+                        int32_t s00 = (int32_t)a00, s01 = (int32_t)a01;
+                        int32_t s10 = (int32_t)a10, s11 = (int32_t)a11;
+                        int32_t m = s11;
+                        if (s10 >= s11) m = s10;
+                        if (m < s01) m = s01;
+                        if (m < s00) m = s00;
+                        val = m + bias_shifted;
+                    } else {
+                        val = bias_shifted;
+                    }
+                    orow[c] = (int16_t)(val >> 15);
+                }
+                orow += ocols;
+                row_off += 2 * stride;
+            }
+            kern += nk * 25;
+        }
+    }
+
+    if (desc[6] == 1)
+        cr_s16_clamp_nonneg((int16_t *)outp, (const int16_t *)outp, orows * ocols * nch);
+    return 0;
+}
