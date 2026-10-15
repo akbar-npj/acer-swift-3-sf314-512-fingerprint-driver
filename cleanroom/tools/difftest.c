@@ -4105,6 +4105,57 @@ static void test_ncc_apply_34390(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_ncc_apply_34390\n");
 }
 
+/* ---- batch 73i: 2D separable Gaussian correlation (0x180034930) -------- */
+static void test_correlate_34930(void)
+{
+    typedef int (WINAPI *fn_t)(uint64_t *, uint64_t *, float, int);
+    fn_t v = (fn_t)fn_at(RVA(0x180034930));
+    begin("cr_correlate_34930");
+    int bad = g_fail;
+
+    static int16_t inb[128 * 128];
+    static int16_t outb[128 * 128];
+    static int16_t ov[128 * 128], oc[128 * 128];
+    static uint64_t d1[4], d2[4];
+
+    for (int t = 0; t < 3000; t++) {
+        int w  = 2 + (int)(rnd() % 48u);            /* 2..49   */
+        int h  = 2 + (int)(rnd() % 48u);            /* 2..49   */
+        int mn = w < h ? w : h;
+        int n  = 1 + (int)(rnd() % (uint32_t)mn);   /* 1..mn (half < mn) */
+        float sigma = (float)((int)(rnd() % 4000) - 2000) * 0.01f;
+        int mode = (int)(rnd() % 2u);               /* 0 ok, 1 bad-struct */
+
+        for (int i = 0; i < w * h; i++)
+            inb[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+
+        d1[2] = (uint64_t)(uint32_t)w | ((uint64_t)(uint32_t)h << 32);
+        d1[1] = (uint64_t)(uintptr_t)outb;
+        d1[3] = 0;
+        d1[0] = (mode == 1) ? (d1[2] ^ 1) : d1[2];
+        d2[2] = d1[2];
+        d2[1] = (uint64_t)(uintptr_t)inb;
+        d2[3] = 0;
+        d2[0] = d2[2];
+
+        /* DLL run */
+        memset(outb, 0, (size_t)w * h * 2);
+        int rv = v(d1, d2, sigma, n);
+        memcpy(ov, outb, (size_t)w * h * 2);
+        /* clean-room run (same inputs, outb reset) */
+        memset(outb, 0, (size_t)w * h * 2);
+        int rc = cr_correlate_34930(d1, d2, sigma, n);
+        memcpy(oc, outb, (size_t)w * h * 2);
+
+        if (rv != rc)
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (mode == 0)
+            cmp_buf("out", (const unsigned char *)ov, (const unsigned char *)oc,
+                    (u32)(w * h * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_correlate_34930\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -10374,6 +10425,7 @@ int main(int argc, char **argv)
     test_fft2d_prep_1e920();
     test_ncc_apply_f8b0();
     test_ncc_apply_34390();
+    test_correlate_34930();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

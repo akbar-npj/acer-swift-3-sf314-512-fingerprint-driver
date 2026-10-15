@@ -905,5 +905,7 @@ int      cr_ncc_apply_f8b0(const uint64_t *img_out, const uint64_t *img_in,
                            uint16_t radius);                     /* 0x18000f8b0 */
 int      cr_ncc_apply_34390(const uint64_t *img_out, const uint64_t *img_in,
                             float sigma, uint16_t n);            /* 0x180034390 */
+int      cr_correlate_34930(const uint64_t *img_out, const uint64_t *img_in,
+                            float sigma, int n);                 /* 0x180034930 */
 
 #endif /* FPC_BEP_H */

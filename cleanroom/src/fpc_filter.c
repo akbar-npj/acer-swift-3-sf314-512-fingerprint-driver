@@ -3704,3 +3704,99 @@ done:
     cr_sized_free((void **)&local_40);
     return iVar2;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180034930 — 2D separable Gaussian CORRELATION filter.
+ *   int fn(const uint64_t *img_out, const uint64_t *img_in,
+ *          float sigma, int n)
+ * `img_out` (param_1) is written, `img_in` (param_2) is read; both are 4x
+ * uint64 image descriptors ([0]==[2] and [3]==0 else 0x69; [1]=int16 data
+ * ptr; [2]=width(low32)|height(high32)).  in and out share the same w x h.
+ * The routine correlates `in` with a Gaussian window of length n (built by
+ * cr_gaussian_window_q15 from sigma), first HORIZONTALLY then VERTICALLY,
+ * writing the result into `out`.  Boundary handling is a Neumann (reflect)
+ * extension: the left/top edge reflects real[0] / out[0,col] and the
+ * right/bottom edge reflects the last pixel.  Each 1D dot product is
+ * normalised with a rounding 16-bit shift:
+ *     out = (int16_t)(((sum*2) + 0x8000) >> 16)
+ * Returns 0 on success, 0x69 on bad descriptor, or the allocator error code.
+ * ------------------------------------------------------------------------ */
+int cr_correlate_34930(const uint64_t *param_1, const uint64_t *param_2,
+                        float param_3, int param_4)
+{
+    if (param_1[0] != param_1[2]) return 0x69;
+    if (param_1[3] != 0)         return 0x69;
+    if (param_2[0] != param_2[2]) return 0x69;
+    if (param_2[3] != 0)         return 0x69;
+
+    int W   = (int)(uint32_t)param_2[2];   /* width  */
+    int H   = (int)(param_2[2] >> 32);     /* height */
+    int16_t *in  = (int16_t *)(intptr_t)param_2[1];
+    int16_t *out = (int16_t *)(intptr_t)param_1[1];
+    int n   = param_4;
+    int half = n >> 1;
+
+    int16_t *g = NULL;
+    int iVar8 = cr_malloc_aligned16((void **)&g, (size_t)n * 2);
+    if (iVar8 != 0)
+        return iVar8;
+    cr_gaussian_window_q15(g, param_3, n);
+
+    /* ---- horizontal pass: correlate each row with the Gaussian ---- */
+    int16_t *ex = NULL;
+    iVar8 = cr_malloc_aligned16((void **)&ex, (size_t)(W + n) * 2); /* +1 margin */
+    if (iVar8 != 0) {
+        cr_sized_free((void **)&g);
+        return iVar8;
+    }
+
+    for (int r = 0; r < H; r++) {
+        int16_t *row = in + (size_t)r * W;
+        for (int p = 0; p < half; p++)            /* left reflection  */
+            ex[p] = (int16_t)(2 * (int)row[0] - (int)row[half - p]);
+        for (int c = 0; c < W; c++)               /* real pixels     */
+            ex[half + c] = row[c];
+        for (int k = 0; k < half; k++)            /* right reflection */
+            ex[W + half + k] =
+                (int16_t)(2 * (int)row[W - 1] - (int)row[W - 2 - k]);
+        for (int c = 0; c < W; c++) {             /* correlate       */
+            int32_t sum = 0;
+            for (int j = 0; j < n; j++)
+                sum += (int32_t)g[j] * (int32_t)ex[c + j];
+            uint32_t s = (uint32_t)sum * 2u + 0x8000u;
+            out[(size_t)r * W + c] = (int16_t)(s >> 16);
+        }
+    }
+
+    cr_sized_free((void **)&ex);
+
+    /* ---- vertical pass: correlate each column in place ---- */
+    iVar8 = cr_malloc_aligned16((void **)&ex, (size_t)(H + n) * 2); /* +1 margin */
+    if (iVar8 != 0) {
+        cr_sized_free((void **)&g);
+        return iVar8;
+    }
+
+    for (int col = 0; col < W; col++) {
+        for (int k = 0; k < half; k++)            /* top reflection   */
+            ex[k] = (int16_t)(2 * (int)out[col]
+                             - (int)out[(half - k) * W + col]);
+        for (int rr = 0; rr < H; rr++)            /* real column      */
+            ex[half + rr] = out[(size_t)rr * W + col];
+        for (int k = 0; k < half; k++)            /* bottom reflection */
+            ex[H + half + k] =
+                (int16_t)(2 * (int)out[(H - 1) * W + col]
+                         - (int)out[(H - 2 - k) * W + col]);
+        for (int rr = 0; rr < H; rr++) {          /* correlate        */
+            int32_t sum = 0;
+            for (int j = 0; j < n; j++)
+                sum += (int32_t)g[j] * (int32_t)ex[rr + j];
+            uint32_t s = (uint32_t)sum * 2u + 0x8000u;
+            out[(size_t)rr * W + col] = (int16_t)(s >> 16);
+        }
+    }
+
+    cr_sized_free((void **)&ex);
+    cr_sized_free((void **)&g);
+    return 0;
+}
