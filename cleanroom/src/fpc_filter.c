@@ -1461,11 +1461,13 @@ int cr_gaussian_fir_2pass(void *a1, void *a2, float sigma)
     int16_t *in  = *(int16_t **)(p2 + 0x8);
 
     if (((uintptr_t)*(void **)(p2 + 0x10) & 7u) != 0) {
-        /* unaligned descriptor -> plain (unguarded) FIR variants */
-        if ((W - 0x10) > 0xf0) return 1;
+        /* unaligned descriptor -> plain (unguarded) FIR variants.
+         * Vendor compares with unsigned W-0x10U, so status 1 is returned when
+         * W is outside [16,256] (W<16 wraps to a huge unsigned), not just W>256. */
+        if ((uint32_t)(W - 0x10) >= 0xf1u) return 1;
         int r = cr_fir_reflect_rows(out, in, coef, 15, W, R);
         if (r) return r;
-        if ((R - 0x10) > 0xf0) return 0x69;
+        if ((uint32_t)(R - 0x10) >= 0xf1u) return 0x69;
         return cr_fir_reflect(out, out, coef, 15, W, R);
     } else {
         int r = cr_fir_reflect_rows_guarded(out, in, coef, 15, W, R);
@@ -2767,4 +2769,148 @@ uint64_t cr_gauss_deriv_triple_coef(const void *d1, const void *d2,
         }
     }
     return ret;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180029870 — structure-tensor orientation/coherence score over a mask.
+ *   uint64_t fn(int16_t *out, const int *mask_desc, const cr_image *geo,
+ *               const char *obj)
+ *
+ *   H = geo->h, W = geo->w; *out = (int16_t)0xffff.
+ *   Build three W x H int16 scratch images (i1,i2,i3) and one pool of three
+ *   W*H*2-byte blocks written straight into their data fields:
+ *       i1.data = b0,  i3.data = b1,  i2.data = b2
+ *   Fill them with the sigma=1.0 Gaussian-derivative triple
+ *   cr_gauss_deriv_triple_coef(&i1,&i2,&i3, geo, 1.0f).
+ *   For each sample i in [0, geo->a * H):
+ *       a = (float)b1[i]; b = (float)b2[i]; c = (float)b0[i];
+ *       if (b*b < 1e-12) { e1=c; e2=a; k1=0; k2=1; v1=1; v2=0; }
+ *       else {
+ *           m  = (a + c) * 0.5f;
+ *           rt = cr_sqrtf(m*m - (a*c - b*b));
+ *           e2 = m - rt;  k1 = (m + rt) - c;  k2 = e2 - c;
+ *           e1 = m + rt;  v1 = b;  v2 = b;
+ *       }
+ *       if (0.0f > e1) e1 = -e1;   if (0.0f > e2) e2 = -e2;
+ *       sel = (e2 <= e1);
+ *       p = sel ? k2 : k1;         q = sel ? v1 : v2;
+ *       coh = (((e1-e2)*(e1-e2)) / (e1*e1 + e2*e2 + 0.0f)) * 255.0f;
+ *       den = q*q + p*p;
+ *       b0[i] = (int16_t)(int)(((q*q - p*p) / den) * coh);
+ *       b1[i] = (int16_t)(int)(((q*p)/den + (q*p)/den) * coh);
+ *   Smooth i1 and i3 in place with cr_gaussian_fir_2pass(.,.,sigma=obj[8]).
+ *   Then over the mask bits: idx = (mask[7]+y)*mask[0] + mask[6] + x, bit
+ *   (mask[6]+x)&31 of bits[idx>>5] (bits = *(void**)(mask+8)); when set,
+ *   count++ and sum += ((int)(cr_sqrtf((float)(b0[i]^2 + b1[i]^2)) * 0.4f)
+ *   & 0xff), i = x + y*W.  Finally *out = (int16_t)(sum / (count + 1)).
+ *   The pool is always freed once allocated; the last status is returned.
+ * ------------------------------------------------------------------------ */
+uint64_t cr_structure_tensor_score(int16_t *out, const int *mask_desc,
+                                   const cr_image *geo, const char *obj)
+{
+    const int H = geo->h;
+    const int W = geo->w;
+    cr_image  i1, i2, i3;
+    void     *hdr[2] = { NULL, NULL };
+    uint64_t  r;
+
+    *out = (int16_t)0xffff;
+
+    r = cr_image_set(&i1, NULL, W, H); if ((int)r != 0) return r;
+    r = cr_image_set(&i2, NULL, W, H); if ((int)r != 0) return r;
+    r = cr_image_set(&i3, NULL, W, H); if ((int)r != 0) return r;
+
+    int32_t  wh    = W * H;
+    uint32_t bytes = (uint32_t)((int64_t)wh * 2);
+    r = (uint64_t)(uint32_t)cr_pool_alloc3(hdr, &i1.data, bytes,
+                                           &i3.data, bytes,
+                                           &i2.data, bytes);
+    if ((int)r != 0) return r;
+
+    const int16_t *b0 = (const int16_t *)i1.data;
+    const int16_t *b1 = (const int16_t *)i3.data;
+    const int16_t *b2 = (const int16_t *)i2.data;
+    int16_t       *o0 = (int16_t *)i1.data;
+    int16_t       *o1 = (int16_t *)i3.data;
+
+    r = cr_gauss_deriv_triple_coef(&i1, &i2, &i3, geo, 1.0f);
+    if ((int)r == 0) {
+        int n = geo->a * H;
+        if (n > 0) {
+            for (int i = 0; i < n; i++) {
+                float fa = (float)b1[i];
+                float fb = (float)b2[i];
+                float fc = (float)b0[i];
+                float e1, e2, k1, k2, v1, v2;
+
+                if (fb * fb < 0x1.197998p-40f) {
+                    e1 = fc; e2 = fa; k1 = 0.0f; k2 = 1.0f;
+                    v1 = 0.0f; v2 = 1.0f;
+                } else {
+                    float m  = (fa + fc) * 0.5f;
+                    float rt = cr_sqrtf(m * m - (fa * fc - fb * fb));
+                    e2 = m - rt;
+                    k1 = (m + rt) - fc;
+                    k2 = e2 - fc;
+                    e1 = m + rt;
+                    v1 = fb;
+                    v2 = fb;
+                }
+                if (0.0f > e1) e1 = -e1;
+                if (0.0f > e2) e2 = -e2;
+
+                int   sel = (e2 <= e1);
+                float p   = sel ? k2 : k1;
+                float q   = sel ? v1 : v2;
+                float coh = (((e1 - e2) * (e1 - e2)) /
+                             (e1 * e1 + e2 * e2 + 0.0f)) * 255.0f;
+                float den = q * q + p * p;
+                float rq  = (q * p) / den;
+
+                o0[i] = (int16_t)(int)(((q * q - p * p) / den) * coh);
+                o1[i] = (int16_t)(int)((rq + rq) * coh);
+            }
+        }
+
+        r = cr_gaussian_fir_2pass(&i1, &i1, *(const float *)(obj + 8));
+        if ((int)r != 0) {
+            cr_sized_free_if(hdr);
+            return r;
+        }
+        r = cr_gaussian_fir_2pass(&i3, &i3, *(const float *)(obj + 8));
+        if ((int)r == 0) {
+            const int32_t *bits =
+                *(const int32_t *const *)((const char *)mask_desc + 8);
+            int stride = mask_desc[0];
+            int xoff   = mask_desc[6];
+            int yoff   = mask_desc[7];
+            int sum    = 0;
+            int count  = 0;
+
+            for (int y = 0; y < H; y++) {
+                int row = y * W;
+                for (int x = 0; x < W; x++) {
+                    int bi = (yoff + y) * stride + xoff + x;
+                    if ((bits[bi >> 5] >> ((xoff + x) & 31)) & 1) {
+                        int i  = x + row;
+                        int v0 = o0[i];
+                        int v1 = o1[i];
+                        float s = cr_sqrtf((float)(int32_t)
+                                           ((uint32_t)v0 * (uint32_t)v0 +
+                                            (uint32_t)v1 * (uint32_t)v1));
+                        sum += ((int)(s * 0.4f) & 0xff);
+                        count++;
+                    }
+                }
+            }
+
+            *out = (int16_t)(sum / (count + 1));
+            cr_sized_free_if(hdr);
+            return r;
+        }
+        cr_sized_free_if(hdr);
+        return r;
+    }
+    cr_sized_free_if(hdr);
+    return r;
 }

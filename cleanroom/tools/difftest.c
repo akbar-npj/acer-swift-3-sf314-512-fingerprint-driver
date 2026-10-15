@@ -3731,6 +3731,65 @@ static void test_chain_classify_i16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_chain_classify_i16\n");
 }
 
+/* ---- batch 73: structure-tensor score over a mask (0x180029870) ---------- */
+static void test_structure_tensor_score(void)
+{
+    typedef uint64_t (WINAPI *fn_t)(int16_t *, int *, void *, void *);
+    fn_t v = (fn_t)fn_at(RVA(0x180029870));
+    begin("cr_structure_tensor_score");
+    int bad = g_fail;
+
+    static int16_t src[4096];
+    static int16_t ov[4], oc[4];
+    static u8 geo[0x20];
+    static u8 md[0x20];
+    static u32 bits[512];
+    static u8 obj[0x10];
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 8 + (int)(rnd() % 25u);        /* 8..32 */
+        int h = 8 + (int)(rnd() % 25u);        /* 8..32 */
+
+        for (int i = 0; i < w * h; i++)
+            src[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+
+        /* geo: cr_image-shaped, data = coefficient plane, W=w, H=h */
+        memset(geo, 0, 0x20);
+        *(int *)(geo + 0x00) = w;
+        *(int *)(geo + 0x04) = h;
+        *(void **)(geo + 0x08) = src;
+        *(int *)(geo + 0x10) = w;
+        *(int *)(geo + 0x14) = h;
+
+        /* mask descriptor: stride = *mask, bits at +8, x/y offset at +0x18/1c */
+        int stride = w;
+        for (int i = 0; i < 512; i++) bits[i] = 0;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int bi = y * stride + x;
+                if (rnd() & 1u)
+                    bits[bi >> 5] |= 1u << (bi & 31);
+            }
+        memset(md, 0, 0x20);
+        *(int *)(md + 0x00) = stride;
+        *(void **)(md + 0x08) = bits;
+        *(int *)(md + 0x18) = 0;               /* xoff */
+        *(int *)(md + 0x1c) = 0;               /* yoff */
+
+        *(float *)(obj + 8) = 0.5f + (float)(rnd() % 300u) / 100.0f;
+
+        ov[0] = oc[0] = 0x1234;
+        uint64_t rv = v(ov, (int *)md, geo, obj);
+        uint64_t rc = cr_structure_tensor_score(oc, (const int *)md,
+                                                (const cr_image *)geo,
+                                                (const char *)obj);
+        if ((int)rv != (int)rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (ov[0] != oc[0])
+            mismatch("out", (u32)t, (u32)(uint16_t)ov[0], (u32)(uint16_t)oc[0]);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_structure_tensor_score\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9992,6 +10051,7 @@ int main(int argc, char **argv)
     test_sep_gauss_blur_s16();
     test_linear_softmax2();
     test_chain_classify_i16();
+    test_structure_tensor_score();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

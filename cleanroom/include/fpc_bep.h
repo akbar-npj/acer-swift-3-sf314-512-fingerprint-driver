@@ -882,5 +882,8 @@ int      cr_chain_classify_i16(float *out, const int *chain,
 uint64_t cr_gauss_deriv_triple_coef(const void *d1, const void *d2,
                                     const void *d3, const void *dc,
                                     float sigma);                  /* 0x18002d550 */
+uint64_t cr_structure_tensor_score(int16_t *out, const int *mask_desc,
+                                   const cr_image *geo,
+                                   const char *obj);               /* 0x180029870 */
 
 #endif /* FPC_BEP_H */
