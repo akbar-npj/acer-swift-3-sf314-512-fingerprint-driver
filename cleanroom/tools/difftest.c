@@ -2799,6 +2799,39 @@ static void test_fft_real_fwd(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fft_real_fwd\n");
 }
 
+/* ---- batch 61: inverse real FFT front-end (0x180045490) ---------------- */
+static void test_fft_real_inv(void)
+{
+    typedef int (WINAPI *v_i_ppu)(float *, float *, unsigned);
+    v_i_ppu v = (v_i_ppu)fn_at(RVA(0x180045490));
+    begin("cr_fft_real_inv");
+    int bad = g_fail;
+    enum { MAXN = 512 };
+    static float p1v[MAXN], p2v[MAXN], p1c[MAXN], p2c[MAXN];
+
+    for (int t = 0; t < 400; t++) {
+        unsigned n;
+        if (t % 4 == 3) {
+            n = rnd() % 700u;                          /* often invalid */
+        } else {
+            n = 1u << (4 + (rnd() % 6));               /* 16..512 pow2 */
+        }
+        for (int i = 0; i < MAXN; i++) {
+            float f = (float)((int)(rnd() % 2001) - 1000) / 500.0f;
+            p1v[i] = f; p1c[i] = f;
+            p2v[i] = 123.0f; p2c[i] = 123.0f;
+        }
+        int rv = v(p1v, p2v, n);
+        int rc = cr_fft_real_inv(p1c, p2c, n);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0) {
+            cmp_buf("p1", (u8 *)p1v, (u8 *)p1c, sizeof(float) * (size_t)n, (u32)t);
+            cmp_buf("p2", (u8 *)p2v, (u8 *)p2c, sizeof(float) * (size_t)n, (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fft_real_inv\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9043,6 +9076,7 @@ int main(int argc, char **argv)
     test_fir_ctx_init_i8();
     test_fft_real_n();
     test_fft_real_fwd();
+    test_fft_real_inv();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

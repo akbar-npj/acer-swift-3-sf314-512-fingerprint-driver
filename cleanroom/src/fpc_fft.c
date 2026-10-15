@@ -223,3 +223,52 @@ int cr_fft_real_fwd(float *a1, unsigned n, float *a3)
 
     return (int)r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180045490 — inverse real FFT front-end (twin of cr_fft_real_fwd).
+ *   int fn(float *p1, float *p2, unsigned n)
+ *
+ * Guard (uint)(n-16) > 496 -> 0x69; n must also be a power of two.
+ * Recombines the n spectra of p1 into p2 (mirror butterfly with the
+ * unit-circle twiddle table, stride S = 4096/n), folds the four leftover
+ * bins, then tail-calls cr_fft_inv(p1, p2, n/2) — so the result lands in p1
+ * and p2 is scratch.
+ * ------------------------------------------------------------------------ */
+int cr_fft_real_inv(float *p1, float *p2, unsigned n)
+{
+    if ((uint32_t)(n - 0x10u) > 0x1f0u)
+        return 0x69;
+    if (((uint32_t)1u << (cr_hi_bit_index(n) & 0x1f)) != n)
+        return 0x69;
+
+    int quarter = (int)n >> 2;
+    if (quarter > 1) {
+        const float *tw = cr_fft_twiddle + 4096u / n;   /* stride S */
+        unsigned S = 4096u / n;
+        for (int j = 0; j < quarter - 1; j++) {
+            float a = p1[3 + 2 * j], b = p1[(int)n - 1 - 2 * j];
+            float c = p1[2 + 2 * j], d = p1[(int)n - 2 - 2 * j];
+            float tw1 = tw[0], tw2 = tw[1];
+            tw += S;
+            float f12 = (a + b) * -0.5f;
+            float f16 = (a - b) * 0.5f;
+            float f15 = (c + d) * 0.5f;
+            float f13 = (d - c) * -0.5f;
+            float f14 = tw1 * f12 + tw2 * f13;
+            float f11 = tw1 * f13 - f12 * tw2;
+            p2[2 + 2 * j]        = f15 + f14;
+            p2[3 + 2 * j]        = f16 + f11;
+            p2[(int)n - 1 - 2 * j] = f11 - f16;
+            p2[(int)n - 2 - 2 * j] = f15 - f14;
+        }
+    }
+
+    float a0 = p1[0], a1v = p1[1];
+    unsigned half = n >> 1;
+    p2[0]        = (a1v + a0) * 0.5f;
+    p2[1]        = (a0 - a1v) * 0.5f;
+    p2[half]     = p1[half];
+    p2[half + 1] = p1[half + 1];
+
+    return (int)cr_fft_inv(p1, p2, half);
+}
