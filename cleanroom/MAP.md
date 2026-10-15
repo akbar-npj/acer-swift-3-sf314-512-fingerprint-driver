@@ -479,6 +479,12 @@ side effects, never raw pointer values.
 | `0x18002b930` | `fpc_bio_bep_sw23_784ee12a49` | `cr_gauss_deriv_blur_pair` | Builds 15-tap g (Gaussian) + dg (derivative) windows via `cr_gaussian_deriv_windows_q15`, then writes two separable blurs of the source (dims from `src->w/src->h`): `o1 = rows(dg)+cols(g)`, `o2 = rows(g)+cols(dg)`. Both row passes read the same source data. Out-of-range dims → `0x69` (h) or `1` (w); guard failures short-circuit. |
 | `0x1800256e0` | `fpc_bio_bep_sw23_62b3ad8b73` | `cr_box_median_u8` | n×n box median over an 8-bit image with clamped borders: gather the centred window into a scratch buffer (alloc'd by `cr_malloc_aligned16`), run `(n*n+1)>>1` forward bubble-sort passes, emit `scratch[(n*n-1)/2]`. Scratch freed by `cr_sized_free`. |
 
+### Batch 61 — scaled real FFT front-end
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180029510` | `fpc_bio_bep_sw23_7270b9abae` | `cr_fft_real_fwd` | `int fn(float *a1, unsigned n, float *a3)`. `n > 512` → `0x69`. De-interleaves the `n` real samples of `a1` into `a3` (`a3[k]=a1[2k]`, `a3[n-1-k]=a1[2k+1]` for `k<n/2`), runs `cr_fft_real_n(a3, a1, n)`, then repacks into `a1` via `cr_fft_twiddle`: `a1[0]=a3[0]*0.70710677`, `a1[k]=a3[2k]*T[k*S]-a3[2k+1]*T[k*S+1]`, `a1[n/2+k]=a3[n-2k]*T[off+(k-1)*S]+a3[n-2k+1]*T[off+(k-1)*S+1]` with `S=1024/n`, `off=(n+2)*(512/n)`, and `a1[n/2]=T[512]*a3[1]`; finally scales every output by `scale_tab[cr_hi_bit_index(n)]` (`scale_tab = {sqrt2,1,1/sqrt2,1/2,...}`). Only `n` a power of two in `[16,512]` passes `cr_fft_real_n`, so `n/2` is exact throughout. **Trap:** the first-term twiddle index is `k*S` (the table pointer `R8` advances by `S` floats each iteration), not the constant `S` — using `S` matched only `k=1` and diverged for `k>=2`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

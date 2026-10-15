@@ -164,3 +164,62 @@ int cr_fft_real_n(float *a1, float *a2, int n)
     a1[half + 1] = a2[half + 1];
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180029510 — scaled real FFT front-end.
+ *   int fn(float *a1, unsigned n, float *a3)
+ *
+ * Guard n > 512 -> 0x69.  De-interleaves the n real samples of a1 into a3
+ * (even samples to the front, reversed odd samples to the back), runs
+ * cr_fft_real_n(a3, a1, n), repacks into a1 through the unit-circle twiddle
+ * table, then scales every output by scale_tab[cr_hi_bit_index(n)].
+ * ------------------------------------------------------------------------ */
+int cr_fft_real_fwd(float *a1, unsigned n, float *a3)
+{
+    static const float scale_tab[11] = {
+        1.4142135f, 1.0f, 0.70710677f, 0.5f, 0.35355338f, 0.25f,
+        0.17677669f, 0.125f, 0.088388346f, 0.0625f, 0.044194173f
+    };
+
+    if (n > 0x200u)
+        return 0x69;
+
+    int half = (int)n >> 1;
+    float scale = scale_tab[cr_hi_bit_index(n)];
+
+    if (half != 0) {
+        for (int k = 0; k < half; k++) {
+            a3[k] = a1[2 * k];
+            a3[(int)n - 1 - k] = a1[2 * k + 1];
+        }
+    }
+
+    uint32_t r = (uint32_t)cr_fft_real_n(a3, a1, (int)n);
+    if (r != 0)
+        return (int)r;
+
+    a1[0] = a3[0] * 0.70710677f;
+    int step = 1024 / (int)(2u * n);             /* 512 / n */
+
+    if (half < 2) {
+        a1[half] = cr_fft_twiddle[step * (int)n] * a3[1];
+        if (n == 0)
+            return (int)r;
+    } else {
+        int stride = step * 2;                   /* 1024 / n */
+        int off    = ((int)n + 2) * step;        /* (n + 2) * (512 / n) */
+        for (int k = 1; k < half; k++) {
+            const float *tw = cr_fft_twiddle + off + (k - 1) * stride;
+            a1[k] = a3[2 * k] * cr_fft_twiddle[k * stride]
+                  - a3[2 * k + 1] * cr_fft_twiddle[k * stride + 1];
+            a1[half + k] = a3[(int)n - 2 * k] * tw[0]
+                         + a3[(int)n - 2 * k + 1] * tw[1];
+        }
+        a1[half] = cr_fft_twiddle[step * (int)n] * a3[1];
+    }
+
+    for (int i = 0; i < (int)n; i++)
+        a1[i] *= scale;
+
+    return (int)r;
+}
