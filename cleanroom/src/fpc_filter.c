@@ -2158,3 +2158,100 @@ int cr_filter_chain_run(void *buf, const int *chain, const int *in_desc, int off
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180038080 — 3x3 int16 filter-bank correlation with 2x2 max-pooling.
+ *   int fn(void *out, const void *in, int *desc)
+ *
+ * Descriptor int[]: [1]=H, [2]=W, [3]=nk (kernels/planes), [5]=nch (output
+ * channels), [6]=post-flag, (short**)&desc[8]=kernel table (nch*nk kernels
+ * of 9 shorts), (short**)&desc[10]=bias table (nch shorts).  Output is nch
+ * planes of ((H-2)/2) x ((W-2)/2) shorts.  For each output pixel the 3x3
+ * kernel is correlated against the 4x4 input window at base 2r*W + 2c at
+ * the four 2x2 sub-offsets; the plane sum over all nk kernel/plane pairs is
+ * max-pooled across the four offsets, biased by bias[ch]*0x4000 and
+ * arithmetic-shifted right by 15.  All accumulation is 32-bit wrapping
+ * (the vendor uses IMUL/ADD r32), so the four accumulators are held in
+ * uint32_t.  flag==1 clamps the whole output non-negative via
+ * cr_s16_clamp_nonneg.
+ * ------------------------------------------------------------------------ */
+int cr_filter_bank_max3x3_i16(void *outp, const void *inp, int *desc)
+{
+    int16_t *out = (int16_t *)outp;
+    const int16_t *in = (const int16_t *)inp;
+
+    int H    = desc[1];
+    int W    = desc[2];
+    int nk   = desc[3];
+    int nch  = desc[5];
+    int flag = desc[6];
+    int orows = (H - 2) >> 1;
+    int ocols = (W - 2) >> 1;
+    const int16_t *kern = *(const int16_t **)((const char *)desc + 0x20);
+    const int16_t *bias = *(const int16_t **)((const char *)desc + 0x28);
+
+    if (nch > 0) {
+        int16_t *orow = out;
+        for (int ch = 0; ch < nch; ch++) {
+            int bsh = (int)bias[ch] << 14;
+            int row_off = 0;
+            for (int r = 0; r < orows; r++) {
+                for (int c = 0; c < ocols; c++) {
+                    int val;
+                    if (nk > 0) {
+                        const int16_t *plane = in + row_off + 2 * c;
+                        uint32_t a00 = 0, a01 = 0, a10 = 0, a11 = 0;
+                        for (int p = 0; p < nk; p++) {
+                            const int16_t *K = kern + p * 9;
+                            const int16_t *V = plane + p * H * W;
+                            uint32_t v0 = (uint32_t)V[0], v1 = (uint32_t)V[1];
+                            uint32_t v2 = (uint32_t)V[2], v3 = (uint32_t)V[3];
+                            uint32_t k00 = (uint32_t)K[0], k01 = (uint32_t)K[1], k02 = (uint32_t)K[2];
+                            /* input row 0 vs kernel row 0 */
+                            a00 += k01*v1 + v0*k00 + k02*v2;
+                            a01 += v3*k02 + v2*k01 + v1*k00;
+                            /* input rows 1..2: a10/a11 use kernel row j-1,
+                             * a00/a01 use kernel row j. */
+                            for (int j = 1; j <= 2; j++) {
+                                const int16_t *Wr = V + j * W;
+                                uint32_t w0 = (uint32_t)Wr[0], w1 = (uint32_t)Wr[1];
+                                uint32_t w2 = (uint32_t)Wr[2], w3 = (uint32_t)Wr[3];
+                                uint32_t m00 = (uint32_t)K[(j-1)*3+0], m01 = (uint32_t)K[(j-1)*3+1], m02 = (uint32_t)K[(j-1)*3+2];
+                                uint32_t n00 = (uint32_t)K[j*3+0],     n01 = (uint32_t)K[j*3+1],     n02 = (uint32_t)K[j*3+2];
+                                a10 += w1*m01 + w0*m00 + w2*m02;
+                                a11 += m00*w1 + m01*w2 + m02*w3;
+                                a00 += w0*n00 + w1*n01 + w2*n02;
+                                a01 += w1*n00 + w2*n01 + w3*n02;
+                            }
+                            /* input row 3 vs kernel row 2 */
+                            {
+                                const int16_t *Wr = V + 3 * W;
+                                uint32_t w0 = (uint32_t)Wr[0], w1 = (uint32_t)Wr[1];
+                                uint32_t w2 = (uint32_t)Wr[2], w3 = (uint32_t)Wr[3];
+                                uint32_t n00 = (uint32_t)K[6], n01 = (uint32_t)K[7], n02 = (uint32_t)K[8];
+                                a10 += n01*w1 + w0*n00 + n02*w2;
+                                a11 += n02*w3 + n01*w2 + n00*w1;
+                            }
+                        }
+                        int32_t s00 = (int32_t)a00, s01 = (int32_t)a01;
+                        int32_t s10 = (int32_t)a10, s11 = (int32_t)a11;
+                        int32_t m = (s10 >= s11) ? s10 : s11;
+                        m = (m >= s01) ? m : s01;
+                        m = (m <  s00) ? s00 : m;
+                        val = (int32_t)((uint32_t)m + (uint32_t)bsh);
+                    } else {
+                        val = bsh;
+                    }
+                    orow[c] = (int16_t)(val >> 15);
+                }
+                orow += ocols;
+                row_off += 2 * W;
+            }
+            kern += nk * 9;
+        }
+    }
+
+    if (flag == 1)
+        cr_s16_clamp_nonneg((int16_t *)outp, (const int16_t *)outp, orows * ocols * nch);
+    return 0;
+}

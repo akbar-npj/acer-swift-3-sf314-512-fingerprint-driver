@@ -570,6 +570,9 @@ int      cr_filter_bank_max5x5_f32(void *out, const void *in, int offset,
 int      cr_filter_chain_run(void *buf, const int *chain, const int *in_desc,
                              int off, int row);                          /* 0x180037d20 */
 
+/* 3x3 int16 filter-bank correlation + 2x2 max-pool over nch channels. */
+int      cr_filter_bank_max3x3_i16(void *out, const void *in, int *desc); /* 0x180038080 */
+
 /* ---- batch 47: object-tree lifecycle helpers + image-data accessors ------- *
  * These call into the sized allocator (cr_malloc / cr_sized_free), so their
  * observable contract is guard behaviour + NULL-ing, not pointer identity. */
