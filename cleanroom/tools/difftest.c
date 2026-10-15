@@ -3974,6 +3974,42 @@ static void test_template_ncc_283d0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_template_ncc_283d0\n");
 }
 
+/* ---- batch 73f: 2D-FFT prep (0x18001e920) ------------------------------- */
+static void test_fft2d_prep_1e920(void)
+{
+    typedef int (WINAPI *fn_t)(float *, uint32_t, uint32_t, float *, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x18001e920));
+    begin("cr_fft2d_prep_1e920");
+    int bad = g_fail;
+
+    static float out[512 * 512];
+    static float src[512 * 512];
+    static float ov[512 * 512], oc[512 * 512];
+
+    for (int t = 0; t < 2000; t++) {
+        int e     = (int)(rnd() % 3u);                 /* 0,1,2 pad each side */
+        int nrows = 16 + (int)(rnd() % 185u);          /* 16..200           */
+        int ncols = 16 + (int)(rnd() % 145u);          /* 16..160           */
+        if (ncols + e > nrows || ncols - 2 * e < 1 || nrows - 2 * e < 1)
+            e = 0;                                     /* keep everything in-bounds */
+        int w = ncols - 2 * e;
+        int h = nrows - 2 * e;
+        for (int i = 0; i < nrows * ncols; i++)
+            out[i] = (float)((int)(rnd() % 2000) - 1000) * 0.001f;
+        for (int i = 0; i < w * h; i++)
+            src[i] = (float)((int)(rnd() % 2000) - 1000) * 0.001f;
+        memcpy(ov, out, (size_t)nrows * ncols * 4);
+        memcpy(oc, out, (size_t)nrows * ncols * 4);
+        int rv = v(ov, (uint32_t)ncols, (uint32_t)nrows, src, w, h);
+        int rc = cr_fft2d_prep_1e920(oc, (uint32_t)ncols, (uint32_t)nrows, src, w, h);
+        if (rv != rc)
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("out", (const unsigned char *)ov, (const unsigned char *)oc,
+                (u32)(nrows * ncols * 4), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fft2d_prep_1e920\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -10240,6 +10276,7 @@ int main(int argc, char **argv)
     test_structure_tensor_score_img();
     test_template_ncc_35150();
     test_template_ncc_283d0();
+    test_fft2d_prep_1e920();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

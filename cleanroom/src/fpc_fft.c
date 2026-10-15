@@ -399,3 +399,143 @@ int cr_fft2d_real_bwd(float *out, int orows, int ocols, float *in, unsigned nrow
     cr_sized_free((void **)&scratch);
     return st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001e920 — 2D real-FFT preparation: centre/pad a (param_5 x param_6)
+ * source region into a (param_2 x param_3) working buffer, FFT each column
+ * (length param_2), then FFT each row (length param_3) after periodic
+ * top/bottom boundary extension.
+ *   int fn(float *out, uint ncols, uint nrows, const float *src, int w, int h)
+ * Pure float copies (no float arithmetic) plus two cr_fft_real_fwd calls.
+ * Entry guard: ncols/nrows must be in [0x10, 0x200], else 0x69.  Both
+ * scratch buffers (max(ncols,nrows)*4 and ncols*4 floats) are 16-byte
+ * aligned; the function returns the FFT status (0, or 0x69) unchanged.
+ * ------------------------------------------------------------------------ */
+int cr_fft2d_prep_1e920(float *param_1, uint32_t param_2, uint32_t param_3,
+                         const float *param_4, int param_5, int param_6)
+{
+    int iVar3;
+    float *local_58 = NULL;
+    float *local_50 = NULL;
+
+    if ((param_3 - 0x10u < 0x1f1u) && (param_2 - 0x10u < 0x1f1u)) {
+        uint32_t uVar2 = param_2;
+        if ((int)param_2 <= (int)param_3)
+            uVar2 = param_3;
+        iVar3 = cr_malloc_aligned16((void **)&local_58, (size_t)((int)uVar2 * 4));
+        if (iVar3 == 0) {
+            iVar3 = cr_malloc_aligned16((void **)&local_50,
+                                        (size_t)((int)param_2 * 4));
+            if (iVar3 == 0) {
+                int iVar14 = (int)(param_2 - (uint32_t)param_5) / 2;
+                int iVar12 = param_5 + iVar14;
+                int iVar4  = (int)(param_3 - (uint32_t)param_6) / 2;
+                int iVar13 = param_6 + iVar4;
+                if (iVar4 < iVar13) {
+                    float *pfVar9 = param_1 + iVar4;
+                    long long lVar16 = 0;
+                    do {
+                        int iVar15 = (int)lVar16;
+                        if (0 < iVar14) {
+                            const float *pfVar10 =
+                                param_4 + (iVar15 +
+                                           (int)((uint32_t)param_6 *
+                                                 (uint32_t)(iVar14 - 1)));
+                            float *pfVar6 = local_50;
+                            float *pfVar5;
+                            do {
+                                float fVar1 = *pfVar10;
+                                pfVar5 = pfVar6 + 1;
+                                pfVar10 = pfVar10 - (int)param_6;
+                                *pfVar6 = fVar1;
+                                pfVar6 = pfVar5;
+                            } while (pfVar5 != local_50 + iVar14);
+                        }
+                        if (iVar14 < iVar12) {
+                            const float *pfVar10 = param_4 + iVar15;
+                            float *pfVar6 = local_50 + iVar14;
+                            float *pfVar5;
+                            do {
+                                float fVar1 = *pfVar10;
+                                pfVar5 = pfVar6 + 1;
+                                pfVar10 = pfVar10 + (int)param_6;
+                                *pfVar6 = fVar1;
+                                pfVar6 = pfVar5;
+                            } while (pfVar5 != local_50 + iVar12);
+                        }
+                        if (iVar12 < (int)param_2) {
+                            const float *pfVar10 =
+                                param_4 + (iVar15 +
+                                           (int)((uint32_t)(param_5 - 1) *
+                                                 (uint32_t)param_6));
+                            float *pfVar6 = local_50 + iVar12;
+                            float *pfVar5;
+                            do {
+                                float fVar1 = *pfVar10;
+                                pfVar5 = pfVar6 + 1;
+                                pfVar10 = pfVar10 - (int)param_6;
+                                *pfVar6 = fVar1;
+                                pfVar6 = pfVar5;
+                            } while (pfVar5 != local_50 + (int)param_2);
+                        }
+                        int rc = cr_fft_real_fwd(local_50, param_2, local_58);
+                        if (rc != 0) {
+                            cr_sized_free((void **)&local_58);
+                            cr_sized_free((void **)&local_50);
+                            return rc;
+                        }
+                        long long lVar8 = 0;
+                        float *pfVar10 = pfVar9;
+                        do {
+                            float *pfVar6 = local_50 + (int)lVar8;
+                            lVar8 += 1;
+                            *pfVar10 = *pfVar6;
+                            pfVar10 = pfVar10 + (int)param_3;
+                        } while ((int)lVar8 < (int)param_2);
+                        lVar16 += 1;
+                        pfVar9 = pfVar9 + 1;
+                    } while (lVar16 != (long long)((iVar13 - iVar4) - 1) + 1);
+                }
+                long long local_68 = (long long)(int)param_3;
+                long long lVar8b   = (long long)iVar13;
+                long long lVar11   = (long long)(iVar4 * 2 - 1);
+                int      iVar12b   = 0;
+                long long lVar16b  = (long long)(iVar13 * 2 - 1);
+                do {
+                    if (0 < iVar4) {
+                        float *pfVar9  = param_1 + (int)lVar11;
+                        float *pfVar10 = param_1;
+                        do {
+                            float fVar1 = *pfVar9;
+                            pfVar9 = pfVar9 - 1;
+                            *pfVar10 = fVar1;
+                            pfVar10 = pfVar10 + 1;
+                        } while (param_1 + (int)lVar11 - (iVar4 - 1) - 1 !=
+                                 pfVar9);
+                    }
+                    if (iVar13 < (int)param_3) {
+                        float *pfVar10 = param_1 + (int)(lVar16b - lVar8b);
+                        float *pfVar9  = param_1 + (int)lVar8b;
+                        do {
+                            float fVar1 = *pfVar10;
+                            pfVar10 = pfVar10 - 1;
+                            *pfVar9 = fVar1;
+                            pfVar9 = pfVar9 + 1;
+                        } while (pfVar10 !=
+                                 param_1 + (int)((lVar16b - lVar8b) -
+                                                ((int)param_3 - 1 - iVar13)) -
+                                             1);
+                    }
+                    iVar12b += 1;
+                    cr_fft_real_fwd(param_1, param_3, local_58);
+                    param_1 = param_1 + (int)local_68;
+                } while (iVar12b < (int)param_2);
+                cr_sized_free((void **)&local_50);
+            }
+            cr_sized_free((void **)&local_58);
+        }
+    } else {
+        iVar3 = 0x69;
+    }
+    return iVar3;
+}

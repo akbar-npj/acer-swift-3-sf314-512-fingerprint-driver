@@ -104,6 +104,11 @@ int      cr_fft_real_n(float *a1, float *a2, int n);     /* 0x180018330 */
  * a3 is n floats of scratch; n power of two in [16,512] else 0x69. */
 int      cr_fft_real_fwd(float *a1, unsigned n, float *a3); /* 0x180029510 */
 
+/* 2D real-FFT preparation: centre/pad a (w x h) source into a
+ * (ncols x nrows) buffer, FFT each column then each row. */
+int      cr_fft2d_prep_1e920(float *out, uint32_t ncols, uint32_t nrows,
+                              const float *src, int w, int h); /* 0x18001e920 */
+
 /* inverse real FFT front-end: n spectra of p1 -> n samples of p1, p2 is n
  * floats of scratch; n power of two in [16,512] else 0x69. */
 int      cr_fft_real_inv(float *p1, float *p2, unsigned n); /* 0x180045490 */
