@@ -1925,3 +1925,91 @@ int cr_filter_bank_max5x5(void *outp, const void *inp, int offset, int stride, i
         cr_s16_clamp_nonneg((int16_t *)outp, (const int16_t *)outp, orows * ocols * nch);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180045a50 — 3x3 float filter-bank correlation with 2x2 max-pooling.
+ *   int fn(void *out, const void *in, int *desc)
+ *
+ * Descriptor int[]: [1]=H, [2]=W, [3]=nk (kernels/planes), [5]=nch (output
+ * channels), [6]=post-mode, (float**)&desc[8]=kernel table (nch*nk kernels
+ * of 9 floats), (float**)&desc[10]=bias table (nch floats).  Output is nch
+ * planes of ((H-2)/2) x ((W-2)/2) floats.  For each output pixel the 3x3
+ * kernel is correlated against the 4x4 input window at base
+ * 2r*W + 2c, at the four 2x2 sub-offsets; the plane sum over all nk
+ * kernel/plane pairs is max-pooled, then biased by bias[ch].  post-mode != 0
+ * runs cr_copy_or_relu(out,out,orows*nch*ocols,mode).  Returns 0.
+ *
+ * The float accumulation grouping/order is transcribed verbatim from the
+ * vendor (s00/s01/s10/s11 use different association orders per row), so the
+ * results are bit-identical.
+ * ------------------------------------------------------------------------ */
+int cr_filter_bank_max3x3_f32(void *outp, const void *inp, int *desc)
+{
+    float *out = (float *)outp;
+    const float *in = (const float *)inp;
+
+    int H    = desc[1];
+    int W    = desc[2];
+    int nk   = desc[3];
+    int nch  = desc[5];
+    int mode = desc[6];
+    int orows = (H - 2) >> 1;
+    int ocols = (W - 2) >> 1;
+    const float *kern = *(const float **)((const char *)desc + 0x20);
+    const float *bias = *(const float **)((const char *)desc + 0x28);
+
+    if (nch > 0) {
+        float *orow = out;
+        for (int ch = 0; ch < nch; ch++) {
+            float b = bias[ch];
+            int row_off = 0;
+            for (int r = 0; r < orows; r++) {
+                for (int c = 0; c < ocols; c++) {
+                    float res;
+                    if (nk > 0) {
+                        const float *plane = in + row_off + 2 * c;
+                        float s00 = 0, s01 = 0, s10 = 0, s11 = 0;
+                        for (int p = 0; p < nk; p++) {
+                            const float *K = kern + p * 9;
+                            const float *V = plane + p * H * W;
+                            float k0 = K[0], k1 = K[1], k2 = K[2];
+                            float k3 = K[3], k4 = K[4], k5 = K[5];
+                            float k6 = K[6], k7 = K[7], k8 = K[8];
+                            float v00 = V[0], v01 = V[1], v02 = V[2], v03 = V[3];
+                            float v10 = V[W], v11 = V[W + 1], v12 = V[W + 2], v13 = V[W + 3];
+                            float v20 = V[2 * W], v21 = V[2 * W + 1], v22 = V[2 * W + 2], v23 = V[2 * W + 3];
+                            float v30 = V[3 * W], v31 = V[3 * W + 1], v32 = V[3 * W + 2], v33 = V[3 * W + 3];
+                            s00 += ((k1 * v01) + (k0 * v00)) + (k2 * v02);
+                            s01 += ((v02 * k1) + (v01 * k0)) + (v03 * k2);
+                            s10 += ((v11 * k1) + (v10 * k0)) + (v12 * k2);
+                            s11 += (k2 * v13) + ((k1 * v12) + (k0 * v11));
+                            s00 += ((v10 * k3) + (v11 * k4)) + (v12 * k5);
+                            s01 += (k5 * v13) + ((k4 * v12) + (k3 * v11));
+                            s10 += ((v21 * k4) + (v20 * k3)) + (v22 * k5);
+                            s11 += (k5 * v23) + ((k4 * v22) + (k3 * v21));
+                            s00 += ((v20 * k6) + (v21 * k7)) + (v22 * k8);
+                            s01 += (k8 * v23) + ((k7 * v22) + (k6 * v21));
+                            s10 += ((k7 * v31) + (k6 * v30)) + (k8 * v32);
+                            s11 += (k8 * v33) + ((k7 * v32) + (k6 * v31));
+                        }
+                        float m = s00;
+                        if (m < s01) m = s01;
+                        if (m < s10) m = s10;
+                        if (m < s11) m = s11;
+                        res = m + b;
+                    } else {
+                        res = b;
+                    }
+                    orow[c] = res;
+                }
+                orow += ocols;
+                row_off += 2 * W;
+            }
+            kern += nk * 9;
+        }
+    }
+
+    if (mode != 0)
+        cr_copy_or_relu(outp, outp, orows * nch * ocols, mode);
+    return 0;
+}

@@ -498,6 +498,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x18001d050` | `fpc_bio_bep_sw23_35b121b7ef` | `cr_fft_real_bwd` | `int fn(float *a1, unsigned n, float *a3)`. Twin of `cr_fft_real_fwd`: `n > 512` → `0x69`. Repacks the `n` spectra of `a1` into `a3` — `a3[0]=a1[0]*sqrt2`, and for `k = 0..n/2-2` with `i1=2*step*(k+1)`, `i2=2*step*(n-1-k)` (`step=512/n`): `a3[2+2k]=a1[1+k]*T[i1]+a1[n-1-k]*T[i2]`, `a3[3+2k]=a1[n-1-k]*T[i2+1]-a1[1+k]*T[i1+1]`; then `a3[1]=a1[n/2]*T[512]` — runs `cr_fft_real_inv(a3,a1,n)`, de-interleaves `a3` back into `a1` (`a1[2k]=a3[k]`, `a1[2k+1]=a3[n-1-k]` for `k<n/2`) and scales by `scale_tab[cr_hi_bit_index(n)]`. Passed the difftest on the first run. |
 
+### Batch 64 — 3x3 float filter-bank + 2x2 max-pool
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180045a50` | `fpc_bio_bep_sw23_f21fb7f627` | `cr_filter_bank_max3x3_f32` | `int fn(void *out, const void *in, int *desc)`. Descriptor `int[]`: `[1]=H`, `[2]=W`, `[3]=nk` (kernels/planes), `[5]=nch`, `[6]=post-mode`, `*(float**)&desc[8]`=kernel table (`nch*nk` kernels of 9 floats), `*(float**)&desc[10]`=bias table. Output is `nch` planes of `((H-2)/2) x ((W-2)/2)` floats. For each output pixel the 3x3 kernel is correlated against the 4x4 input window at base `2r*W + 2c` at the four 2x2 sub-offsets; the per-plane sums over all `nk` kernel/plane pairs are max-pooled, then biased by `bias[ch]`; `mode != 0` runs `cr_copy_or_relu(out,out,orows*nch*ocols,mode)`. Returns 0. **Trap:** the four accumulators use *different* float association orders per row (e.g. `s00` row 0 is `(k1*v1 + k0*v0) + k2*v2` but rows 1-2 are `(v0*k0 + v1*k1) + v2*k2`; `s01`/`s11` use `k2*v3 + (k1*v2 + k0*v1)`), so the expression grouping was transcribed verbatim from the asm to stay bit-exact. Passed the difftest on the first run. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

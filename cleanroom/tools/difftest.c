@@ -2921,6 +2921,59 @@ static void test_filter_bank_max5x5(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_filter_bank_max5x5\n");
 }
 
+/* ---- batch 64: 3x3 float filter-bank + 2x2 max-pool (0x180045a50) ------ */
+static void test_filter_bank_max3x3_f32(void)
+{
+    typedef int (WINAPI *v_i_ppP)(void *, const void *, int *);
+    v_i_ppP v = (v_i_ppP)fn_at(RVA(0x180045a50));
+    begin("cr_filter_bank_max3x3_f32");
+    int bad = g_fail;
+    enum { INMAX = 4096, OUTMAX = 1024, KMAX = 48 };
+    static float in_v[INMAX], in_c[INMAX];
+    static float out_v[OUTMAX], out_c[OUTMAX];
+    static float ktab[KMAX * 9], btab[KMAX];
+    static int desc_v[16], desc_c[16];
+
+    for (int t = 0; t < 300; t++) {
+        int H = 4 + (int)(rnd() % 13);           /* 4..16 */
+        int W = 4 + (int)(rnd() % 13);
+        int nk = 1 + (int)(rnd() % 3);
+        int nch = 1 + (int)(rnd() % 3);
+        int mode = (int)(rnd() % 3);             /* 0,1,2 */
+        int nkt = nch * nk;
+
+        for (int i = 0; i < nkt * 9; i++)
+            ktab[i] = (float)((int)(rnd() % 2001) - 1000) / 250.0f;
+        for (int i = 0; i < nch; i++)
+            btab[i] = (float)((int)(rnd() % 2001) - 1000) / 100.0f;
+        for (int i = 0; i < INMAX; i++) {
+            float x = (float)((int)(rnd() % 4001) - 2000) / 100.0f;
+            in_v[i] = x; in_c[i] = x;
+        }
+        for (int i = 0; i < OUTMAX; i++) { out_v[i] = 7.5f; out_c[i] = 7.5f; }
+
+        for (int i = 0; i < 16; i++) desc_v[i] = desc_c[i] = 0;
+        desc_v[1] = desc_c[1] = H;
+        desc_v[2] = desc_c[2] = W;
+        desc_v[3] = desc_c[3] = nk;
+        desc_v[5] = desc_c[5] = nch;
+        desc_v[6] = desc_c[6] = mode;
+        *(float **)((char *)desc_v + 0x20) = ktab;
+        *(float **)((char *)desc_c + 0x20) = ktab;
+        *(float **)((char *)desc_v + 0x28) = btab;
+        *(float **)((char *)desc_c + 0x28) = btab;
+
+        int rv = v(out_v, in_v, desc_v);
+        int rc = cr_filter_bank_max3x3_f32(out_c, in_c, desc_c);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0) {
+            size_t n = (size_t)(((H - 2) >> 1) * ((W - 2) >> 1) * nch);
+            cmp_buf("out", (u8 *)out_v, (u8 *)out_c, n * 4, (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_filter_bank_max3x3_f32\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9168,6 +9221,7 @@ int main(int argc, char **argv)
     test_fft_real_inv();
     test_fft_real_bwd();
     test_filter_bank_max5x5();
+    test_filter_bank_max3x3_f32();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
