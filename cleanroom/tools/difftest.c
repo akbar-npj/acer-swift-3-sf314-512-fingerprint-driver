@@ -3308,6 +3308,60 @@ static void test_bitmap_margin_extract(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_margin_extract\n");
 }
 
+/* ---- batch 70: grid-bucketed keypoint sampler (0x1800466f0) ------------- */
+/* Buckets `npts` keypoint records into a rows x cols grid, shuffles the cell
+ * order, then emits up to `maxout` head payloads (record+4) into `pts[out].f0`.
+ * `maxout` must be <= npts (else the vendor spins) and `(int16)cfg[0x10]` must
+ * be >= npts. */
+static void test_keypoint_grid_sample(void)
+{
+    typedef int (WINAPI *fn_t)(void *, int *, int, int, const int *,
+                               uint32_t, const uint8_t *);
+    fn_t v = (fn_t)fn_at(RVA(0x1800466f0));
+    begin("cr_keypoint_grid_sample");
+    int bad = g_fail;
+
+    enum { NP = 64, CB = 0x28 };
+    static cr_pt8 pv[NP], pc[NP];
+    static int    dims[6];
+    static uint8_t cfg[CB];
+
+    for (int t = 0; t < 20000; t++) {
+        int npts   = 1 + (int)(rnd() % NP);
+        int cols   = 1 + (int)(rnd() % 8);
+        int rows   = 1 + (int)(rnd() % 8);
+        int cap    = npts + (int)(rnd() % 8);
+        int maxout = 1 + (int)(rnd() % npts);
+        int W      = 1 + (int)(rnd() % 200);
+        int H      = 1 + (int)(rnd() % 200);
+
+        memset(cfg, 0, sizeof cfg);
+        *(int16_t *)(cfg + 0x10) = (int16_t)cap;
+        cfg[0x25] = (uint8_t)cols;
+        cfg[0x26] = (uint8_t)rows;
+        memset(dims, 0, sizeof dims);
+        dims[4] = W;
+        dims[5] = H;
+
+        for (int i = 0; i < NP; i++) {
+            pv[i].s.f0 = (int32_t)rnd();
+            pv[i].s.f4 = (int16_t)rnd();
+            pv[i].s.f6 = (int16_t)rnd();
+            pc[i] = pv[i];
+        }
+
+        uint32_t seed = (uint32_t)rnd();
+        int ov = -12345, oc = -12345;
+        int rv = v(pv, &ov, npts, maxout, dims, seed, cfg);
+        int rc = cr_keypoint_grid_sample(pc, &oc, npts, maxout, dims, seed, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ov != oc) mismatch("cnt", (u32)t, (u32)ov, (u32)oc);
+        cmp_buf("pts", (unsigned char *)pv, (unsigned char *)pc,
+                sizeof pv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_keypoint_grid_sample\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9562,6 +9616,7 @@ int main(int argc, char **argv)
     test_filter_chain_run_i16();
     test_fft2d_real_bwd();
     test_bitmap_margin_extract();
+    test_keypoint_grid_sample();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

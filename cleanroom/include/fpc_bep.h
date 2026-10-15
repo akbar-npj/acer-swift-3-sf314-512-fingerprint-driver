@@ -853,4 +853,17 @@ int      cr_harris_local_max_grid(cr_grid *grid, const cr_image *src,
 /* ---- batch 69: morphological margin extract ------------------------------ */
 int      cr_bitmap_margin_extract(cr_image *dst, const cr_image *src); /* 0x180044d10 */
 
+/* ---- batch 70: grid-bucketed keypoint sampler ---------------------------- *
+ * An 8-byte keypoint record: a 4-byte payload at +0 (f0) and two int16 coords
+ * at +4/+6 (f4/f6).  The union exposes the two 4-byte words so the vendor's
+ * raw `*(int32_t*)(rec+4)` accesses can be transcribed exactly. */
+typedef union {
+    struct { int32_t f0; int16_t f4; int16_t f6; } s;
+    int32_t w[2];
+} cr_pt8;
+
+int      cr_keypoint_grid_sample(cr_pt8 *pts, int *out_count, int npts,
+                                 int maxout, const int *dims, uint32_t seed,
+                                 const uint8_t *cfg);              /* 0x1800466f0 */
+
 #endif /* FPC_BEP_H */

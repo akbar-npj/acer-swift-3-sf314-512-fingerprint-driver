@@ -54,3 +54,115 @@ void cr_bilinear_sample_u8(uint8_t *out, const cr_image *img,
         out[i] = (uint8_t)((w00 * p0 + w01 * p1 + w10 * p2 + w11 * p3) >> 15);
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800466f0 — grid-bucketed keypoint sampler.
+ *   int fn(cr_pt8 *pts, int *out_count, int npts, int maxout,
+ *          const int *dims, uint32_t seed, const uint8_t *cfg)
+ *
+ * Buckets the `npts` keypoint records (coords `f4`/`f6`) into a `cfg[0x26]`
+ * (rows) x `cfg[0x25]` (cols) grid, where cell x = f4*cols/dims[4] and cell
+ * y = f6*rows/dims[5] (each clamped, negatives to 0, then to the grid edge).
+ * `heads[cell]` is the per-cell linked-list head and `nexts[kp]` the chain,
+ * both -1 terminated; the list is built by a *descending* keypoint scan so the
+ * head is the lowest index.  The `ncells` cell ids are then shuffled by
+ * `cr_shuffle_indices(seed)`.  Finally the shuffled cell order is walked
+ * (wrapping) and, for every non-empty cell, the current head's payload word
+ * (record+4) is copied to `pts[outn].f0` and the cell advances down its chain,
+ * until `maxout` outputs (or every cell is drained).  The count is stored in
+ * `*out_count`.  Scratch: `nexts` is `(int16)cfg[0x10]` ints, `heads`/`order`
+ * are `ncells` ints each, all via `cr_malloc_aligned16`; on any alloc failure
+ * the already-allocated buffers are freed and the status returned.  On success
+ * all three are freed and 0 returned.
+ *
+ * Trap: the per-record update writes the 4 bytes at record+4 with the record's
+ * own 4-byte word 0 *after* both coords have been read; the union `cr_pt8`
+ * captures this (w[1] = w[0]).
+ * ------------------------------------------------------------------------ */
+int cr_keypoint_grid_sample(cr_pt8 *pts, int *out_count, int npts, int maxout,
+                            const int *dims, uint32_t seed, const uint8_t *cfg)
+{
+    int32_t *nexts = NULL;      /* local_60 */
+    int32_t *heads = NULL;      /* local_58 */
+    int32_t *order = NULL;      /* local_50  */
+    int      st;
+
+    const int cols = cfg[0x25];
+    const int rows = cfg[0x26];
+    const int W    = dims[4];
+    const int H    = dims[5];
+
+    st = cr_malloc_aligned16((void **)&nexts,
+                             (size_t)((int64_t)*(const int16_t *)(cfg + 0x10) << 2));
+    if (st != 0)
+        return st;
+
+    const int ncells = rows * cols;
+    st = cr_malloc_aligned16((void **)&heads, (size_t)((int64_t)ncells << 2));
+    if (st != 0) {
+        cr_sized_free((void **)&nexts);
+        return st;
+    }
+    st = cr_malloc_aligned16((void **)&order, (size_t)((int64_t)ncells << 2));
+    if (st != 0) {
+        cr_sized_free((void **)&nexts);
+        cr_sized_free((void **)&heads);
+        return st;
+    }
+
+    for (int k = 0; k < ncells; k++)
+        heads[k] = -1;
+
+    if (npts - 1 >= 0) {
+        for (int kp = npts - 1; kp >= 0; kp--) {
+            int32_t f0 = pts[kp].w[0];
+            int16_t s4 = pts[kp].s.f4;
+            int16_t s6 = pts[kp].s.f6;
+
+            int c = ((int)s4 * cols) / W;
+            if (c < 0)
+                c = 0;
+            int r = ((int)s6 * rows) / H;
+            pts[kp].w[1] = f0;
+            if (r < 0)
+                r = 0;
+            if (r > rows - 1)
+                r = rows - 1;
+            if (c > cols - 1)
+                c = cols - 1;
+
+            int32_t *head = &heads[c + r * cols];
+            if (*head == -1) {
+                *head = kp;
+                nexts[kp] = -1;
+            } else {
+                nexts[kp] = *head;
+                *head = kp;
+            }
+        }
+    }
+
+    cr_shuffle_indices(order, ncells, (uint64_t)seed);
+
+    int outn = 0;
+    if (maxout >= 1) {
+        int idx = 0;
+        do {
+            int cur = idx;
+            idx = (cur >= ncells - 1) ? 0 : cur + 1;
+            int32_t *head = &heads[order[cur]];
+            if (*head != -1) {
+                pts[outn].w[0] = pts[*head].w[1];
+                *head = nexts[*head];
+                outn++;
+            }
+        } while (outn < maxout);
+    }
+
+    *out_count = outn;
+
+    cr_sized_free((void **)&nexts);
+    cr_sized_free((void **)&heads);
+    cr_sized_free((void **)&order);
+    return 0;
+}
