@@ -2498,3 +2498,46 @@ int cr_fir_norm_rows_s16(int16_t *out, const int16_t *in, const int16_t *kern,
     cr_sized_free((void **)&gather);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800278f0 — separable Q15 Gaussian blur (int16), two normalized passes.
+ *   int fn(cr_image *dst, const cr_image *src, float sigma, unsigned klen)
+ *
+ * Both descriptors must be full views: the 8-byte (a,b) pair equals the (w,h)
+ * pair and (offx,offy) is zero, and `klen` must be odd — otherwise returns
+ * 0x69 without touching anything.  Allocates `klen` shorts for the kernel,
+ * fills it with `cr_gaussian_window_q15(kernel, sigma, klen)`, then runs the
+ * horizontal pass `cr_fir_norm_rows_s16(dst->data, src->data, kern, klen,
+ * src->w, src->h)` followed (only on success) by the in-place vertical pass
+ * `cr_fir_norm_s16(dst->data, dst->data, kern, klen, src->w, src->h)`; the
+ * kernel is always freed.  Returns 0x69 on the guard, an allocator status, or
+ * the first failing FIR's status.
+ * ------------------------------------------------------------------------ */
+int cr_sep_gauss_blur_s16(cr_image *dst, const cr_image *src, float sigma,
+                          unsigned klen)
+{
+    int      st = 0x69;
+    int16_t *kern = NULL;
+
+    if (dst->a == dst->w && dst->b == dst->h && dst->offx == 0 && dst->offy == 0 &&
+        src->a == src->w && src->b == src->h && src->offx == 0 && src->offy == 0 &&
+        (klen & 1u) != 0) {
+        const int w = src->w;
+        const int h = src->h;
+
+        st = cr_malloc_aligned16((void **)&kern,
+                                 (size_t)((int64_t)(int32_t)klen << 1));
+        if (st == 0) {
+            cr_gaussian_window_q15(kern, sigma, (int)klen);
+            st = cr_fir_norm_rows_s16((int16_t *)dst->data,
+                                      (const int16_t *)src->data,
+                                      kern, (int)klen, w, h);
+            if (st == 0)
+                st = cr_fir_norm_s16((int16_t *)dst->data,
+                                     (const int16_t *)dst->data,
+                                     kern, (int)klen, w, h);
+            cr_sized_free((void **)&kern);
+        }
+    }
+    return st;
+}
