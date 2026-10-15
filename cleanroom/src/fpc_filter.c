@@ -2914,3 +2914,221 @@ uint64_t cr_structure_tensor_score(int16_t *out, const int *mask_desc,
     cr_sized_free_if(hdr);
     return r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800231a0 — fixed-point 2D convolution block with max/min reductions.
+ *   uint64_t fn(int16_t *out, const intptr_t *ptrs, const void *desc)
+ *
+ *   desc layout (int-indexed at 4-byte strides):
+ *     [2] = line pitch (shorts/row of each ptrs[] buffer, *2 -> bytes)
+ *     [3] = K  (kernel rows, also the number of 3-wide kernel rows)
+ *     [4] = Wout (output width)
+ *     [5] = R  (number of slices / output rows)
+ *     [6] = transpose flag (==1 -> final in-place clamp to non-negative)
+ *     [8] = (void*) kernel base  (K*9 int16: K rows of 3, interleaved 3x3)
+ *     [10]= (void*) sbase base  (R+ int16 bias source, scaled by 0x4000)
+ *
+ *   For each slice r in [0,R), bias iVar6 = sbase[r] * 0x4000.  For each output
+ *   column pair the two accumulation phases (phase A over ptrs[0..2], phase B
+ *   over ptrs[1..3]) compute a 3xK correlation; the four sub-sums are reduced
+ *   with max/min into two results shifted down by 15 and biased by iVar6.  The
+ *   tail handles the odd trailing column.  Returns 0; if desc[6]==1 the output
+ *   is clamped non-negative via cr_s16_clamp_nonneg.
+ * ------------------------------------------------------------------------ */
+uint64_t cr_block_conv_231a0(int16_t *out, const intptr_t *ptrs, const void *desc)
+{
+    const int    *dp      = (const int *)desc;
+    int           iVar2   = dp[5];                 /* R  */
+    int           iVar3   = dp[3];                 /* K  */
+    int           iVar4   = dp[4];                 /* Wout */
+    if (0 < iVar2) {
+        const int16_t *local_98 = *(const int16_t *const *)(desc + 0x20);
+        int            local_6c = 0;
+        const int16_t *local_c0 = local_98 + (size_t)(iVar3 - 1) * 9 + 9;
+        const int16_t *sbase    = *(const int16_t *const *)(desc + 0x28);
+        uint32_t       uVar12   = (uint32_t)(iVar4 - 2U) >> 1;
+        long long      lVar5    = (long long)dp[2] * 2;
+        const intptr_t *plVar17 = ptrs + 1;
+        const intptr_t *plVar26, *plVar26b;
+        const int16_t *psVar9   = sbase;
+        const int16_t *local_68 = sbase + 1;
+        while (1) {
+            int iVar6 = (int)*psVar9 * 0x4000;
+            long long lVar27;
+            if (iVar4 < 2) {
+                lVar27 = 0;
+            } else {
+                long long local_a0 = 0;
+                lVar27 = (long long)local_6c * 2;  /* byte base; short base = local_6c */
+                do {
+                    int iVar18 = iVar6;
+                    int iVar24 = iVar6;
+                    if (0 < iVar3) {
+                        int iVar13 = 0;
+                        iVar24 = 0;
+                        iVar18 = 0;
+                        const int16_t *local_d0 = local_98;
+                        int iVar8 = 0;
+                        long long lVar28 = (long long)(int)local_a0 * 2;
+                        const int16_t *psVar9b = local_98;
+                        const intptr_t *plVar23 = ptrs;
+                        long long lVar25 = lVar28;
+                        const int16_t *psVar22 = local_98;
+                        do {
+                            do {
+                                int iVar10 = (int)*psVar9b;
+                                plVar26 = plVar23 + 1;
+                                const int16_t *psVar22d =
+                                    (const int16_t *)(*plVar23 + lVar25);
+                                int iVar15 = (int)psVar22d[2];
+                                int iVar19 = (int)psVar22d[3];
+                                int iVar11 = (int)psVar9b[1];
+                                int iVar7  = (int)psVar9b[2];
+                                iVar13 = iVar13 + iVar15 * iVar10 + iVar19 * iVar11 +
+                                         psVar22d[4] * iVar7;
+                                iVar18 = iVar15 * iVar7 + psVar22d[1] * iVar11 +
+                                         iVar18 + psVar22d[0] * iVar10;
+                                iVar24 = iVar24 + psVar22d[1] * iVar10 +
+                                         iVar15 * iVar11 + iVar19 * iVar7;
+                                iVar8  = iVar7 * psVar22d[5] + iVar11 * psVar22d[4] +
+                                         iVar8 + iVar10 * iVar19;
+                                psVar9b = psVar9b + 3;
+                                plVar23 = plVar26;
+                            } while (ptrs + 3 != plVar26);
+                            psVar9b = local_d0 + 9;
+                            lVar25 = lVar25 + lVar5;
+                            plVar23 = ptrs;
+                            local_d0 = psVar9b;
+                        } while (local_c0 != psVar9b);
+                        if (iVar24 <= iVar18) iVar24 = iVar18;
+                        if (iVar8 <= iVar13) iVar8 = iVar13;
+                        int iVar7b = 0;
+                        int iVar10b = 0;
+                        iVar13 = 0;
+                        iVar18 = 0;
+                        const int16_t *psVar22b = local_98;
+                        const intptr_t *plVar23b = plVar17;
+                        const int16_t *psVar20 = local_98;
+                        do {
+                            do {
+                                int iVar15b = (int)*psVar22b;
+                                plVar26b = plVar23b + 1;
+                                const int16_t *psVar14 =
+                                    (const int16_t *)(*plVar23b + lVar28);
+                                int iVar16 = (int)psVar14[2];
+                                int iVar21 = (int)psVar14[3];
+                                int iVar19b = (int)psVar22b[1];
+                                int iVar11b = (int)psVar22b[2];
+                                iVar7b = iVar7b + iVar16 * iVar15b +
+                                         iVar21 * iVar19b +
+                                         psVar14[4] * iVar11b;
+                                iVar18 = iVar16 * iVar11b + psVar14[1] * iVar19b +
+                                         iVar18 + psVar14[0] * iVar15b;
+                                iVar10b = iVar10b + psVar14[1] * iVar15b +
+                                          iVar16 * iVar19b +
+                                          iVar21 * iVar11b;
+                                iVar13 = iVar11b * psVar14[5] +
+                                         iVar19b * psVar14[4] + iVar13 +
+                                         iVar15b * iVar21;
+                                psVar22b = psVar22b + 3;
+                                plVar23b = plVar26b;
+                            } while (ptrs + 4 != plVar26b);
+                            lVar28 = lVar28 + lVar5;
+                            psVar22b = psVar20 + 9;
+                            plVar23b = plVar17;
+                            psVar20 = psVar22b;
+                        } while (psVar9b != psVar22b);
+                        if (iVar18 <= iVar24) iVar18 = iVar24;
+                        if (iVar18 < iVar10b) iVar18 = iVar10b;
+                        if (iVar13 < iVar8) iVar13 = iVar8;
+                        if (iVar13 < iVar7b) iVar13 = iVar7b;
+                        iVar18 = iVar18 + iVar6;
+                        iVar24 = iVar13 + iVar6;
+                    }
+                    out[local_6c + (size_t)(local_a0 / 2)] = (int16_t)(iVar18 >> 15);
+                    out[local_6c + (size_t)(local_a0 / 2) + 1] =
+                        (int16_t)(iVar24 >> 15);
+                    local_a0 = local_a0 + 4;
+                } while ((uint64_t)uVar12 * 4 + 4 != local_a0);
+                lVar27 = (long long)(int)(uVar12 * 2 + 2);
+            }
+            if ((int)lVar27 < iVar4) {
+                do {
+                    int iVar18 = iVar6;
+                    if (0 < iVar3) {
+                        iVar18 = 0;
+                        int iVar24 = 0;
+                        long long lVar28 =
+                            (long long)((int)lVar27 * 2) * 2;
+                        const int16_t *psVar9b = local_98;
+                        const intptr_t *plVar23 = ptrs;
+                        long long lVar25 = lVar28;
+                        const int16_t *psVar22 = local_98;
+                        do {
+                            do {
+                                plVar26 = plVar23 + 1;
+                                const int16_t *psVar20d =
+                                    (const int16_t *)(*plVar23 + lVar25);
+                                iVar24 = iVar24 +
+                                         (int)*psVar20d * (int)*psVar9b +
+                                         (int)psVar20d[1] * (int)psVar9b[1] +
+                                         (int)psVar20d[2] * (int)psVar9b[2];
+                                iVar18 = (int)psVar9b[2] * (int)psVar20d[3] +
+                                         (int)psVar9b[1] * (int)psVar20d[2] +
+                                         iVar18 +
+                                         (int)*psVar9b * (int)psVar20d[1];
+                                psVar9b = psVar9b + 3;
+                                plVar23 = plVar26;
+                            } while (ptrs + 3 != plVar26);
+                            psVar9b = psVar22 + 9;
+                            lVar25 = lVar25 + lVar5;
+                            plVar23 = ptrs;
+                            psVar22 = psVar9b;
+                        } while (local_c0 != psVar9b);
+                        if (iVar18 <= iVar24) iVar18 = iVar24;
+                        int iVar8 = 0;
+                        iVar24 = 0;
+                        const int16_t *psVar22b = local_98;
+                        const intptr_t *plVar23b = plVar17;
+                        const int16_t *psVar20 = local_98;
+                        do {
+                            do {
+                                plVar26b = plVar23b + 1;
+                                const int16_t *psVar14 =
+                                    (const int16_t *)(*plVar23b + lVar28);
+                                iVar8 = iVar8 +
+                                        (int)*psVar14 * (int)*psVar22b +
+                                        (int)psVar14[1] * (int)psVar22b[1] +
+                                        (int)psVar14[2] * (int)psVar22b[2];
+                                iVar24 = (int)psVar22b[2] * (int)psVar14[3] +
+                                         (int)psVar22b[1] * (int)psVar14[2] +
+                                         iVar24 +
+                                         (int)*psVar22b * (int)psVar14[1];
+                                psVar22b = psVar22b + 3;
+                                plVar23b = plVar26b;
+                            } while (ptrs + 4 != plVar26b);
+                            psVar22b = psVar20 + 9;
+                            lVar28 = lVar28 + lVar5;
+                            plVar23b = plVar17;
+                            psVar20 = psVar22b;
+                        } while (psVar9b != psVar22b);
+                        if (iVar24 < iVar18) iVar24 = iVar18;
+                        if (iVar24 < iVar8) iVar24 = iVar8;
+                        iVar18 = iVar24 + iVar6;
+                    }
+                    out[local_6c + (size_t)lVar27] = (int16_t)(iVar18 >> 15);
+                    lVar27 = lVar27 + 1;
+                } while ((int)lVar27 < iVar4);
+            }
+            local_6c = local_6c + iVar4;
+            local_c0 = local_c0 + iVar3 * 9;
+            local_98 = local_98 + iVar3 * 9;
+            if (sbase + iVar2 == local_68) break;
+            psVar9 = local_68;
+            local_68 = local_68 + 1;
+        }
+    }
+    if (*(int *)(desc + 0x18) == 1)
+        cr_s16_clamp_nonneg(out, out, iVar4 * iVar2);
+    return 0;
+}

@@ -3790,6 +3790,60 @@ static void test_structure_tensor_score(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_structure_tensor_score\n");
 }
 
+/* ---- batch 73b: fixed-point 2D conv block (0x1800231a0) ----------------- */
+static void test_block_conv_231a0(void)
+{
+    typedef uint64_t (WINAPI *fn_t)(int16_t *, intptr_t *, void *);
+    fn_t v = (fn_t)fn_at(RVA(0x1800231a0));
+    begin("cr_block_conv_231a0");
+    int bad = g_fail;
+
+    static int16_t kbuf[9 * 8];                       /* kernel, up to K=7x9 */
+    static int16_t sbuf[16];                           /* bias source        */
+    static int16_t dbuf[4][(16 + 8) * 8 + 32];         /* 4 data buffers     */
+    static int16_t ov[256], oc[256];
+    static long long desc[8];                          /* 8-byte aligned     */
+
+    for (int t = 0; t < 4000; t++) {
+        int R    = 1 + (int)(rnd() % 6u);              /* 1..6  */
+        int K    = 1 + (int)(rnd() % 6u);              /* 1..6  */
+        int Wout = 1 + (int)(rnd() % 16u);             /* 1..16 */
+        int line = Wout + 8;
+
+        for (int i = 0; i < K * 9; i++)
+            kbuf[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+        for (int i = 0; i < R + 2; i++)
+            sbuf[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+        for (int j = 0; j < 4; j++)
+            for (int i = 0; i < line * K + 16; i++)
+                dbuf[j][i] = (int16_t)((int)(rnd() % 65536) - 32768);
+
+        memset(desc, 0, sizeof(desc));
+        char *d = (char *)desc;
+        *(int *)(d + 0x08) = line;
+        *(int *)(d + 0x0c) = K;
+        *(int *)(d + 0x10) = Wout;
+        *(int *)(d + 0x14) = R;
+        *(int *)(d + 0x18) = (rnd() & 1u) ? 1 : 0;
+        *(void **)(d + 0x20) = kbuf;
+        *(void **)(d + 0x28) = sbuf;
+
+        intptr_t ptrs[4];
+        for (int j = 0; j < 4; j++) ptrs[j] = (intptr_t)dbuf[j];
+
+        memset(ov, 0, sizeof(ov));
+        memset(oc, 0, sizeof(oc));
+        uint64_t rv = v(ov, ptrs, d);
+        uint64_t rc = cr_block_conv_231a0(oc, (const intptr_t *)ptrs, d);
+        if ((int)rv != (int)rc)
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        int n = Wout * R;
+        cmp_buf("out", (const unsigned char *)ov, (const unsigned char *)oc,
+                (u32)(n * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_block_conv_231a0\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -10052,6 +10106,7 @@ int main(int argc, char **argv)
     test_linear_softmax2();
     test_chain_classify_i16();
     test_structure_tensor_score();
+    test_block_conv_231a0();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
