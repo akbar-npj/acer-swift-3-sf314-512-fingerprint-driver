@@ -2405,3 +2405,96 @@ int cr_fir_norm_s16(int16_t *out, const int16_t *in, const int16_t *kern,
     cr_sized_free((void **)&gather);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001e400 — normalized 1-D int16 FIR along each row of a row-major image
+ * (the horizontal twin of 0x180011a70; the caller passes `W` = image width and
+ * `H` = image height).
+ *   int fn(int16_t *out, const int16_t *in, const int16_t *kern,
+ *          int klen, int W, int H)
+ *
+ * Identical arithmetic to `cr_fir_norm_s16`, but each row of `W` contiguous
+ * samples is gathered (rather than a strided column) and the results are
+ * written back along the same row.  See `cr_fir_norm_s16` for the denominator
+ * construction, the left/middle/right regions, the dead `0x4000` branches, and
+ * the 32-bit-wrapping accumulation trap.  Returns 0 or an allocator status.
+ * ------------------------------------------------------------------------ */
+int cr_fir_norm_rows_s16(int16_t *out, const int16_t *in, const int16_t *kern,
+                         int klen, int W, int H)
+{
+    int16_t *gather = NULL;
+    int32_t *denom  = NULL;
+    int      st;
+
+    st = cr_malloc_aligned16((void **)&gather, (size_t)((int64_t)W << 1));
+    if (st != 0)
+        return st;
+
+    const int h = klen >> 1;
+    const int m = h + 1;
+
+    st = cr_malloc_aligned16((void **)&denom, (size_t)((int64_t)m << 2));
+    if (st != 0) {
+        cr_sized_free((void **)&gather);
+        return st;
+    }
+
+    denom[0] = kern[h];
+    for (int k = 1; k <= h; k++)
+        denom[k] = denom[k - 1] + (int32_t)kern[h - k] * 2;
+    const int32_t full = denom[h];
+
+    if (H > 0) {
+        for (int row = 0; row < H; row++) {
+            const int16_t *ip = in + (size_t)row * W;
+            int16_t       *op = out + (size_t)row * W;
+
+            for (int j = 0; j < W; j++)
+                gather[j] = ip[j];
+
+            for (int i = 0; i < h; i++) {
+                uint32_t acc;
+                if (h + i < h - i) {
+                    acc = 0x4000u;
+                } else {
+                    acc = 0;
+                    for (int t = h - i; t <= h + i; t++)
+                        acc += (uint32_t)((int32_t)kern[t] *
+                                          (int32_t)gather[(i - h) + t]);
+                    acc += 0x4000u;
+                }
+                op[i] = (int16_t)((int32_t)acc / denom[i]);
+            }
+
+            for (int i = 0; i < W - 2 * h; i++) {
+                uint32_t acc = 0x4000u;
+                if (klen > 0) {
+                    acc = 0;
+                    for (int k = 0; k < klen; k++)
+                        acc += (uint32_t)((int32_t)kern[k] *
+                                          (int32_t)gather[i + k]);
+                    acc += 0x4000u;
+                }
+                op[h + i] = (int16_t)((int32_t)acc / full);
+            }
+
+            for (int i = 1; i <= h; i++) {
+                uint32_t acc;
+                if (i > 2 * h - i) {
+                    acc = 0x4000u;
+                } else {
+                    acc = 0;
+                    for (int t = i; t <= 2 * h - i; t++)
+                        acc += (uint32_t)((int32_t)kern[t] *
+                                          (int32_t)gather[(W - 2 * h - 1 + i) + t]);
+                    acc += 0x4000u;
+                }
+                op[W - h + i - 1] = (int16_t)((int32_t)acc / denom[h - i]);
+            }
+        }
+    }
+
+    cr_sized_free((void **)&denom);
+    cr_sized_free((void **)&gather);
+    return 0;
+}

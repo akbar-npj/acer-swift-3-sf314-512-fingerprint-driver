@@ -856,6 +856,8 @@ int      cr_bitmap_margin_extract(cr_image *dst, const cr_image *src); /* 0x1800
 /* ---- batch 71: normalized int16 FIR down each column --------------------- */
 int      cr_fir_norm_s16(int16_t *out, const int16_t *in, const int16_t *kern,
                          int klen, int stride, int count);          /* 0x180011a70 */
+int      cr_fir_norm_rows_s16(int16_t *out, const int16_t *in,
+                              const int16_t *kern, int klen, int W, int H); /* 0x18001e400 */
 
 /* ---- batch 70: grid-bucketed keypoint sampler ---------------------------- *
  * An 8-byte keypoint record: a 4-byte payload at +0 (f0) and two int16 coords

@@ -3414,6 +3414,51 @@ static void test_fir_norm_s16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fir_norm_s16\n");
 }
 
+/* ---- 0x18001e400: horizontal twin of cr_fir_norm_s16 ------------------- */
+static void test_fir_norm_rows_s16(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, const void *,
+                               int, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x18001e400));
+    begin("cr_fir_norm_rows_s16");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 40, NP = MAXW * MAXH, KMAX = 15 };
+    static int16_t iv[NP], ic[NP], ov[NP], oc[NP], kern[KMAX];
+
+    for (int t = 0; t < 20000; t++) {
+        int klen = 1 + 2 * (int)(rnd() % ((KMAX + 1) / 2));  /* odd 1..15 */
+        int h    = klen >> 1;
+        int W    = klen + (int)(rnd() % (MAXW - klen + 1));  /* >= klen */
+        int H    = 1 + (int)(rnd() % MAXH);
+
+        int ok = 0;
+        for (int attempt = 0; attempt < 40 && !ok; attempt++) {
+            for (int k = 0; k < klen; k++)
+                kern[k] = (int16_t)rnd();
+            int64_t d = kern[h];
+            ok = (d != 0);
+            for (int k = 1; k <= h && ok; k++) {
+                d += 2LL * kern[h - k];
+                if (d == 0) ok = 0;
+            }
+        }
+        if (!ok) continue;
+
+        for (int i = 0; i < W * H; i++) {
+            int16_t x = (int16_t)rnd();
+            iv[i] = x; ic[i] = x; ov[i] = 0x7f; oc[i] = 0x7f;
+        }
+
+        int rv = v(ov, iv, kern, klen, W, H);
+        int rc = cr_fir_norm_rows_s16(oc, ic, kern, klen, W, H);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", (unsigned char *)ov, (unsigned char *)oc,
+                (size_t)W * H * 2, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fir_norm_rows_s16\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9670,6 +9715,7 @@ int main(int argc, char **argv)
     test_bitmap_margin_extract();
     test_keypoint_grid_sample();
     test_fir_norm_s16();
+    test_fir_norm_rows_s16();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
