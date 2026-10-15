@@ -1410,6 +1410,64 @@ static void test_gauss_deriv_triple_guarded(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_triple_guarded\n");
 }
 
+/* ---- batch 72c: coefficient-plane Gaussian-derivative triple (0x18002d550) */
+static void test_gauss_deriv_triple_coef(void)
+{
+    typedef uint64_t (WINAPI *fn_t)(const void *, const void *, const void *,
+                                    const void *, float);
+    fn_t v = (fn_t)fn_at(RVA(0x18002d550));
+    begin("cr_gauss_deriv_triple_coef");
+    int bad = g_fail;
+
+    static int16_t src[4096], o1v[4096], o2v[4096], o3v[4096],
+                   o1c[4096], o2c[4096], o3c[4096];
+    static u8 d4[0x20], d1v[0x20], d2v[0x20], d3v[0x20],
+              d1c[0x20], d2c[0x20], d3c[0x20];
+
+    for (int t = 0; t < 3000; t++) {
+        /* even t: 8-aligned W (guarded path); odd t: any W (plain path) */
+        int   w = (t & 1) ? (16 + (int)(rnd() % 33u))
+                          : (16 + (int)(rnd() % 5u) * 8);   /* 16..48 */
+        int   h = 16 + (int)(rnd() % 33u);                  /* 16..48 */
+        float sigma = (float)(rnd() % 220u) / 100.0f;       /* 0..2.19 */
+
+        for (int i = 0; i < w * h; i++) src[i] = (int16_t)rnd();
+        for (int i = 0; i < 4096; i++)
+            o1v[i] = o1c[i] = o2v[i] = o2c[i] = o3v[i] = o3c[i] = 0x5A5A;
+
+        mk_img2(d4,  src, w, h);
+        mk_img2(d1v, o1v, w, h); mk_img2(d2v, o2v, w, h); mk_img2(d3v, o3v, w, h);
+        mk_img2(d1c, o1c, w, h); mk_img2(d2c, o2c, w, h); mk_img2(d3c, o3c, w, h);
+
+        uint64_t rv = v(d1v, d2v, d3v, d4, sigma);
+        uint64_t rc = cr_gauss_deriv_triple_coef(d1c, d2c, d3c, d4, sigma);
+        if ((int)rv != (int)rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("o1", (const unsigned char *)o1v, (const unsigned char *)o1c, (u32)(w * h * 2), (u32)t);
+        cmp_buf("o2", (const unsigned char *)o2v, (const unsigned char *)o2c, (u32)(w * h * 2), (u32)t);
+        cmp_buf("o3", (const unsigned char *)o3v, (const unsigned char *)o3c, (u32)(w * h * 2), (u32)t);
+    }
+
+    /* each corrupted descriptor must yield the 0x69 guard in both impls */
+    for (int c = 0; c < 4; c++) {
+        static int16_t dd[4096];
+        for (int i = 0; i < 4096; i++) dd[i] = (int16_t)rnd();
+        u8 a[0x20], b[0x20], e[0x20], d[0x20];
+        u8 a2[0x20], b2[0x20], e2[0x20], d2[0x20];
+        mk_img2(a, dd, 24, 24); mk_img2(b, dd, 24, 24);
+        mk_img2(e, dd, 24, 24); mk_img2(d, dd, 24, 24);
+        memcpy(a2, a, 0x20); memcpy(b2, b, 0x20);
+        memcpy(e2, e, 0x20); memcpy(d2, d, 0x20);
+        if (c == 0) { *(int *)(a + 0x10) = 25; *(int *)(a2 + 0x10) = 25; }
+        if (c == 1) { *(int *)(b + 0x18) = 3;  *(int *)(b2 + 0x18) = 3;  }
+        if (c == 2) { *(int *)(e + 0x00) = 0;  *(int *)(e2 + 0x00) = 0;  }
+        if (c == 3) { *(int *)(d + 0x00) = 0;  *(int *)(d2 + 0x00) = 0;  }
+        uint64_t rv = v(a, b, e, d, 1.5f);
+        uint64_t rc = cr_gauss_deriv_triple_coef(a2, b2, e2, d2, 1.5f);
+        if ((int)rv != (int)rc) mismatch("ret-bad", (u32)c, (u32)rv, (u32)rc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_gauss_deriv_triple_coef\n");
+}
+
 /* ---- batch 61: structure-tensor anisotropy image ------------------------- */
 static void test_struct_tensor_aniso(void)
 {
@@ -3610,7 +3668,8 @@ static void test_chain_classify_i16(void)
         int row  = (int)(rnd() % 2);
         int H    = 8 + (int)(rnd() % 6);       /* 8..13 */
         int W    = 8 + (int)(rnd() % 6);
-        int nk   = 1 + (int)(rnd() % 2);
+        int nk   = 1;                          /* chain input is one W x H plane */
+        (void)rnd();                           /* keep the RNG stream aligned    */
         int nch  = 1 + (int)(rnd() % 2);
         int nlin = (int)(rnd() % 3);           /* 0..2 layers */
         int stride = W + (int)(rnd() % 3);
@@ -9901,6 +9960,7 @@ int main(int argc, char **argv)
     test_cordic_atan_q15();
     test_gauss_deriv_triple();
     test_gauss_deriv_triple_guarded();
+    test_gauss_deriv_triple_coef();
     test_struct_tensor_aniso();
     test_struct_tensor_dispatch();
     test_hist_percentiles_f32();

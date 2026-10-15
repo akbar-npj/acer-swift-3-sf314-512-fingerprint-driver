@@ -2691,3 +2691,80 @@ int cr_chain_classify_i16(float *out, const int *chain, const void *src_desc,
     }
     return st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002d550 — Gaussian-derivative triple driven by a coefficient plane.
+ *   uint64_t fn(const void *d1, const void *d2, const void *d3,
+ *               const void *dc, float sigma)
+ *
+ * All four descriptors must be full-view images ((a,b) == (w,h) and
+ * (offx,offy) == 0), else returns 0x69.  `dc` supplies the coefficient plane
+ * at +8 and the dimensions W = dc->w, H = dc->h; the low bit-triple of W
+ * picks the pipeline, and both pipelines only run when sigma >= 0.72f:
+ *   W & 7 == 0 : p1 = rows(d2g) -> cols(g); p3 = rows(g) -> cols(d2g);
+ *                p2 = rows(dg) -> cols(dg), using the *_guarded reflect-101
+ *                FIRs and short-circuiting on the first nonzero status.
+ *   W & 7 != 0 : p1 = fir7(d2g) -> vfir7(g); p3 = fir7(g) -> vfir7(d2g);
+ *                p2 = fir7(dg) -> vfir7(dg), using the plain reflect-101 FIRs
+ *                and returning 0.
+ * {g, dg, d2g} is cr_gaussian_deriv_windows_q15(., ., ., sigma, 7) (that
+ * callee always returns 0, so its status is not observable here).
+ * ------------------------------------------------------------------------ */
+uint64_t cr_gauss_deriv_triple_coef(const void *d1, const void *d2,
+                                    const void *d3, const void *dc, float sigma)
+{
+    const uint64_t *p1  = (const uint64_t *)d1;
+    const uint64_t *p2  = (const uint64_t *)d2;
+    const uint64_t *p3  = (const uint64_t *)d3;
+    const uint64_t *p4  = (const uint64_t *)dc;
+    uint64_t        ret = 0x69;
+
+    if (p1[0] == p1[2] && p1[3] == 0 &&
+        p2[0] == p2[2] && p2[3] == 0 &&
+        p3[0] == p3[2] && p3[3] == 0 &&
+        p4[0] == p4[2] && p4[3] == 0) {
+        const int16_t *coef = *(const int16_t *const *)((const char *)p4 + 0x8);
+        const int      W    = *(const int *)((const char *)p4 + 0x10);
+        const int      H    = *(const int *)((const char *)p4 + 0x14);
+        int16_t        g[7], dg[7], d2g[11];
+
+        if ((*(const uint8_t *)((const char *)p4 + 0x10) & 7) == 0) {
+            if (0.72f <= sigma) {
+                cr_gaussian_deriv_windows_q15(g, dg, d2g, sigma, 7);
+                ret = cr_fir_reflect_rows_guarded((int16_t *)p1[1], coef,
+                                                  d2g, 7, W, H);
+                if ((int)ret == 0) {
+                    ret = cr_fir_reflect_guarded((int16_t *)p1[1],
+                                                 (const int16_t *)p1[1], g, 7, W, H);
+                    if ((int)ret == 0) {
+                        ret = cr_fir_reflect_rows_guarded((int16_t *)p3[1], coef,
+                                                          g, 7, W, H);
+                        if ((int)ret == 0) {
+                            ret = cr_fir_reflect_guarded((int16_t *)p3[1],
+                                                         (const int16_t *)p3[1],
+                                                         d2g, 7, W, H);
+                            if ((int)ret == 0) {
+                                ret = cr_fir_reflect_rows_guarded((int16_t *)p2[1],
+                                                                  coef, dg, 7, W, H);
+                                if ((int)ret == 0)
+                                    ret = cr_fir_reflect_guarded((int16_t *)p2[1],
+                                                                 (const int16_t *)p2[1],
+                                                                 dg, 7, W, H);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (0.72f <= sigma) {
+            cr_gaussian_deriv_windows_q15(g, dg, d2g, sigma, 7);
+            cr_fir7_reflect((int16_t *)p1[1], coef, d2g, W, H);
+            cr_vfir7_cols((int16_t *)p1[1], (const int16_t *)p1[1], g, W, H);
+            cr_fir7_reflect((int16_t *)p3[1], coef, g, W, H);
+            cr_vfir7_cols((int16_t *)p3[1], (const int16_t *)p3[1], d2g, W, H);
+            cr_fir7_reflect((int16_t *)p2[1], coef, dg, W, H);
+            cr_vfir7_cols((int16_t *)p2[1], (const int16_t *)p2[1], dg, W, H);
+            ret = 0;
+        }
+    }
+    return ret;
+}
