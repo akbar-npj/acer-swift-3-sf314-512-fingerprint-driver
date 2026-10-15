@@ -2013,3 +2013,101 @@ int cr_filter_bank_max3x3_f32(void *outp, const void *inp, int *desc)
         cr_copy_or_relu(outp, outp, orows * nch * ocols, mode);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180044ee0 — 5x5 float filter-bank correlation with 2x2 max-pooling.
+ *   int fn(void *out, const void *in, int offset, int stride, int *desc)
+ *
+ * Descriptor int[]: [0]=5 tag, [1]=H, [2]=W, [3]=nk (kernels/planes),
+ * [5]=nch (output channels), [6]=post-mode, (float**)&desc[8]=kernel table
+ * (nch*nk kernels of 25 floats), (float**)&desc[10]=bias table (nch floats).
+ * stride <= 0 defaults to W.  Output is nch planes of ((H-4)/2) x ((W-4)/2)
+ * floats.  For each output pixel the 5x5 kernel is correlated against a 6x6
+ * input window at the four 2x2 sub-offsets; the plane sum over all nk
+ * kernels/planes is max-pooled across the four offsets, then biased by
+ * bias[ch].  post-mode != 0 runs cr_copy_or_relu(out,out,ocols*orows*nch,mode).
+ * Returns 0, or 0x69 when desc[0] != 5.
+ *
+ * The four float accumulators (f40/f42/f41/f140) are transcribed with the
+ * vendor's exact per-row association orders — the row-0 prologue, the
+ * rows-1..4 loop and the row-5 tail each use their own grouping — so the
+ * results are bit-identical.
+ * ------------------------------------------------------------------------ */
+int cr_filter_bank_max5x5_f32(void *outp, const void *inp, int offset, int stride, int *desc)
+{
+    float *out = (float *)outp;
+    const float *in = (const float *)inp;
+
+    if (desc[0] != 5)
+        return 0x69;
+
+    int nch  = desc[5];
+    int nk   = desc[3];
+    int H    = desc[1];
+    int W    = desc[2];
+    if (stride <= 0)
+        stride = W;
+    int orows = (H - 4) >> 1;
+    int ocols = (W - 4) >> 1;
+    const float *kern = *(const float **)((const char *)desc + 0x20);
+    const float *bias = *(const float **)((const char *)desc + 0x28);
+
+    if (nch > 0) {
+        float *orow = out;
+        for (int ch = 0; ch < nch; ch++) {
+            float b = bias[ch];
+            int row_off = 0;
+            for (int r = 0; r < orows; r++) {
+                for (int c = 0; c < ocols; c++) {
+                    float res;
+                    if (nk > 0) {
+                        float f40 = 0.f, f42 = 0.f, f41 = 0.f, f140 = 0.f;
+                        for (int p = 0; p < nk; p++) {
+                            const float *K = kern + p * 25;
+                            const float *V = in + offset + row_off + 2 * c + p * H * W;
+                            /* input row 0 vs kernel row 0 (left-associated) */
+                            {
+                                const float *a  = V;
+                                const float *k0 = K;
+                                f40 += ((((a[0]*k0[0] + a[1]*k0[1]) + a[2]*k0[2]) + a[3]*k0[3]) + a[4]*k0[4]);
+                                f42 += ((((a[1]*k0[0] + a[2]*k0[1]) + a[3]*k0[2]) + a[4]*k0[3]) + a[5]*k0[4]);
+                            }
+                            /* input rows 1..4: f40/f42 pair with kernel row i,
+                             * f41/f140 pair with the previous kernel row i-1. */
+                            for (int i = 1; i <= 4; i++) {
+                                const float *a  = V + i * stride;
+                                const float *ka = K + i * 5;
+                                const float *kb = K + (i - 1) * 5;
+                                f40 += ((((a[0]*ka[0] + a[1]*ka[1]) + a[2]*ka[2]) + a[3]*ka[3]) + a[4]*ka[4]);
+                                f42 += (a[5]*ka[4] + (a[4]*ka[3] + (a[3]*ka[2] + (a[2]*ka[1] + a[1]*ka[0]))));
+                                f41 += ((a[3]*kb[3] + ((a[1]*kb[1] + a[0]*kb[0]) + a[2]*kb[2])) + a[4]*kb[4]);
+                                f140 = (a[5]*kb[4] + (a[4]*kb[3] + (a[3]*kb[2] + (a[2]*kb[1] + a[1]*kb[0])))) + f140;
+                            }
+                            /* input row 5 vs kernel row 4 (left-associated) */
+                            {
+                                const float *a  = V + 5 * stride;
+                                const float *kb = K + 4 * 5;
+                                f41 += ((((a[0]*kb[0] + a[1]*kb[1]) + a[2]*kb[2]) + a[3]*kb[3]) + a[4]*kb[4]);
+                                f140 = (a[5]*kb[4] + (a[4]*kb[3] + (a[3]*kb[2] + (a[1]*kb[0] + a[2]*kb[1])))) + f140;
+                            }
+                        }
+                        float m = (f42 > f40) ? f42 : f40;
+                        if (f41 > m)  m = f41;
+                        if (f140 > m) m = f140;
+                        res = m + b;
+                    } else {
+                        res = b;
+                    }
+                    orow[c] = res;
+                }
+                orow += ocols;
+                row_off += 2 * stride;
+            }
+            kern += nk * 25;
+        }
+    }
+
+    if (desc[6] != 0)
+        cr_copy_or_relu(outp, outp, ocols * orows * nch, desc[6]);
+    return 0;
+}
