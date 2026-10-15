@@ -3597,3 +3597,110 @@ int cr_template_ncc_283d0(int16_t *out, const int16_t *data, const int16_t *ref,
     }
     return local_270;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18000f8b0 — template-NCC apply with a CONSTANT reference buffer
+ * (every ref element = (short)(32768.0 / radius)).
+ *   int fn(const uint64_t *img_out, const uint64_t *img_in, uint16_t radius)
+ * `img_out` / `img_in` are 4x uint64 image descriptors:
+ *   [0] must equal [2] (and [3] must be 0) or the function returns 0x69;
+ *   [1] = int16 data pointer; [2] packs width (low32) and height (high32).
+ * On a valid descriptor it allocates a radius-length int16 ref buffer, fills
+ * it with the constant, runs cr_template_ncc_283d0(out, in, ref, radius, w, h)
+ * then cr_template_ncc_35150(out, out, ref, radius, w, h) in place, and
+ * returns the last status (0, or 0x69).  If the size guards fail it returns 1.
+ * ------------------------------------------------------------------------ */
+int cr_ncc_apply_f8b0(const uint64_t *param_1, const uint64_t *param_2,
+                       uint16_t param_3)
+{
+    if (param_1[0] != param_1[2]) return 0x69;
+    if (param_1[3] != 0)         return 0x69;
+    if (param_2[0] != param_2[2]) return 0x69;
+    if (param_2[3] != 0)         return 0x69;
+
+    int16_t *local_30 = NULL;
+    int      iVar2    = cr_malloc_aligned16((void **)&local_30,
+                                           (size_t)(uint32_t)param_3 * 2);
+    if (iVar2 != 0)
+        return iVar2;
+
+    uint32_t uVar4 = (uint32_t)param_3;
+    if (param_3 != 0) {
+        int16_t *p = local_30;
+        do {
+            *p = (int16_t)(int)(32768.0f / (float)uVar4);
+            p++;
+        } while (local_30 + (uVar4 - 1) + 1 != p);
+    }
+
+    uint32_t uVar1 = (uint32_t)param_2[2];            /* width  */
+    if ((uVar1 < 0x101u) && ((int)uVar4 < (int)uVar1)) {
+        iVar2 = cr_template_ncc_283d0((int16_t *)(intptr_t)param_1[1],
+                                      (const int16_t *)(intptr_t)param_2[1],
+                                      local_30, uVar4, (int)uVar1,
+                                      (int)(param_2[2] >> 32));
+        if (iVar2 != 0)
+            goto done;
+        uVar1 = (uint32_t)(param_2[2] >> 32);         /* height */
+        if ((uVar1 < 0x101u) && ((int)uVar4 < (int)uVar1)) {
+            iVar2 = cr_template_ncc_35150((int16_t *)(intptr_t)param_1[1],
+                                          (const int16_t *)(intptr_t)param_1[1],
+                                          local_30, uVar4,
+                                          (int)(uint32_t)param_2[2], (int)uVar1);
+            goto done;
+        }
+    }
+    iVar2 = 1;
+done:
+    cr_sized_free((void **)&local_30);
+    return iVar2;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180034390 — template-NCC apply with a GAUSSIAN-WINDOW reference buffer.
+ *   int fn(const uint64_t *img_out, const uint64_t *img_in,
+ *          float sigma, uint16_t n)
+ * Same descriptor validation as 0x18000f8b0; the ref buffer (n int16) is
+ * filled by cr_gaussian_window_q15(local_40, sigma, n) instead of a constant,
+ * then cr_template_ncc_283d0 and cr_template_ncc_35150 run as above.  Returns
+ * 0 / 0x69 / 1 with the same meaning.
+ * ------------------------------------------------------------------------ */
+int cr_ncc_apply_34390(const uint64_t *param_1, const uint64_t *param_2,
+                        float param_3, uint16_t param_4)
+{
+    if (param_1[0] != param_1[2]) return 0x69;
+    if (param_1[3] != 0)         return 0x69;
+    if (param_2[0] != param_2[2]) return 0x69;
+    if (param_2[3] != 0)         return 0x69;
+
+    int16_t *local_40 = NULL;
+    int      iVar2    = cr_malloc_aligned16((void **)&local_40,
+                                           (size_t)(uint32_t)param_4 * 2);
+    if (iVar2 != 0)
+        return iVar2;
+
+    cr_gaussian_window_q15(local_40, param_3, (int)(uint32_t)param_4);
+
+    uint32_t uVar1 = (uint32_t)param_2[2];            /* width  */
+    if ((uVar1 < 0x101u) && ((int)(uint32_t)param_4 < (int)uVar1)) {
+        uint32_t uVar3 = (uint32_t)param_4;
+        iVar2 = cr_template_ncc_283d0((int16_t *)(intptr_t)param_1[1],
+                                      (const int16_t *)(intptr_t)param_2[1],
+                                      local_40, uVar3, (int)uVar1,
+                                      (int)(param_2[2] >> 32));
+        if (iVar2 != 0)
+            goto done;
+        uVar1 = (uint32_t)(param_2[2] >> 32);         /* height */
+        if (((int)uVar3 < (int)uVar1) && (uVar1 < 0x101u)) {
+            iVar2 = cr_template_ncc_35150((int16_t *)(intptr_t)param_1[1],
+                                          (const int16_t *)(intptr_t)param_1[1],
+                                          local_40, uVar3,
+                                          (int)(uint32_t)param_2[2], (int)uVar1);
+            goto done;
+        }
+    }
+    iVar2 = 1;
+done:
+    cr_sized_free((void **)&local_40);
+    return iVar2;
+}

@@ -901,5 +901,9 @@ int      cr_template_ncc_35150(int16_t *out, const int16_t *data,
 int      cr_template_ncc_283d0(int16_t *out, const int16_t *data,
                                const int16_t *ref, uint32_t radius,
                                int rows, int w);                 /* 0x1800283d0 */
+int      cr_ncc_apply_f8b0(const uint64_t *img_out, const uint64_t *img_in,
+                           uint16_t radius);                     /* 0x18000f8b0 */
+int      cr_ncc_apply_34390(const uint64_t *img_out, const uint64_t *img_in,
+                            float sigma, uint16_t n);            /* 0x180034390 */
 
 #endif /* FPC_BEP_H */

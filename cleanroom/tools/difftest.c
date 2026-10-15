@@ -4010,6 +4010,101 @@ static void test_fft2d_prep_1e920(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_fft2d_prep_1e920\n");
 }
 
+/* ---- batch 73g: NCC apply wrapper (0x18000f8b0) ------------------------- */
+static void test_ncc_apply_f8b0(void)
+{
+    typedef int (WINAPI *fn_t)(uint64_t *, uint64_t *, uint16_t);
+    fn_t v = (fn_t)fn_at(RVA(0x18000f8b0));
+    begin("cr_ncc_apply_f8b0");
+    int bad = g_fail;
+
+    static int16_t inb[128 * 128];
+    static int16_t outb[128 * 128];
+    static int16_t ov[128 * 128], oc[128 * 128];
+    static uint64_t d1[4], d2[4];
+
+    for (int t = 0; t < 3000; t++) {
+        int w  = 2 + (int)(rnd() % 48u);            /* 2..49   */
+        int h  = 2 + (int)(rnd() % 48u);            /* 2..49   */
+        int mn = w < h ? w : h;
+        int radius = 1 + (int)(rnd() % (uint32_t)(mn - 1));
+        int mode = (int)(rnd() % 3u);               /* 0 ok, 1 bad-struct, 2 big-radius */
+
+        for (int i = 0; i < w * h; i++)
+            inb[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+        memset(outb, 0, (size_t)w * h * 2);
+
+        d1[2] = (uint64_t)(uint32_t)w | ((uint64_t)(uint32_t)h << 32);
+        d1[1] = (uint64_t)(uintptr_t)outb;
+        d1[3] = 0;
+        d1[0] = (mode == 1) ? (d1[2] ^ 1) : d1[2];   /* flip to force 0x69 */
+        d2[2] = d1[2];
+        d2[1] = (uint64_t)(uintptr_t)inb;
+        d2[3] = 0;
+        d2[0] = d2[2];
+
+        uint16_t r = (mode == 2) ? (uint16_t)w : (uint16_t)radius;
+        memcpy(ov, outb, (size_t)w * h * 2);
+        memcpy(oc, outb, (size_t)w * h * 2);
+        int rv = v(d1, d2, r);
+        int rc = cr_ncc_apply_f8b0(d1, d2, r);
+        if (rv != rc)
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (mode == 0)
+            cmp_buf("out", (const unsigned char *)ov, (const unsigned char *)oc,
+                    (u32)(w * h * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_ncc_apply_f8b0\n");
+}
+
+/* ---- batch 73h: NCC apply wrapper (0x180034390) ------------------------ */
+static void test_ncc_apply_34390(void)
+{
+    typedef int (WINAPI *fn_t)(uint64_t *, uint64_t *, float, uint16_t);
+    fn_t v = (fn_t)fn_at(RVA(0x180034390));
+    begin("cr_ncc_apply_34390");
+    int bad = g_fail;
+
+    static int16_t inb[128 * 128];
+    static int16_t outb[128 * 128];
+    static int16_t ov[128 * 128], oc[128 * 128];
+    static uint64_t d1[4], d2[4];
+
+    for (int t = 0; t < 3000; t++) {
+        int w  = 2 + (int)(rnd() % 48u);
+        int h  = 2 + (int)(rnd() % 48u);
+        int mn = w < h ? w : h;
+        int n  = 1 + (int)(rnd() % (uint32_t)(mn - 1));
+        float sigma = (float)((int)(rnd() % 2000) - 1000) * 0.01f;
+        int mode = (int)(rnd() % 3u);
+
+        for (int i = 0; i < w * h; i++)
+            inb[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+        memset(outb, 0, (size_t)w * h * 2);
+
+        d1[2] = (uint64_t)(uint32_t)w | ((uint64_t)(uint32_t)h << 32);
+        d1[1] = (uint64_t)(uintptr_t)outb;
+        d1[3] = 0;
+        d1[0] = (mode == 1) ? (d1[2] ^ 1) : d1[2];
+        d2[2] = d1[2];
+        d2[1] = (uint64_t)(uintptr_t)inb;
+        d2[3] = 0;
+        d2[0] = d2[2];
+
+        uint16_t nn = (mode == 2) ? (uint16_t)w : (uint16_t)n;
+        memcpy(ov, outb, (size_t)w * h * 2);
+        memcpy(oc, outb, (size_t)w * h * 2);
+        int rv = v(d1, d2, sigma, nn);
+        int rc = cr_ncc_apply_34390(d1, d2, sigma, nn);
+        if (rv != rc)
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (mode == 0)
+            cmp_buf("out", (const unsigned char *)ov, (const unsigned char *)oc,
+                    (u32)(w * h * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_ncc_apply_34390\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -10277,6 +10372,8 @@ int main(int argc, char **argv)
     test_template_ncc_35150();
     test_template_ncc_283d0();
     test_fft2d_prep_1e920();
+    test_ncc_apply_f8b0();
+    test_ncc_apply_34390();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
