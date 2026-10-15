@@ -2541,3 +2541,104 @@ int cr_sep_gauss_blur_s16(cr_image *dst, const cr_image *src, float sigma,
     }
     return st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002ee10 — filter chain -> stacked linear layers -> 2-way softmax.
+ *   int fn(float *out, const int *desc, const int *in_desc, int off, int row)
+ *
+ * `desc` is the float filter chain consumed by cr_filter_chain_run, extended
+ * with a head of linear sub-descriptors:
+ *   desc[4]                        number of linear layers
+ *   *(void**)((char*)desc + 0x18)  array of 0x20-byte layer records
+ *   desc[8]                        scratch size, in floats (alloc size * 4)
+ * A layer record is: [0]=in_len, [1]=nrows, [2]=post, +0x10 weight (nrows *
+ * in_len floats), +0x18 bias (nrows floats).
+ *
+ * Allocates desc[8] floats, runs cr_filter_chain_run into it, then for each
+ * layer computes, for r in [0,nrows):
+ *   buf[in_len + r] = bias[r] + sum_{j<in_len} weight[r*in_len + j] * buf[j]
+ * (the empty sum when in_len <= 0).  When post != 0 it then runs
+ * cr_copy_or_relu(dst, dst, nrows, post) (dst = buf + in_len); a nonzero
+ * result is returned after freeing.  Finally the nrows results are compacted
+ * to the head of buf (buf[t] = buf[in_len + t]), except that a layer with
+ * nrows < 1 and post == 0 skips both steps.  Once all layers are done it
+ * writes the 2-class softmax of buf[0], buf[1]:
+ *   m = max(buf[1], buf[0]);
+ *   *out = expf(buf[0] - m) / (expf(buf[1] - m) + expf(buf[0] - m));
+ * Returns 0, an allocator/chain status, or cr_copy_or_relu's error code.
+ * ------------------------------------------------------------------------ */
+int cr_linear_softmax2(float *out, const int *desc, const int *in_desc,
+                       int off, int row)
+{
+    float *buf = NULL;
+    int    st;
+
+    st = cr_malloc_aligned16((void **)&buf, (size_t)((int64_t)desc[8] << 2));
+    if (st == 0) {
+        st = cr_filter_chain_run(buf, desc, in_desc, off, row);
+        if (st == 0) {
+            int nlin = desc[4];
+
+            if (nlin > 0) {
+                const char *sd_base =
+                    *(const char *const *)((const char *)desc + 0x18);
+                long soff = 0;
+
+                for (int si = 0; si < nlin; si++) {
+                    const char *sd     = sd_base + soff;
+                    const int   in_len = *(const int *)(sd + 0x00);
+                    const int   nrows  = *(const int *)(sd + 0x04);
+                    const int   post   = *(const int *)(sd + 0x08);
+                    const float *wt    = *(const float *const *)(sd + 0x10);
+                    const float *bias  = *(const float *const *)(sd + 0x18);
+                    float      *dst    = buf + in_len;
+                    int         do_relu;
+
+                    if (nrows < 1) {
+                        do_relu = (post != 0);
+                    } else {
+                        for (int r = 0; r < nrows; r++) {
+                            float sum = 0.0f;
+                            if (in_len > 0)
+                                for (int j = 0; j < in_len; j++)
+                                    sum += wt[r * in_len + j] * buf[j];
+                            dst[r] = sum + bias[r];
+                        }
+                        do_relu = (post != 0);
+                        if (!do_relu)
+                            for (int t = 0; t < nrows; t++)
+                                buf[t] = dst[t];
+                    }
+
+                    if (do_relu) {
+                        uint64_t cs = cr_copy_or_relu(dst, dst, nrows, post);
+                        if ((int)cs != 0) {
+                            cr_sized_free((void **)&buf);
+                            return (int)cs;
+                        }
+                        {
+                            int nr2 = *(const int *)(sd + 0x04);
+                            if (nr2 >= 1) {
+                                int il2 = *(const int *)(sd + 0x00);
+                                for (int t = 0; t < nr2; t++)
+                                    buf[t] = buf[il2 + t];
+                            }
+                        }
+                    }
+                    soff += 0x20;
+                }
+            }
+
+            {
+                float b  = buf[1];
+                float a  = buf[0];
+                float m  = (b > a) ? b : a;      /* MAXSS: NaN -> a          */
+                float ea = cr_expf(a - m);
+                float eb = cr_expf(b - m);
+                *out = ea / (eb + ea);
+            }
+        }
+        cr_sized_free((void **)&buf);
+    }
+    return st;
+}

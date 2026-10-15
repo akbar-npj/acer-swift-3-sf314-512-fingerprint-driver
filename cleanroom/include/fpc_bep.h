@@ -874,4 +874,8 @@ int      cr_keypoint_grid_sample(cr_pt8 *pts, int *out_count, int npts,
                                  int maxout, const int *dims, uint32_t seed,
                                  const uint8_t *cfg);              /* 0x1800466f0 */
 
+/* ---- batch 72: filter chain -> linear layers -> 2-way softmax ------------- */
+int      cr_linear_softmax2(float *out, const int *desc, const int *in_desc,
+                            int off, int row);                     /* 0x18002ee10 */
+
 #endif /* FPC_BEP_H */

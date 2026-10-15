@@ -3506,6 +3506,89 @@ static void test_sep_gauss_blur_s16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_sep_gauss_blur_s16\n");
 }
 
+/* ---- batch 72: filter chain -> linear layers -> 2-way softmax ---------- */
+static void test_linear_softmax2(void)
+{
+    typedef int (WINAPI *fn_t)(float *, const int *, const int *, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x18002ee10));
+    begin("cr_linear_softmax2");
+    int bad = g_fail;
+
+    enum { INMAX = 4096, NLM = 2 };
+    static float in0[INMAX];
+    static int   stage[12];
+    static int   desc_v[16], desc_c[16], ind_v[16], ind_c[16];
+    static int   lin_v[8 * NLM], lin_c[8 * NLM];
+    static float kt[2 * 25], bt[2];
+    static float lw[NLM][3 * 64], lb[NLM][3];
+
+    for (int t = 0; t < 400; t++) {
+        int off  = (int)(rnd() % 3);
+        int row  = (int)(rnd() % 2);
+        int H    = 8 + (int)(rnd() % 6);       /* 8..13 */
+        int W    = 8 + (int)(rnd() % 6);
+        int nk   = 1 + (int)(rnd() % 2);
+        int nch  = 1 + (int)(rnd() % 2);
+        int nlin = (int)(rnd() % 3);           /* 0..2 layers */
+        int nout = ((H - 4) >> 1) * ((W - 4) >> 1) * nch;
+
+        for (int i = 0; i < INMAX; i++)
+            in0[i] = (float)((int)(rnd() % 4001) - 2000) / 100.0f;
+        for (int i = 0; i < 2 * 25; i++)
+            kt[i] = (float)((int)(rnd() % 2001) - 1000) / 250.0f;
+        for (int i = 0; i < 2; i++)
+            bt[i] = (float)((int)(rnd() % 2001) - 1000) / 100.0f;
+
+        /* stage 0: 5x5 float filter bank writing `nout` floats into buf */
+        for (int i = 0; i < 12; i++) stage[i] = 0;
+        stage[0] = 5; stage[1] = H; stage[2] = W;
+        stage[3] = nk; stage[5] = nch; stage[6] = 0;
+        *(float **)((char *)stage + 0x20) = kt;
+        *(float **)((char *)stage + 0x28) = bt;
+
+        /* stacked linear layers, each consuming the previous layer's output */
+        memset(lin_v, 0, sizeof lin_v);
+        int cur = nout;
+        for (int l = 0; l < nlin; l++) {
+            int nl   = (int)(rnd() % 4);       /* nrows 0..3 */
+            int post = (int)(rnd() % 3);       /* 0..2 (2 -> 0x69) */
+            int wmax = (nl > 0 && cur > 0) ? nl * cur : 0;
+            for (int i = 0; i < wmax; i++)
+                lw[l][i] = (float)((int)(rnd() % 4001) - 2000) / 200.0f;
+            for (int i = 0; i < nl; i++)
+                lb[l][i] = (float)((int)(rnd() % 2001) - 1000) / 50.0f;
+            lin_v[l * 8 + 0] = cur;
+            lin_v[l * 8 + 1] = nl;
+            lin_v[l * 8 + 2] = post;
+            *(float **)((char *)&lin_v[l * 8] + 0x10) = lw[l];
+            *(float **)((char *)&lin_v[l * 8] + 0x18) = lb[l];
+            cur = nl;
+        }
+        memcpy(lin_c, lin_v, sizeof lin_v);
+
+        memset(desc_v, 0, sizeof desc_v); memset(desc_c, 0, sizeof desc_c);
+        memset(ind_v, 0, sizeof ind_v);   memset(ind_c, 0, sizeof ind_c);
+        desc_v[0] = desc_c[0] = 1;                        /* one chain stage */
+        *(const int **)((char *)desc_v + 0x08) = stage;
+        *(const int **)((char *)desc_c + 0x08) = stage;
+        desc_v[4] = desc_c[4] = nlin;
+        *(const int **)((char *)desc_v + 0x18) = lin_v;
+        *(const int **)((char *)desc_c + 0x18) = lin_c;
+        desc_v[8] = desc_c[8] = 64;                       /* scratch floats  */
+        ind_v[0] = ind_c[0] = W;
+        *(const float **)((char *)ind_v + 0x08) = in0;
+        *(const float **)((char *)ind_c + 0x08) = in0;
+
+        float ov = 0.0f, oc = 0.0f;
+        int rv = v(&ov, desc_v, ind_v, off, row);
+        int rc = cr_linear_softmax2(&oc, desc_c, ind_c, off, row);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0 && cr_f2u(ov) != cr_f2u(oc))
+            mismatch("out", (u32)t, cr_f2u(ov), cr_f2u(oc));
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_linear_softmax2\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9764,6 +9847,7 @@ int main(int argc, char **argv)
     test_fir_norm_s16();
     test_fir_norm_rows_s16();
     test_sep_gauss_blur_s16();
+    test_linear_softmax2();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
