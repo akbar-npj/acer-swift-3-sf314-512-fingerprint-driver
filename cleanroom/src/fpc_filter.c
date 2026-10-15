@@ -2297,3 +2297,111 @@ int cr_filter_chain_run_i16(void *buf, const int *chain, int start, int end)
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180011a70 — normalized 1-D int16 FIR down each column of a row-major
+ * image (the vertical pass of a separable blur; see 0x18001e400 for the
+ * horizontal twin).
+ *   int fn(int16_t *out, const int16_t *in, const int16_t *kern,
+ *          int klen, int stride, int count)
+ *
+ * `klen` is the (odd) number of taps; `stride` is the row-major leading
+ * dimension (number of columns) and also the outer loop count; `count` is the
+ * number of rows gathered per column.  Allocates a `count`-short gather buffer
+ * and a `(klen>>1)+1`-int denominator buffer via `cr_malloc_aligned16` (freeing
+ * the first on the second's failure).  The denominator is the cumulative tap
+ * sum `denom[i] = kern[h] + 2*sum_{k=1..i} kern[h-k]` (`h = klen>>1`); `full =
+ * denom[h]`.  For each column: gather `in[j*stride]` (j=0..count-1), then:
+ *   - left region  col i in [0,h):  sum_{t=h-i..h+i} kern[t]*gather[(i-h)+t],
+ *     divided by `denom[i]` (a dead `0x4000` branch for i<0);
+ *   - middle region col i in [0,count-2h): sum_{k=0..klen-1} kern[k]*gather[i+k],
+ *     divided by `full`;
+ *   - right region  i in [1,h]:  sum_{t=i..2h-i} kern[t]*gather[(count-2h-1+i)+t],
+ *     divided by `denom[h-i]` (a dead `0x4000` branch for i>2h-i).
+ * Every accumulator gets `+0x4000` before the signed `IDIV`, and the quotient
+ * is truncated to int16.  `stride <= 0` allocates/frees but processes nothing.
+ * Returns 0, or an allocator status.
+ *
+ * Trap: accumulation is *32-bit wrapping* (`IMUL`+`ADD r32`); hold the running
+ * sum in `uint32_t` and only reinterpret as int32 for the signed division.
+ * ------------------------------------------------------------------------ */
+int cr_fir_norm_s16(int16_t *out, const int16_t *in, const int16_t *kern,
+                    int klen, int stride, int count)
+{
+    int16_t *gather = NULL;
+    int32_t *denom  = NULL;
+    int      st;
+
+    st = cr_malloc_aligned16((void **)&gather, (size_t)((int64_t)count << 1));
+    if (st != 0)
+        return st;
+
+    const int h = klen >> 1;
+    const int m = h + 1;
+
+    st = cr_malloc_aligned16((void **)&denom, (size_t)((int64_t)m << 2));
+    if (st != 0) {
+        cr_sized_free((void **)&gather);
+        return st;
+    }
+
+    denom[0] = kern[h];
+    for (int k = 1; k <= h; k++)
+        denom[k] = denom[k - 1] + (int32_t)kern[h - k] * 2;
+    const int32_t full = denom[h];
+
+    if (stride > 0) {
+        const int16_t *ip = in;
+        int16_t       *op = out;
+        for (int r = 0; r < stride; r++, ip++, op++) {
+            for (int j = 0; j < count; j++)
+                gather[j] = ip[(size_t)j * stride];
+
+            for (int i = 0; i < h; i++) {
+                uint32_t acc;
+                if (h + i < h - i) {
+                    acc = 0x4000u;
+                } else {
+                    acc = 0;
+                    for (int t = h - i; t <= h + i; t++)
+                        acc += (uint32_t)((int32_t)kern[t] *
+                                          (int32_t)gather[(i - h) + t]);
+                    acc += 0x4000u;
+                }
+                op[(size_t)i * stride] = (int16_t)((int32_t)acc / denom[i]);
+            }
+
+            for (int i = 0; i < count - 2 * h; i++) {
+                uint32_t acc = 0x4000u;
+                if (klen > 0) {
+                    acc = 0;
+                    for (int k = 0; k < klen; k++)
+                        acc += (uint32_t)((int32_t)kern[k] *
+                                          (int32_t)gather[i + k]);
+                    acc += 0x4000u;
+                }
+                op[(size_t)(h + i) * stride] =
+                    (int16_t)((int32_t)acc / full);
+            }
+
+            for (int i = 1; i <= h; i++) {
+                uint32_t acc;
+                if (i > 2 * h - i) {
+                    acc = 0x4000u;
+                } else {
+                    acc = 0;
+                    for (int t = i; t <= 2 * h - i; t++)
+                        acc += (uint32_t)((int32_t)kern[t] *
+                                          (int32_t)gather[(count - 2 * h - 1 + i) + t]);
+                    acc += 0x4000u;
+                }
+                op[(size_t)(count - h + i - 1) * stride] =
+                    (int16_t)((int32_t)acc / denom[h - i]);
+            }
+        }
+    }
+
+    cr_sized_free((void **)&denom);
+    cr_sized_free((void **)&gather);
+    return 0;
+}

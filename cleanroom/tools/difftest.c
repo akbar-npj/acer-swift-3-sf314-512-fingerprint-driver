@@ -3362,6 +3362,58 @@ static void test_keypoint_grid_sample(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_keypoint_grid_sample\n");
 }
 
+/* ---- batch 71: normalized int16 FIR down each column (0x180011a70) ------ */
+/* Vertical separable-blur pass: for each of `stride` columns gather `count`
+ * row-major samples (stride `stride`), run a normalized FIR of `klen` (odd)
+ * taps, writing back in place.  Needs count >= klen so the gather stays in
+ * bounds; the kernel must keep every cumulative denominator non-zero. */
+static void test_fir_norm_s16(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, const void *,
+                               int, int, int);
+    fn_t v = (fn_t)fn_at(RVA(0x180011a70));
+    begin("cr_fir_norm_s16");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 40, NP = MAXW * MAXH, KMAX = 15 };
+    static int16_t iv[NP], ic[NP], ov[NP], oc[NP], kern[KMAX];
+
+    for (int t = 0; t < 20000; t++) {
+        int klen = 1 + 2 * (int)(rnd() % ((KMAX + 1) / 2));  /* odd 1..15 */
+        int h    = klen >> 1;
+        int W    = 1 + (int)(rnd() % MAXW);                  /* leading dim */
+        int H    = klen + (int)(rnd() % (MAXH - klen + 1));  /* >= klen */
+
+        /* pick a kernel whose every cumulative denominator is non-zero */
+        int ok = 0;
+        for (int attempt = 0; attempt < 40 && !ok; attempt++) {
+            for (int k = 0; k < klen; k++)
+                kern[k] = (int16_t)rnd();
+            int64_t d = kern[h];
+            ok = (d != 0);
+            for (int k = 1; k <= h && ok; k++) {
+                d += 2LL * kern[h - k];
+                if (d == 0) ok = 0;
+            }
+        }
+        if (!ok) continue;
+
+        for (int i = 0; i < W * H; i++) {
+            int16_t x = (int16_t)rnd();
+            iv[i] = x; ic[i] = x; ov[i] = 0x7f; oc[i] = 0x7f;
+        }
+        if (t % 23 == 0) W = -1;   /* exercise the stride<=0 early-out */
+
+        int rv = v(ov, iv, kern, klen, W, H);
+        int rc = cr_fir_norm_s16(oc, ic, kern, klen, W, H);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (W > 0)
+            cmp_buf("out", (unsigned char *)ov, (unsigned char *)oc,
+                    (size_t)W * H * 2, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fir_norm_s16\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9617,6 +9669,7 @@ int main(int argc, char **argv)
     test_fft2d_real_bwd();
     test_bitmap_margin_extract();
     test_keypoint_grid_sample();
+    test_fir_norm_s16();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();
