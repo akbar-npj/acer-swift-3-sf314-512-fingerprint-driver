@@ -3219,6 +3219,40 @@ static void test_filter_chain_run_i16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_filter_chain_run_i16\n");
 }
 
+/* ---- batch 67c: 2-D real inverse FFT (0x180040930) --------------------- */
+static void test_fft2d_real_bwd(void)
+{
+    typedef int (WINAPI *v_i_piipuu)(void *, int, int, void *, unsigned, unsigned);
+    v_i_piipuu v = (v_i_piipuu)fn_at(RVA(0x180040930));
+    begin("cr_fft2d_real_bwd");
+    int bad = g_fail;
+    enum { MAXN = 256 };
+    static float in_v[MAXN*MAXN], in_c[MAXN*MAXN];
+    static float out_v[MAXN*MAXN], out_c[MAXN*MAXN];
+
+    for (int t = 0; t < 120; t++) {
+        int nrows = 16 << (int)(rnd() % 5);          /* 16,32,64,128,256 */
+        int ncols = 16 << (int)(rnd() % 5);
+        int orows = 1 + (int)(rnd() % nrows);
+        int ocols = 1 + (int)(rnd() % ncols);
+
+        for (int i = 0; i < nrows * ncols; i++) {
+            float x = (float)((int)(rnd() % 4001) - 2000) / 100.0f;
+            in_v[i] = x; in_c[i] = x;
+        }
+        for (int i = 0; i < orows * ocols; i++) { out_v[i] = 3.25f; out_c[i] = 3.25f; }
+
+        int rv = v(out_v, orows, ocols, in_v, nrows, ncols);
+        int rc = cr_fft2d_real_bwd(out_c, orows, ocols, in_c, nrows, ncols);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0) {
+            cmp_buf("out", (u8 *)out_v, (u8 *)out_c, (size_t)orows * ocols * 4, (u32)t);
+            cmp_buf("in",  (u8 *)in_v,  (u8 *)in_c,  (size_t)nrows * ncols * 4, (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fft2d_real_bwd\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9471,6 +9505,7 @@ int main(int argc, char **argv)
     test_filter_chain_run();
     test_filter_bank_max3x3_i16();
     test_filter_chain_run_i16();
+    test_fft2d_real_bwd();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

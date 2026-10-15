@@ -329,3 +329,73 @@ int cr_fft_real_bwd(float *a1, unsigned n, float *a3)
 
     return (int)r;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180040930 — 2-D real inverse FFT (row pass then column pass).
+ *   int fn(float *out, int orows, int ocols, float *in, uint nrows, uint ncols)
+ *
+ * Guards (uint)(nrows-16) <= 0x1f0 && (uint)(ncols-16) <= 0x1f0, else 0x69.
+ * Allocates a scratch buffer of max(nrows,ncols) floats and a column buffer of
+ * nrows floats.  Runs `nrows` in-place length-`ncols` cr_fft_real_bwd row
+ * transforms over `in` (return values ignored), then for each of the `ocols`
+ * columns starting at `in + iVar5` (iVar5 = (ncols-ocols)/2) gathers the
+ * `nrows` samples, runs a length-`nrows` cr_fft_real_bwd on them, and writes
+ * colbuf[iVar4 .. orows+iVar4) (iVar4 = (nrows-orows)/2) to `out` at row
+ * stride `ocols`.  Returns 0, an allocator status, or the failing column
+ * FFT's error code.
+ * ------------------------------------------------------------------------ */
+int cr_fft2d_real_bwd(float *out, int orows, int ocols, float *in, unsigned nrows, unsigned ncols)
+{
+    if ((unsigned)(ncols - 16) > 0x1f0u || (unsigned)(nrows - 16) > 0x1f0u)
+        return 0x69;
+
+    int nmax = ((int)nrows <= (int)ncols) ? (int)ncols : (int)nrows;
+    float *scratch = NULL;
+    int st = cr_malloc_aligned16((void **)&scratch, (size_t)((long)nmax << 2));
+    if (st != 0)
+        return st;
+    float *colbuf = NULL;
+    st = cr_malloc_aligned16((void **)&colbuf, (size_t)((long)(int)nrows << 2));
+    if (st != 0) {
+        cr_sized_free((void **)&scratch);
+        return st;
+    }
+
+    int iVar4 = ((int)nrows - orows) / 2;
+    int iVar5 = ((int)ncols - ocols) / 2;
+
+    for (int r = 0; r < (int)nrows; r++)
+        cr_fft_real_bwd(in + (long)r * (int)ncols, ncols, scratch);
+
+    if (iVar5 < iVar5 + ocols) {
+        float *colp = in + iVar5;
+        float *outp = out;
+        for (int c = 0; c < ocols; c++) {
+            float *p = colp;
+            for (int i = 0; i < (int)nrows; i++) {
+                colbuf[i] = *p;
+                p += (int)ncols;
+            }
+            int e = cr_fft_real_bwd(colbuf, nrows, scratch);
+            if (e != 0) {
+                cr_sized_free((void **)&scratch);
+                cr_sized_free((void **)&colbuf);
+                return e;
+            }
+            if (iVar4 < orows + iVar4) {
+                float *src = colbuf + iVar4;
+                float *dst = outp;
+                for (int k = iVar4; k < orows + iVar4; k++) {
+                    *dst = *src++;
+                    dst += ocols;
+                }
+            }
+            outp += 1;
+            colp += 1;
+        }
+    }
+
+    cr_sized_free((void **)&colbuf);
+    cr_sized_free((void **)&scratch);
+    return st;
+}

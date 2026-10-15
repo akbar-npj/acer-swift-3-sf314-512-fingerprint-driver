@@ -528,6 +528,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x1800120c0` | `fpc_bio_bep_sw23_14eced02ef` | `cr_filter_chain_run_i16` | `int fn(void *buf, const int *chain, int start, int end)`. `chain`: `(void**)&chain[2]`=array of 48-byte stage descriptors (12 ints each). Every stage reads `buf` and writes its result to scratch at `buf + H*W*nk` shorts, then copies `((H-tag+1)/2)*((W-tag+1)/2)*nch` shorts back to the head of `buf`. Stage tag 5 -> `cr_filter_bank_max5x5`, tag 3 -> `cr_filter_bank_max3x3_i16`, any other tag -> `0x69`. `end < start` returns 0 immediately. Returns 0, or the first failing stage's error code. **Trap:** the copy-length halves are *signed* divisions by 2 (the asm emits the `(x + (x>>31)) >> 1` truncate-toward-zero sequence), not the arithmetic shifts used by the float twin `cr_filter_chain_run` — they only differ for negative operands. Passed the difftest on the first run. |
 
+### Batch 67c — 2-D real inverse FFT
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180040930` | `fpc_bio_bep_sw23_d96d96a682.part.0` | `cr_fft2d_real_bwd` | `int fn(float *out, int orows, int ocols, float *in, uint nrows, uint ncols)`. Guards `(uint)(nrows-16) <= 0x1f0 && (uint)(ncols-16) <= 0x1f0` (i.e. both in `[16,512]`), else `0x69`. Allocates scratch `max(nrows,ncols)` floats + column buffer `nrows` floats via `cr_malloc_aligned16`. Row pass: `nrows` in-place length-`ncols` `cr_fft_real_bwd` over `in` (**return values ignored**). Column pass: for `ocols` columns starting at `in + iVar5` (`iVar5=(ncols-ocols)/2`), gather the `nrows` samples (stride `ncols`), run length-`nrows` `cr_fft_real_bwd`, then write `colbuf[iVar4 .. orows+iVar4)` (`iVar4=(nrows-orows)/2`) to `out` at row stride `ocols`. Returns 0, an allocator status, or the failing column FFT's error code. Both halves `(nrows-orows)/2`/`(ncols-ocols)/2` are *signed* divisions (truncate toward zero). Passed the difftest on the first run. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
