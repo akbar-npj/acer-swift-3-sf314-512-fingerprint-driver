@@ -2255,3 +2255,45 @@ int cr_filter_bank_max3x3_i16(void *outp, const void *inp, int *desc)
         cr_s16_clamp_nonneg((int16_t *)outp, (const int16_t *)outp, orows * ocols * nch);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800120c0 — run int16 filter-bank stages [start..end] over one buffer.
+ *   int fn(void *buf, const int *chain, int start, int end)
+ *
+ * chain is an int[]: (void**)&chain[2]=array of 48-byte stage descriptors
+ * (same layout as the int16 filter descs).  Every stage reads `buf` and
+ * writes its result to a scratch region at buf + H*W*nk shorts, then copies
+ * ((H-tag+1)/2)*((W-tag+1)/2)*nch shorts back to the head of buf.  Stage
+ * tag 5 -> cr_filter_bank_max5x5, tag 3 -> cr_filter_bank_max3x3_i16, any
+ * other tag -> 0x69.  end < start returns 0 immediately.  Returns 0, or the
+ * first failing stage's error code.
+ *
+ * Note the copy-length halves are *signed* divisions by 2 (truncating toward
+ * zero: `(x + (x>>31)) >> 1`), not arithmetic shifts as in the float twin.
+ * ------------------------------------------------------------------------ */
+int cr_filter_chain_run_i16(void *buf, const int *chain, int start, int end)
+{
+    int16_t *b = (int16_t *)buf;
+    const int *stages = *(const int *const *)((const char *)chain + 0x8);
+
+    if (end < start)
+        return 0;
+
+    for (int i = start; i <= end; i++) {
+        const int *d = stages + i * 12;              /* 48-byte descriptors */
+        int16_t *scratch = b + d[1] * d[2] * d[3];
+        int e;
+        if (d[0] == 5)
+            e = cr_filter_bank_max5x5(scratch, b, 0, 0, (int *)d);
+        else if (d[0] == 3)
+            e = cr_filter_bank_max3x3_i16(scratch, b, (int *)d);
+        else
+            return 0x69;
+        if (e != 0)
+            return e;
+        int n = ((d[1] - d[0] + 1) / 2) * ((d[2] - d[0] + 1) / 2) * d[5];
+        for (int j = 0; j < n; j++)
+            b[j] = scratch[j];
+    }
+    return 0;
+}

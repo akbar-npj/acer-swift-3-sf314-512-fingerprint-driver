@@ -3158,6 +3158,67 @@ static void test_filter_bank_max3x3_i16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_filter_bank_max3x3_i16\n");
 }
 
+/* ---- batch 67b: int16 filter-chain runner (0x1800120c0) ---------------- */
+static void test_filter_chain_run_i16(void)
+{
+    typedef int (WINAPI *v_i_ppii)(void *, const int *, int, int);
+    v_i_ppii v = (v_i_ppii)fn_at(RVA(0x1800120c0));
+    begin("cr_filter_chain_run_i16");
+    int bad = g_fail;
+    enum { BUFN = 65536, NSMAX = 5 };
+    static int16_t buf_v[BUFN], buf_c[BUFN];
+    static int stage_v[NSMAX * 12], stage_c[NSMAX * 12];
+    static int chain_v[16], chain_c[16];
+    static int16_t kt[NSMAX][9 * 25], bt[NSMAX][9];
+
+    for (int t = 0; t < 200; t++) {
+        int ns = 1 + (int)(rnd() % NSMAX);
+        int start = (int)(rnd() % ns);
+        int end   = (t % 23 == 0) ? start - 1 : start + (int)(rnd() % (ns - start));
+
+        for (int i = 0; i < BUFN; i++) {
+            int16_t x = (int16_t)((int)(rnd() % 40001) - 20000);
+            buf_v[i] = x; buf_c[i] = x;
+        }
+        for (int i = 0; i < 16; i++) chain_v[i] = chain_c[i] = 0;
+
+        for (int s = 0; s < ns; s++) {
+            int tag = ((int)(rnd() % 3) == 0 ? 3 : 5);
+            if (t % 53 == 0 && s == ns - 1) tag = 4;      /* bad tag sometimes */
+            int H   = 6 + (int)(rnd() % 10);              /* 6..15 */
+            int W   = 6 + (int)(rnd() % 10);
+            int nk  = 1 + (int)(rnd() % 2);
+            int nch = 1 + (int)(rnd() % 2);
+            int flag = (int)(rnd() & 1);
+            int nkt = nch * nk;
+            for (int i = 0; i < nkt * 25; i++)
+                kt[s][i] = (int16_t)((int)(rnd() % 60001) - 30000);
+            for (int i = 0; i < nch; i++)
+                bt[s][i] = (int16_t)((int)(rnd() % 2001) - 1000);
+            for (int k = 0; k < 12; k++) { stage_v[s*12+k] = 0; stage_c[s*12+k] = 0; }
+            stage_v[s*12+0] = stage_c[s*12+0] = tag;
+            stage_v[s*12+1] = stage_c[s*12+1] = H;
+            stage_v[s*12+2] = stage_c[s*12+2] = W;
+            stage_v[s*12+3] = stage_c[s*12+3] = nk;
+            stage_v[s*12+5] = stage_c[s*12+5] = nch;
+            stage_v[s*12+6] = stage_c[s*12+6] = flag;
+            *(int16_t **)((char *)&stage_v[s*12] + 0x20) = kt[s];
+            *(int16_t **)((char *)&stage_c[s*12] + 0x20) = kt[s];
+            *(int16_t **)((char *)&stage_v[s*12] + 0x28) = bt[s];
+            *(int16_t **)((char *)&stage_c[s*12] + 0x28) = bt[s];
+        }
+        *(const int **)((char *)chain_v + 8) = stage_v;
+        *(const int **)((char *)chain_c + 8) = stage_c;
+
+        int rv = v(buf_v, chain_v, start, end);
+        int rc = cr_filter_chain_run_i16(buf_c, chain_c, start, end);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0)
+            cmp_buf("buf", (u8 *)buf_v, (u8 *)buf_c, BUFN * 2, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_filter_chain_run_i16\n");
+}
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -9409,6 +9470,7 @@ int main(int argc, char **argv)
     test_filter_bank_max5x5_f32();
     test_filter_chain_run();
     test_filter_bank_max3x3_i16();
+    test_filter_chain_run_i16();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

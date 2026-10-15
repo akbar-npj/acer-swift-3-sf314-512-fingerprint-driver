@@ -522,6 +522,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x180038080` | `fpc_bio_bep_sw23_afa5254b16` | `cr_filter_bank_max3x3_i16` | `int fn(void *out, const void *in, int *desc)`. Descriptor `int[]`: `[1]=H`, `[2]=W`, `[3]=nk` (kernels/planes), `[5]=nch`, `[6]=post-flag`, `*(short**)&desc[8]`=kernel table (`nch*nk` kernels of 9 shorts), `*(short**)&desc[10]`=bias table. Output is `nch` planes of `((H-2)/2) x ((W-2)/2)` shorts. For each output pixel the 3x3 kernel is correlated against the 4x4 input window at base `2r*W + 2c` at the four 2x2 sub-offsets; the plane sum over all `nk` kernel/plane pairs is max-pooled, biased by `bias[ch]*0x4000` and arithmetic-shifted right by 15. `flag==1` clamps the whole output non-negative via `cr_s16_clamp_nonneg`. **Trap:** all accumulation is *32-bit wrapping* (the vendor uses `IMUL/ADD r32`), so the four accumulators are held in `uint32_t` (products fit in `int`, the running sums wrap); using 64-bit would diverge once the sum exceeds 2^31. The inner loop is software-pipelined: rows 1-2 pair `a10/a11` with kernel row `j-1` and `a00/a01` with kernel row `j`, and the row-3 tail pairs `a10/a11` with kernel row 2. Passed the difftest on the first run. |
 
+### Batch 67b — int16 filter-chain runner
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x1800120c0` | `fpc_bio_bep_sw23_14eced02ef` | `cr_filter_chain_run_i16` | `int fn(void *buf, const int *chain, int start, int end)`. `chain`: `(void**)&chain[2]`=array of 48-byte stage descriptors (12 ints each). Every stage reads `buf` and writes its result to scratch at `buf + H*W*nk` shorts, then copies `((H-tag+1)/2)*((W-tag+1)/2)*nch` shorts back to the head of `buf`. Stage tag 5 -> `cr_filter_bank_max5x5`, tag 3 -> `cr_filter_bank_max3x3_i16`, any other tag -> `0x69`. `end < start` returns 0 immediately. Returns 0, or the first failing stage's error code. **Trap:** the copy-length halves are *signed* divisions by 2 (the asm emits the `(x + (x>>31)) >> 1` truncate-toward-zero sequence), not the arithmetic shifts used by the float twin `cr_filter_chain_run` — they only differ for negative operands. Passed the difftest on the first run. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
