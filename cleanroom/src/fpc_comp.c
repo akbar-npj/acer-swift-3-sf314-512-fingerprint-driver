@@ -12,6 +12,7 @@
  * +0x14 int (L), +0x18 (qword == 0).
  */
 #include "fpc_bep.h"
+#include <float.h>
 
 static inline void *desc_data(const void *d) {
     const unsigned char *p = (const unsigned char *)d;
@@ -237,6 +238,120 @@ int cr_blur_diff_norm_u8(cr_image *dst, const cr_image *src, const void *obj)
         cr_sized_free_if(&hdr);
     }
     return r;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180013720 — local-contrast normaliser: mean-subtract + abs, blur, a
+ * divisive normalisation, then a contrast stretch written back into the input.
+ *   int fn(cr_image *img, const void *cfg)
+ *
+ * cfg: float +4 (blur sigma), float +8 (denominator floor factor), byte +0xc
+ * (selector, must be 3 or 4 else 0x69).
+ *
+ * W = img->w, H = img->h, N = W*H.  Allocates A,B (int16) and C (float), each
+ * W×H.  For N > 0:
+ *   mean = (sum of sign-extended img pixels) / N        (IDIV, trunc to zero)
+ *   for each i: p = (uint16_t)img[i] - mean             (unsigned load!)
+ *               img[i] = (int16_t)p
+ *               A[i]   = (int16_t)((int16_t)p < 0 ? -p : p)
+ *   B = cr_blur_dispatch_1c6a0(&B, &A, sigma, (uint16_t)(int)(sigma*8+1), sel)
+ *   maxB = max(0.0f, max_i (float)B[i])
+ *   for each i: C[i] = (float)img[i] / max(cfg[2]*maxB, (float)B[i])
+ *               mx = max(mx, C[i]); mn = min(mn, C[i])  (init -FLT_MAX / FLT_MAX)
+ *   scale = (1.0f > mx-mn) ? 16320.0f : 16320.0f/(mx-mn)
+ *   for each i: img[i] = (int16_t)(int32_t)((C[i]-mn)*scale)
+ * For N <= 0 it only runs the blur once.  Returns 0 on success, else the first
+ * failing status; A/B/C are freed on every post-allocation path.
+ * ------------------------------------------------------------------------ */
+int cr_blur_divnorm_stretch(cr_image *img, const void *cfg)
+{
+    const float   *cf = (const float *)cfg;
+    const uint8_t *cb = (const uint8_t *)cfg;
+
+    int sel = (int)cb[0xc];                       /* vendor MOVSX/MOVZX byte */
+    if ((uint8_t)(sel - 3) > 1u)
+        return 0x69;
+
+    int W = img->w;
+    int H = img->h;
+    int N = W * H;
+
+    cr_image A, B, C;
+    int r = cr_image_alloc_s16((int *)&A, W, H);
+    if (r != 0) return r;
+    r = cr_image_alloc_s16((int *)&B, W, H);
+    if (r != 0) { cr_cleanup_ptr8_clear(&A); return r; }
+    r = cr_image_alloc_f32(&C, W, H);
+    if (r != 0) {
+        cr_cleanup_ptr8_clear(&A);
+        cr_cleanup_ptr8_clear(&B);
+        return r;
+    }
+
+    float sigma = cf[1];
+    unsigned kcount = (unsigned)(uint16_t)(int)(sigma * 8.0f + 1.0f);
+
+    int16_t *in = (int16_t *)img->data;
+    int16_t *Ad = (int16_t *)A.data;
+    int16_t *Bd = (int16_t *)B.data;
+    float   *Cd = (float *)C.data;
+
+    if (N < 1) {
+        r = cr_blur_dispatch_1c6a0(&B, &A, sigma, (int)kcount, sel);
+        cr_cleanup_ptr8_clear(&A);
+        cr_cleanup_ptr8_clear(&B);
+        cr_cleanup_ptr8_clear_b(&C);
+        return r;
+    }
+
+    int32_t sum = 0;
+    for (int i = 0; i < N; i++) sum += (int)in[i];
+    int mean = sum / N;
+
+    for (int i = 0; i < N; i++) {
+        int p = (int)(uint16_t)in[i] - mean;
+        in[i] = (int16_t)p;
+        int32_t q = ((int16_t)p < 0) ? -p : p;
+        Ad[i] = (int16_t)q;
+    }
+
+    r = cr_blur_dispatch_1c6a0(&B, &A, sigma, (int)kcount, sel);
+    if (r != 0) {
+        cr_cleanup_ptr8_clear(&A);
+        cr_cleanup_ptr8_clear(&B);
+        cr_cleanup_ptr8_clear_b(&C);
+        return r;
+    }
+
+    float maxB = 0.0f;
+    for (int i = 0; i < N; i++) {
+        float v = (float)Bd[i];
+        if (v > maxB) maxB = v;
+    }
+
+    float f8 = cf[2];
+    float mx = -FLT_MAX, mn = FLT_MAX;
+    for (int i = 0; i < N; i++) {
+        float denom = f8 * maxB;
+        float bv = (float)Bd[i];
+        if (bv > denom) denom = bv;
+        float c = (float)in[i] / denom;
+        Cd[i] = c;
+        if (c > mx) mx = c;
+        if (c < mn) mn = c;
+    }
+
+    float range = mx - mn;
+    float scale = 16320.0f;
+    if (!(1.0f > range)) scale = 16320.0f / range;
+
+    for (int i = 0; i < N; i++)
+        in[i] = (int16_t)(int32_t)((Cd[i] - mn) * scale);
+
+    cr_cleanup_ptr8_clear(&A);
+    cr_cleanup_ptr8_clear(&B);
+    cr_cleanup_ptr8_clear_b(&C);
+    return 0;
 }
 
 /* 0x180044a20 — fixed 7-tap twin.  When W is 8-aligned it uses the guarded

@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **300** (84.5% of functions, 106,240 B = 62.7% of bytes) |
+| rewritten + parity-verified | **301** (84.8% of functions, 107,024 B = 63.2% of bytes) |
 
-Sixty-one batches done so far:
+Sixty-two batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -256,6 +256,10 @@ Sixty-one batches done so far:
     scales a float source by 64 into an int16 scratch (`cr_f32_to_i16_scaled`),
     blurs it twice, and writes the normalised difference as u8 (bias `0x80`, clamped
     to `[0, 0xff]`) into the destination image (1 function).
+63. local-contrast normaliser: the 784-byte `0x180013720` that mean-subtracts the
+    int16 image (unsigned load), takes abs, blurs it, applies a floored divisive
+    normalisation and contrast-stretches the result back into the image in place
+    (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

@@ -599,6 +599,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x1800148c0` | `fpc_bio_bep_sw23_1c8303fae6` | `cr_blur_diff_norm_u8` | `int fn(cr_image *dst, const cr_image *src, const void *obj)` (three pointers → rcx/rdx/r8). `W=src->w`, `H=src->h`, `N=W*H`. Allocates three `N*2`-byte int16 blocks with `cr_pool_alloc3` (`ia/ib/ic`); `ia` becomes the float source scaled by 64 and rounded (`cr_f32_to_i16_scaled(&ia, src, 6)`). Blurs `ia` twice — `sigma0 = obj[0]`, `sigma1 = obj[1]`, `count = 0xf`, selector byte `obj+12` — then `ia[i] = (int16_t)(ib[i] - ic[i])`, `m = max |ia[i]|`, `scale = m ? (int)(0x7f0000/m) : 0x400` (32-bit signed division), and writes `dst->data[i] = clamp(((ia[i]*scale + 0x8000) >> 16) + 0x80, 0, 0xff)` (`t > 0xfe → 0xff`, `t <= 0 → 0`). Returns 0 on success, else the first failing status; the pool is freed on every post-allocation path. u8-output sibling of `cr_blur_diff_norm`. Passed the difftest (314 ok). |
 
+### Batch 76 — local-contrast normaliser
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180013720` | `fpc_bio_bep_sw23_1901aeeef9` | `cr_blur_divnorm_stretch` | `int fn(cr_image *img, const void *cfg)` (two pointers → rcx/rdx). `cfg`: float +4 (blur sigma), float +8 (denominator factor), byte +0xc (selector; only 3 or 4 valid, else `0x69`). `W=img->w`, `H=img->h`, `N=W*H`. Allocates `A,B` (int16) and `C` (float) of W×H via `cr_image_alloc_s16` / `cr_image_alloc_f32`. For N > 0: `mean = (Σ sign-extended img pixels)/N` (`IDIV`); then `p = (uint16_t)img[i] - mean` (**unsigned** load), `img[i] = (int16_t)p`, `A[i] = (int16_t)((int16_t)p < 0 ? -p : p)`; `B = cr_blur_dispatch_1c6a0(&B, &A, sigma, (uint16_t)(int)(sigma*8+1), sel)`; `maxB = max(0, max_i B[i])`; `C[i] = (float)img[i] / max(cfg[2]*maxB, (float)B[i])` tracking `mx`/`mn`; `scale = (1.0f > mx-mn) ? 16320.0f : 16320.0f/(mx-mn)`; `img[i] = (int16_t)(int32_t)((C[i]-mn)*scale)`. For N <= 0 it only runs the blur once. `A/B/C` freed on every post-allocation path. Passed the difftest (315 ok). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

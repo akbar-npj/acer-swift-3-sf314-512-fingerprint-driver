@@ -4833,6 +4833,61 @@ static void test_blur_diff_norm_u8(void)
 }
 
 
+/* ---- batch 76: local-contrast normaliser (0x180013720) ----------------- */
+static void test_blur_divnorm_stretch(void)
+{
+    /* FUN_180013720:
+     *   int fn(cr_image *img, const void *cfg)
+     * Two pointers -> rcx, rdx (plain MS x64 ABI).  Mean-subtracts the int16
+     * image (unsigned load!), takes abs, blurs, divides by a floored denominator
+     * and contrast-stretches back into img->data in place.  cfg+4 = sigma,
+     * cfg+8 = denominator factor, cfg+0xc = selector (only 3/4 valid). */
+    typedef int (WINAPI *v_bds_t)(cr_image *img, const void *cfg);
+    v_bds_t v = (v_bds_t)fn_at(RVA(0x180013720));
+    begin("cr_blur_divnorm_stretch");
+    int bad = g_fail;
+
+    enum { MAXN = 64 * 64 };
+    static int16_t iv[MAXN], ic[MAXN];
+    static cr_image imgv, imgc;
+    static unsigned char cfg[16];
+    static const int sels[] = { 3, 4, 0, 1, 2, 5, 0xff };
+
+    for (int k = 0; k < (int)(sizeof sels / sizeof sels[0]); k++) {
+        int s = sels[k];
+        for (int t = 0; t < 300; t++) {
+            int W = 48 + (int)(rnd() % 17u);          /* 48..64 */
+            int H = 48 + (int)(rnd() % 17u);
+            int N = W * H;
+            float sigma = 0.5f + (float)(rnd() % 350) / 100.0f;
+            float f8    = (float)(rnd() % 300) / 100.0f;
+            u32 tag = (u32)((k << 20) | t);
+
+            for (int i = 0; i < N; i++) {
+                int16_t x = (int16_t)rnd();
+                iv[i] = x; ic[i] = x;
+            }
+            memset(&imgv, 0, sizeof imgv);
+            memset(&imgc, 0, sizeof imgc);
+            imgv.a = W; imgv.b = H; imgv.data = iv; imgv.w = W; imgv.h = H;
+            imgc.a = W; imgc.b = H; imgc.data = ic; imgc.w = W; imgc.h = H;
+
+            memset(cfg, 0, sizeof cfg);
+            memcpy(cfg + 4, &sigma, 4);
+            memcpy(cfg + 8, &f8, 4);
+            cfg[12] = (unsigned char)s;
+
+            int rv = v(&imgv, cfg);
+            int rc = cr_blur_divnorm_stretch(&imgc, cfg);
+            if (rv != rc) { mismatch("ret", tag, (u32)rv, (u32)rc); continue; }
+            cmp_buf("dst", (unsigned char *)iv, (unsigned char *)ic,
+                    (size_t)N * 2, tag);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_blur_divnorm_stretch\n");
+}
+
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -11138,6 +11193,7 @@ int main(int argc, char **argv)
     test_sep_gauss_blur_reflect();
     test_blur_diff_norm();
     test_blur_diff_norm_u8();
+    test_blur_divnorm_stretch();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
