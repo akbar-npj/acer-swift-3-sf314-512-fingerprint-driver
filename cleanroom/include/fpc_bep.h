@@ -167,6 +167,7 @@ typedef struct {
 } cr_index_list;
 
 void     cr_image_fill_const2(cr_image *img);                        /* 0x180023a60 */
+int      cr_blur_diff_norm(cr_image *src, const void *obj);          /* 0x18001ee30 */
 uint32_t cr_image_set(cr_image *img, void *data, int w, int h);      /* 0x18003b250 / 0x18003fbc0 / 0x180036460 */
 uint32_t cr_image_set_pitch(cr_image *img, void *data, int w, int h);/* 0x180034490 */void     cr_image_subview(cr_image *dst, const cr_image *src,
                           int dx, int dy, int w, int h);             /* 0x180010ef0 / 0x180017a80 */

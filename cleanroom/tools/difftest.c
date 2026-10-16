@@ -4715,6 +4715,61 @@ static void test_blur_dispatch_1c6a0(void)
 }
 
 
+/* ---- batch 74: blurred-pair difference normaliser (0x18001ee30) -------- */
+static void test_blur_diff_norm(void)
+{
+    /* FUN_18001ee30:
+     *   int fn(cr_image *src, const float *obj)
+     * Two pointers -> rcx, rdx (plain MS x64 ABI, no float positions).  Blurs
+     * src twice (sigma obj[0] / obj[1], selector byte obj+12, count 0xf) and
+     * writes the scaled, clamped difference of the two blurs back into
+     * src->data in place.  src must be a valid descriptor (a==w, b==h,
+     * offx==offy==0) because the blur dispatcher validates it. */
+    typedef int (WINAPI *v_bdn_t)(cr_image *src, const void *obj);
+    v_bdn_t v = (v_bdn_t)fn_at(RVA(0x18001ee30));
+    begin("cr_blur_diff_norm");
+    int bad = g_fail;
+
+    enum { MAXN = 64 * 64 };
+    static int16_t sv[MAXN], sc[MAXN];
+    static cr_image srcv, srcc;
+    static unsigned char obj[16];
+
+    for (int sel = 0; sel < 7; sel++) {
+        int s = (sel < 5) ? sel : (sel == 5 ? 5 : 0xff);
+        for (int t = 0; t < 400; t++) {
+            int W = 24 + (int)(rnd() % 25u);          /* 24..48 */
+            int H = 24 + (int)(rnd() % 25u);
+            int N = W * H;
+            float s0 = 0.5f + (float)(rnd() % 350) / 100.0f;
+            float s1 = 0.5f + (float)(rnd() % 350) / 100.0f;
+            u32 tag = (u32)((sel << 20) | t);
+
+            for (int i = 0; i < N; i++) {
+                int16_t x = (int16_t)rnd();
+                sv[i] = x; sc[i] = x;
+            }
+            memset(&srcv, 0, sizeof srcv);
+            memset(&srcc, 0, sizeof srcc);
+            srcv.a = W; srcv.b = H; srcv.data = sv; srcv.w = W; srcv.h = H;
+            srcc.a = W; srcc.b = H; srcc.data = sc; srcc.w = W; srcc.h = H;
+
+            memset(obj, 0, sizeof obj);
+            memcpy(obj + 0, &s0, 4);
+            memcpy(obj + 4, &s1, 4);
+            obj[12] = (unsigned char)s;
+
+            int rv = v(&srcv, obj);
+            int rc = cr_blur_diff_norm(&srcc, obj);
+            if (rv != rc) { mismatch("ret", tag, (u32)rv, (u32)rc); continue; }
+            cmp_buf("dst", (unsigned char *)sv, (unsigned char *)sc,
+                    (size_t)N * 2, tag);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_blur_diff_norm\n");
+}
+
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -11018,6 +11073,7 @@ int main(int argc, char **argv)
     test_harris_local_minmax_grid();
     test_blur_dispatch_1c6a0();
     test_sep_gauss_blur_reflect();
+    test_blur_diff_norm();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

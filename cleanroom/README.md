@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **298** (83.9% of functions, 105,120 B = 62.0% of bytes) |
+| rewritten + parity-verified | **299** (84.2% of functions, 105,616 B = 62.3% of bytes) |
 
-Fifty-nine batches done so far:
+Sixty batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -248,6 +248,10 @@ Fifty-nine batches done so far:
     / `cr_correlate_34930` / `cr_ncc_apply_34390` / `cr_sep_gauss_blur_s16` (1 function).
     Watch the ABI: `(ptr, ptr, float sigma, int count, int sel)` — the position-3 float
     lands in `xmm2`, not `xmm0`.
+61. blurred-pair difference normaliser: the 496-byte `0x18001ee30` that allocates two
+    int16 scratch blocks, blurs the source twice (sigma `obj[0]`/`obj[1]`, selector byte
+    `obj+12`, count `0xf`), writes the scaled/clamped difference back into `src->data` in
+    place, and frees the pool on every post-allocation path (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
