@@ -7807,6 +7807,342 @@ static void test_bin_select_14320(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bin_select_14320\n");
 }
 
+/* ---- 0x18002cfd0 — structure-orientation dispatcher -------------------- *
+ * cfg byte +0x10 selects the twin-image (0) / three-image (1) encoder. */
+static void test_structure_orient_dispatch_2cfd0(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *, uint8_t,
+                              const void *);
+    v_t v = (v_t)fn_at(RVA(0x18002cfd0));
+    begin("cr_structure_orient_dispatch_2cfd0");
+    int bad = g_fail;
+
+    enum { MAXW = 33, MAXH = 32, MAXN = MAXW * MAXH };
+
+    static int16_t srcd[MAXN];
+    static int16_t dvd[MAXN], dcd[MAXN];
+    static uint8_t mvd[MAXN];
+    static u8 srcv[0x20], srcc[0x20];
+    static u8 dstv[0x20], dstc[0x20];
+    static u8 mskv[0x20], mskc[0x20];
+    static u8 cfg[0x20];
+
+    for (int t = 0; t < 4000; t++) {
+        int w = 16 + (int)(rnd() % 18u);
+        int h = 16 + (int)(rnd() % 17u);
+        int N = w * h;
+
+        for (int i = 0; i < N; i++) srcd[i] = (int16_t)rnd();
+        for (int i = 0; i < N; i++) { dvd[i] = 0x5A5A; dcd[i] = 0x5A5A; }
+        for (int i = 0; i < N; i++) mvd[i] = (uint8_t)rnd();
+
+        mk_img2(srcv, srcd, w, h);  memcpy(srcc, srcv, 0x20);
+        mk_img2(dstv, dvd,  w, h);  mk_img2(dstc, dcd, w, h);
+        mk_img2(mskv, (int16_t *)mvd, w, h);  memcpy(mskc, mskv, 0x20);
+
+        float sigma1 = (float)(rnd() % 220u) / 100.0f;
+        float sigma2 = (float)(rnd() % 220u) / 100.0f;
+        int16_t count = (int16_t)((int)(rnd() % 6u) - 1);
+        uint8_t flag  = (uint8_t)(rnd() % 4u);
+        uint8_t and_mask = (uint8_t)rnd();
+        uint8_t sel = (uint8_t)(rnd() % 3u);      /* 0, 1, 2 (2 = default) */
+        memset(cfg, 0, 0x20);
+        *(float  *)(cfg + 0x04) = sigma1;
+        *(float  *)(cfg + 0x08) = sigma2;
+        *(int16_t *)(cfg + 0x0c) = count;
+        cfg[0x0f] = flag;
+        cfg[0x10] = sel;
+
+        int rv = v(dstv, srcv, mskv, and_mask, cfg);
+        int rc = cr_structure_orient_dispatch_2cfd0(dstc, srcc, mskc, and_mask,
+                                                    cfg);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("dst", (const unsigned char *)dvd, (const unsigned char *)dcd,
+                (u32)(N * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_structure_orient_dispatch_2cfd0\n");
+}
+
+/* ---- 0x180038020 — grid-population dispatcher -------------------------- *
+ * Clears grid->count then selects the callee from cfg byte +1. */
+static void test_grid_populate_dispatch_38020(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x180038020));
+    begin("cr_grid_populate_dispatch_38020");
+    int bad = g_fail;
+
+    static uint8_t  sbuf[4096];
+    static uint32_t mwords[4096];
+    static u8 smv[0x20], smc[0x20];
+    static u8 descv[0x20], descc[0x20];
+    static uint8_t cfg[0x40];
+
+    for (int t = 0; t < 6000; t++) {
+        int sel;
+        switch ((int)(rnd() % 6u)) {
+        case 0:  sel = 1; break;
+        case 1:  sel = 4; break;
+        case 2:  sel = 5; break;
+        default: sel = (int)(rnd() % 8u); break;   /* includes invalid values */
+        }
+        int is_blob = (sel == 4);
+
+        int W = 1 + (int)(rnd() % 6u);
+        int H = 1 + (int)(rnd() % 6u);
+        int cap = 1 + (int)(rnd() % 8u);
+        int cap2 = (int)(rnd() % 17u);
+        int divx = 1 + (int)(rnd() % 512u);
+        int divy = 1 + (int)(rnd() % 512u);
+        int mode = ((int)(rnd() % 4) == 0) ? 2
+                 : ((int)(rnd() % 8) == 0) ? 7 : 5;
+        int border = 1 + (int)(rnd() % 3u);
+        float coef  = (float)(rnd() % 100u) / 1000.0f;
+        float sigma = 0.72f + (float)(rnd() % 150u) / 100.0f;
+        int stride_bits = (2 + (int)(rnd() % 3u)) * 32;
+
+        for (int i = 0; i < 4096; i++) sbuf[i] = (uint8_t)rnd();
+        for (int i = 0; i < 4096; i++) mwords[i] = rnd();
+
+        /* mask object: shared layout for the blob maskcfg and the Harris mask
+         * image (stride@+0, word ptr@+8, origin@+0x18/+0x1c). */
+        memset(smv, 0, 0x20);
+        *(int *)(smv + 0x00) = stride_bits;
+        *(void **)(smv + 0x08) = mwords;
+        memcpy(smc, smv, 0x20);
+
+        memset(cfg, 0, sizeof cfg);
+        *(int8_t  *)(cfg + 0x08) = (int8_t)border;
+        *(int16_t *)(cfg + 0x10) = (int16_t)cap2;
+        *(float   *)(cfg + 0x18) = coef;
+        *(float   *)(cfg + 0x1c) = sigma;
+        *(uint8_t *)(cfg + 0x24) = (uint8_t)mode;
+        cfg[0x01] = (uint8_t)sel;                 /* dispatcher selector */
+
+        if (is_blob) {
+            int m = 1 + (int)(rnd() % 4);         /* margin */
+            int Wn = 1 + (int)(rnd() % 6);
+            int sw = Wn + 2 * m;
+            int sh = 2 * m + 1 + (int)(rnd() % 6);
+            int mx = (7 - m) + (int)(rnd() % 5);
+            int my = (7 - m) + (int)(rnd() % 5);
+            memset(descv, 0, 0x20);
+            *(int   *)(descv + 0x00) = 64;
+            *(int   *)(descv + 0x04) = 40;
+            *(void **)(descv + 0x08) = sbuf;
+            *(int   *)(descv + 0x10) = sw;
+            *(int   *)(descv + 0x14) = sh;
+            *(int   *)(descv + 0x18) = mx;
+            *(int   *)(descv + 0x1c) = my;
+            *(int8_t *)(cfg + 0x08) = (int8_t)m;  /* blob reads margin here */
+        } else {
+            mk_img2(descv, (int16_t *)sbuf, W, H);
+        }
+        memcpy(descc, descv, 0x20);
+
+        struct grid_state gv, gc;
+        memset(&gv, 0, sizeof gv);
+        gv.g.nodes = gv.nodes; gv.g.coords = gv.coords; gv.g.values = gv.values;
+        gv.g.next = gv.next; gv.g.coords2 = gv.coords2; gv.g.values2 = gv.values2;
+        gv.g.W = W; gv.g.H = H; gv.g.divx = divx; gv.g.divy = divy;
+        gv.g.count = 0x1234; gv.g.count2 = 0x5678; gv.g.cap = cap;
+        for (int k = 0; k < W * H; k++) {
+            gv.nodes[k].key = 0; gv.nodes[k].head = -1;
+            gv.nodes[k].val = (float)(1 + (int)(rnd() % 1000)) * 0.001f;
+        }
+        for (int k = 0; k < cap; k++) {
+            gv.next[k] = -1; gv.values[k] = 0.0f;
+            gv.coords[2 * k] = gv.coords[2 * k + 1] = 0;
+        }
+        for (int k = 0; k < cap2; k++) {
+            gv.values2[k] = 0.0f;
+            gv.coords2[2 * k] = gv.coords2[2 * k + 1] = 0;
+        }
+        gc = gv;
+        gc.g.nodes = gc.nodes; gc.g.coords = gc.coords; gc.g.values = gc.values;
+        gc.g.next = gc.next; gc.g.coords2 = gc.coords2; gc.g.values2 = gc.values2;
+
+        int rv = v(&gv.g, descv, smv, cfg);
+        int rc = cr_grid_populate_dispatch_38020(&gc.g,
+                                                 (const cr_image *)descc,
+                                                 (const cr_image *)smc, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+
+        size_t nn = sizeof(cr_grid_node) * (size_t)(W * H);
+        cmp_buf("nodes", (const unsigned char *)gv.nodes,
+                (const unsigned char *)gc.nodes, nn, (u32)t);
+        cmp_buf("values", (const unsigned char *)gv.values,
+                (const unsigned char *)gc.values, sizeof(float) * (size_t)cap,
+                (u32)t);
+        cmp_buf("next", (const unsigned char *)gv.next,
+                (const unsigned char *)gc.next, sizeof(int16_t) * (size_t)cap,
+                (u32)t);
+        cmp_buf("coords", gv.coords, gc.coords, 2 * (size_t)cap, (u32)t);
+        cmp_buf("values2", (const unsigned char *)gv.values2,
+                (const unsigned char *)gc.values2, sizeof(float) * (size_t)cap2,
+                (u32)t);
+        cmp_buf("coords2", gv.coords2, gc.coords2, 2 * (size_t)cap2, (u32)t);
+        if (gv.g.count != gc.g.count || gv.g.count2 != gc.g.count2)
+            mismatch("count", (u32)t, (u32)gv.g.count, (u32)gc.g.count);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_grid_populate_dispatch_38020\n");
+}
+
+/* ---- 0x180026dc0 — feature-extraction step ----------------------------- *
+ * Quarter-res quality gate, then a packed 8-bit image folded into a running
+ * average; cfg int16 +0x24 is the mode/limit.  The state object is the same
+ * one the quality gate and the feature qualifier operate on. */
+static void test_feature_extract_step_26dc0(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, void *, const void *,
+                              const void *);
+    v_t v = (v_t)fn_at(RVA(0x180026dc0));
+    begin("cr_feature_extract_step_26dc0");
+    int bad = g_fail;
+
+    enum { W = 16, H = 16, N = W * H };
+
+    static uint8_t  imgb_v[2 * N], imgb_c[2 * N];
+    static int16_t  prevv[64], prevc[64];
+    static int16_t  asv[512], asc[512];
+    static int16_t  dsv[512], dsc[512];
+    static int16_t  dAv[64], dAc[64], dBv[64], dBc[64];
+    static int16_t  cAv[64], cAc[64], cBv[64], cBc[64];
+    static uint8_t  histv[0x20], histc[0x20];
+    static uint8_t  bmv[2048], bmc[2048];
+    static u8 st_v[0x100], st_c[0x100];
+    static u8 imgv[0x20], imgc[0x20], pkv[0x20], pkc[0x20];
+    static u8 storev[0x100], storec[0x100];
+    static u8 cfg[0x40];
+
+    static const int32_t keys[4] = { 0xda, 0xdd, 0xd2, 0xd6 };
+    static const int32_t vals[4] = { 10, 1024, 1024, 1024 };
+
+    for (int t = 0; t < 6000; t++) {
+        int valid = (int)(rnd() % 4u) != 0;       /* occasionally invalid */
+        int16_t mode;
+        if (valid)
+            mode = (int16_t)(1 + (int)(rnd() % 0x7ffu));
+        else
+            mode = (int16_t)((int)(rnd() % 3u) == 0 ? 0
+                           : (int)(rnd() % 3u) == 0 ? 0x800 : -1);
+        int use_handle = (int)(rnd() % 8u) != 0;
+        int count = (int)(rnd() & 1u);
+        int sflag = (int)(rnd() % 3u) - 1;        /* -1, 0, 1 */
+
+        for (int i = 0; i < 2 * N; i++) {
+            uint8_t b = (uint8_t)(rnd() % 200u);
+            imgb_v[i] = b; imgb_c[i] = b;
+        }
+        for (int i = 0; i < 64; i++) {
+            int16_t p = (int16_t)(rnd() % 200u);
+            prevv[i] = p; prevc[i] = p;
+        }
+        for (int i = 0; i < 512; i++) {
+            int16_t a = (int16_t)((int)(rnd() % 4001) - 2000);
+            asv[i] = a; asc[i] = a;
+            int16_t d = (int16_t)((int)(rnd() % 4001) - 2000);
+            dsv[i] = d; dsc[i] = d;
+        }
+        for (int i = 0; i < 64; i++) {
+            int16_t a = (int16_t)rnd();
+            dAv[i] = a; dAc[i] = a; dBv[i] = a; dBc[i] = a;
+            int16_t c = (int16_t)(rnd() % 40u);
+            cAv[i] = c; cAc[i] = c; cBv[i] = c; cBc[i] = c;
+        }
+        for (int i = 0; i < 0x20; i++) {
+            uint8_t h = (uint8_t)rnd();
+            histv[i] = h; histc[i] = h;
+        }
+        for (int i = 0; i < 2048; i++) {
+            uint8_t b = (uint8_t)rnd();
+            bmv[i] = b; bmc[i] = b;
+        }
+
+        memset(st_v, 0, sizeof st_v);
+        memset(st_c, 0, sizeof st_c);
+        *(void **)(st_v + 0x00) = histv;  *(void **)(st_c + 0x00) = histc;
+        *(void **)(st_v + 0x10) = prevv;  *(void **)(st_c + 0x10) = prevc;
+        *(void **)(st_v + 0x18) = asv;    *(void **)(st_c + 0x18) = asc;
+        *(void **)(st_v + 0x20) = dAv;    *(void **)(st_c + 0x20) = dAc;
+        *(void **)(st_v + 0x28) = dBv;    *(void **)(st_c + 0x28) = dBc;
+        *(void **)(st_v + 0x30) = cAv;    *(void **)(st_c + 0x30) = cAc;
+        *(void **)(st_v + 0x38) = cBv;    *(void **)(st_c + 0x38) = cBc;
+        *(void **)(st_v + 0x58) = dsv;    *(void **)(st_c + 0x58) = dsc;
+        *(int32_t *)(st_v + 0x40) = count; *(int32_t *)(st_c + 0x40) = count;
+        *(int32_t *)(st_v + 0x44) = 0;    *(int32_t *)(st_c + 0x44) = 0;
+        *(float   *)(st_v + 0x48) = 0.0f; *(float   *)(st_c + 0x48) = 0.0f;
+        *(float   *)(st_v + 0x4c) = 0.0f; *(float   *)(st_c + 0x4c) = 0.0f;
+        *(int32_t *)(st_v + 0x60) = 16;   *(int32_t *)(st_c + 0x60) = 16;
+        *(int32_t *)(st_v + 0x64) = 16;   *(int32_t *)(st_c + 0x64) = 16;
+        st_v[0x08] = (uint8_t)sflag;      st_c[0x08] = (uint8_t)sflag;
+
+        mk_img2(imgv, (int16_t *)imgb_v, W, H);
+        mk_img2(imgc, (int16_t *)imgb_c, W, H);
+
+        memset(pkv, 0, 0x20);
+        memset(pkc, 0, 0x20);
+        *(int   *)(pkv + 0x00) = 64;      *(int   *)(pkc + 0x00) = 64;
+        *(void **)(pkv + 0x08) = bmv;     *(void **)(pkc + 0x08) = bmc;
+        *(int   *)(pkv + 0x10) = W;       *(int   *)(pkc + 0x10) = W;
+        *(int   *)(pkv + 0x14) = H;       *(int   *)(pkc + 0x14) = H;
+
+        qg_build_store(storev, keys, vals, 4);
+        memcpy(storec, storev, sizeof storec);
+
+        memset(cfg, 0, sizeof cfg);
+        *(int32_t *)(cfg + 0x08) = 0;             /* level < 200 */
+        *(float   *)(cfg + 0x0c) = 100.0f;        /* diff ratio -> pass */
+        *(int32_t *)(cfg + 0x10) = 0;             /* margin y */
+        *(int32_t *)(cfg + 0x14) = 0;             /* margin x */
+        *(int8_t  *)(cfg + 0x18) = 0;             /* skip NCC */
+        *(float   *)(cfg + 0x1c) = 1.0f;          /* ratio */
+        *(float   *)(cfg + 0x20) = -1.0e9f;       /* avg_s threshold (low) */
+        *(int16_t *)(cfg + 0x24) = mode;          /* mode / limit */
+        *(float   *)(cfg + 0x28) = 100.0f;        /* feature-qualify corr thr */
+        *(int8_t  *)(cfg + 0x2c) = 0;             /* quality-gate level mode */
+        *(float   *)(cfg + 0x30) = 1.0f;          /* scale */
+
+        int rv = v(st_v, imgv, use_handle ? storev : NULL, pkv, cfg);
+        int rc = cr_feature_extract_step_26dc0(st_c, (const cr_image *)imgc,
+                                               use_handle ? storec : NULL,
+                                               (const cr_image *)pkc, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+
+        if (st_v[0x08] != st_c[0x08])
+            mismatch("st08", (u32)t, st_v[0x08], st_c[0x08]);
+        if (*(int32_t *)(st_v + 0x40) != *(int32_t *)(st_c + 0x40))
+            mismatch("st40", (u32)t, (u32)*(int32_t *)(st_v + 0x40),
+                     (u32)*(int32_t *)(st_c + 0x40));
+        if (*(int32_t *)(st_v + 0x44) != *(int32_t *)(st_c + 0x44))
+            mismatch("st44", (u32)t, (u32)*(int32_t *)(st_v + 0x44),
+                     (u32)*(int32_t *)(st_c + 0x44));
+        if (cr_f2u(*(float *)(st_v + 0x48)) != cr_f2u(*(float *)(st_c + 0x48)))
+            mismatch("st48", (u32)t, cr_f2u(*(float *)(st_v + 0x48)),
+                     cr_f2u(*(float *)(st_c + 0x48)));
+        if (cr_f2u(*(float *)(st_v + 0x4c)) != cr_f2u(*(float *)(st_c + 0x4c)))
+            mismatch("st4c", (u32)t, cr_f2u(*(float *)(st_v + 0x4c)),
+                     cr_f2u(*(float *)(st_c + 0x4c)));
+
+        cmp_buf("hist", histv, histc, 0x20, (u32)t);
+        cmp_buf("prev", (const unsigned char *)prevv,
+                (const unsigned char *)prevc, sizeof prevv, (u32)t);
+        cmp_buf("as", (const unsigned char *)asv, (const unsigned char *)asc,
+                sizeof asv, (u32)t);
+        cmp_buf("ds", (const unsigned char *)dsv, (const unsigned char *)dsc,
+                sizeof dsv, (u32)t);
+        cmp_buf("dA", (const unsigned char *)dAv, (const unsigned char *)dAc,
+                sizeof dAv, (u32)t);
+        cmp_buf("dB", (const unsigned char *)dBv, (const unsigned char *)dBc,
+                sizeof dBv, (u32)t);
+        cmp_buf("cA", (const unsigned char *)cAv, (const unsigned char *)cAc,
+                sizeof cAv, (u32)t);
+        cmp_buf("cB", (const unsigned char *)cBv, (const unsigned char *)cBc,
+                sizeof cBv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_feature_extract_step_26dc0\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -11678,6 +12014,9 @@ int main(int argc, char **argv)
     test_structure_orient_d3b0();
     test_structure_orient_3b960();
     test_bin_select_14320();
+    test_structure_orient_dispatch_2cfd0();
+    test_grid_populate_dispatch_38020();
+    test_feature_extract_step_26dc0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

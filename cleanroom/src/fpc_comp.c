@@ -1202,3 +1202,124 @@ int cr_bin_select_14320(void *pts, int *out_count, int npts, int maxout,
     cr_sized_free((void **)&bin_count);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002cfd0 — structure-tensor orientation dispatcher.
+ *   int fn(dst, src, mask, and_mask, cfg):
+ *     if (cfg[0x10] == 0) return cr_structure_orient_d3b0(...);
+ *     if (cfg[0x10] == 1) return cr_structure_orient_3b960(...);
+ *     return 0x69;
+ * Tail-jumps, so every argument is forwarded unchanged.
+ * ------------------------------------------------------------------------ */
+int cr_structure_orient_dispatch_2cfd0(void *dst, const void *src,
+                                       const void *mask, uint8_t and_mask,
+                                       const void *cfg)
+{
+    uint8_t sel = *(const uint8_t *)((const uint8_t *)cfg + 0x10);
+    if (sel == 0)
+        return cr_structure_orient_d3b0(dst, (const cr_image *)src,
+                                        mask, and_mask, cfg);
+    if (sel == 1)
+        return cr_structure_orient_3b960(dst, src, mask, and_mask, cfg);
+    return 0x69;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180038020 — grid-population dispatcher.
+ *   int fn(grid, src, mask, cfg):
+ *     grid->count = 0;
+ *     switch (cfg[1]) { 4: blob_detect; 5: harris minmax; 1: harris max;
+ *                       default: 0x69 }
+ * ------------------------------------------------------------------------ */
+int cr_grid_populate_dispatch_38020(cr_grid *grid, const cr_image *src,
+                                    const void *mask, const void *cfg)
+{
+    grid->count = 0;
+    uint8_t sel = *(const uint8_t *)((const uint8_t *)cfg + 1);
+    if (sel == 4)
+        return cr_blob_detect_1bbf0(grid, src, (const int32_t *)mask, cfg);
+    if (sel == 5)
+        return cr_harris_local_minmax_grid(grid, src, (const cr_image *)mask,
+                                           (const cr_harris_max_cfg *)cfg);
+    if (sel == 1)
+        return cr_harris_local_max_grid(grid, src, (const cr_image *)mask,
+                                        (const cr_harris_max_cfg *)cfg);
+    return 0x69;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180026dc0 — feature-extraction step.
+ *   int fn(state, img, handle, packed, cfg):
+ *     mode = *(int16*)(cfg+0x24);
+ *     if ((uint16)(mode-1) >= 0x7ff) return 0x69;
+ *     q16: alloc_s16(W/4, H/4); quality_gate(q16,&q,&flag,state,img,handle,cfg);
+ *     cleanup_clear(q16);
+ *     if (gate) return gate;
+ *     if (flag != 1) return 0;
+ *     u8: alloc_u8(W, H);
+ *     if (state[0x40] == 0) fill(u8.data, 0xff, W*H);
+ *     else boxmax_fir(u8, packed, 1, 1, 1.5) -> on error cleanup_a(u8) & return;
+ *     weighted_running_avg(state[0x18], state+0x58, img, &u8.data, q, cfg+0x24);
+ *     cleanup_a(u8);
+ *     if (state[0x40] < mode) state[0x40] += 1;
+ *     if ((int8)state[8] < 1) return feature_qualify(state, cfg, q);
+ *     return 0;
+ * ------------------------------------------------------------------------ */
+int cr_feature_extract_step_26dc0(void *state, const cr_image *img,
+                                  void *handle, const cr_image *packed,
+                                  const void *cfg)
+{
+    uint8_t *st = (uint8_t *)state;
+    const uint8_t *c = (const uint8_t *)cfg;
+    int16_t mode = *(const int16_t *)(c + 0x24);
+    if ((uint16_t)(mode - 1) >= 0x7ffu)
+        return 0x69;
+
+    int W = img->w;
+    int H = img->h;
+
+    cr_image q16;
+    int r = cr_image_alloc_s16((int *)&q16, W / 4, H / 4);
+    if (r != 0)
+        return r;
+
+    float q = 0.0f;
+    uint8_t flag = 0;
+    int g = cr_quality_gate_35cf0(&q16, &q, &flag, state, (void *)img,
+                                  handle, cfg);
+    if (g != 0) {
+        cr_cleanup_ptr8_clear(&q16);
+        return g;
+    }
+    cr_cleanup_ptr8_clear(&q16);
+    if (flag != 1)
+        return 0;
+
+    cr_image u8img;
+    r = cr_image_alloc_u8((int *)&u8img, W, H);
+    if (r != 0)
+        return r;
+
+    if (*(int *)(st + 0x40) == 0) {
+        cr_fill(u8img.data, 0xff, W * H);
+    } else {
+        r = cr_bitmap_unpack_boxmax_fir(&u8img, packed, 1, 1, 1.5f);
+        if (r != 0) {
+            cr_cleanup_ptr8_a(&u8img);
+            return r;
+        }
+    }
+
+    cr_weighted_running_avg((int16_t *)*(void **)(st + 0x18),
+                            (int16_t **)(st + 0x58), img,
+                            (const uint8_t **)&u8img.data, q,
+                            (const int16_t *)(c + 0x24));
+    cr_cleanup_ptr8_a(&u8img);
+
+    if (*(int *)(st + 0x40) < (int)mode)
+        *(int *)(st + 0x40) = *(int *)(st + 0x40) + 1;
+
+    if (*(int8_t *)(st + 0x08) < 1)
+        return cr_feature_qualify(state, (void *)cfg, q);
+    return 0;
+}

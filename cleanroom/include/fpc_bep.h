@@ -525,6 +525,24 @@ int      cr_bin_select_14320(void *pts, int *out_count, int npts, int maxout,
                              const void *mask, uint32_t seed,
                              const void *cfg);                         /* 0x180014320 */
 
+/* cfg byte +0x10 selects the twin-image (0) / three-image (1) orientation
+ * encoder; any other selector returns 0x69. */
+int      cr_structure_orient_dispatch_2cfd0(void *dst, const void *src,
+                                            const void *mask, uint8_t and_mask,
+                                            const void *cfg);          /* 0x18002cfd0 */
+
+/* Clears grid->count then dispatches on cfg byte +1: 4 = blob detector,
+ * 5 = Harris local min/max accumulator, 1 = Harris local max accumulator. */
+int      cr_grid_populate_dispatch_38020(cr_grid *grid, const cr_image *src,
+                                         const void *mask,
+                                         const void *cfg);             /* 0x180038020 */
+
+/* Feature-extraction step: quarter-res quality gate then a packed 8-bit image
+ * folded into the running average; cfg int16 +0x24 is the mode/limit. */
+int      cr_feature_extract_step_26dc0(void *state, const cr_image *img,
+                                       void *handle, const cr_image *packed,
+                                       const void *cfg);               /* 0x180026dc0 */
+
 /* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
 typedef struct {
     int32_t         a;      /* +0x00  row stride in bits       */
