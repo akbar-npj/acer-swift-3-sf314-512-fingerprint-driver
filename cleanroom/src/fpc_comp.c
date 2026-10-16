@@ -1323,3 +1323,114 @@ int cr_feature_extract_step_26dc0(void *state, const cr_image *img,
         return cr_feature_qualify(state, (void *)cfg, q);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18002db20 — float-source feature-extraction step (26dc0 twin).
+ *   int fn(state, fimg, handle, packed, cfg):
+ *     mode = *(int16*)(cfg+0x24);
+ *     if ((uint16)(mode-1) >= 0x7ff) return 0x69;
+ *     u8: alloc_u8(W, H); u8[i] = clamp((int)(fimg[i] + 0.5f), 0, 255);
+ *     q16: alloc_s16(W/4, H/4);
+ *     quality_gate(q16, &q, &flag, state, u8, handle, cfg);
+ *     cleanup_clear(q16);
+ *     if (gate) { cleanup_a(u8); return gate; }
+ *     if (flag != 1) { cleanup_a(u8); return 0; }
+ *     u8b: alloc_u8(W, H);
+ *     if (state[0x40] == 0) fill(u8b.data, 0xff, W*H);
+ *     else mask_boxmax_fir_clear(u8b, packed, 0xf, 1, 1, 1.5)
+ *            -> on error cleanup_a(u8), cleanup_a(u8b), return;
+ *     weighted_running_avg(state[0x18], state+0x58, u8, &u8b.data, q, cfg+0x24);
+ *     cleanup_a(u8b);
+ *     if (state[0x40] < mode) state[0x40] += 1;
+ *     rv = ((int8)state[8] < 1) ? feature_qualify(state, cfg, q) : 0;
+ *     cleanup_a(u8);
+ *     return rv;
+ * ------------------------------------------------------------------------ */
+int cr_feature_extract_step_2db20(void *state, const cr_image *fimg,
+                                  void *handle, const cr_image *packed,
+                                  const void *cfg)
+{
+    uint8_t *st = (uint8_t *)state;
+    const uint8_t *c = (const uint8_t *)cfg;
+    int16_t mode = *(const int16_t *)(c + 0x24);
+    if ((uint16_t)(mode - 1) >= 0x7ffu)
+        return 0x69;
+
+    int W = fimg->w;
+    int H = fimg->h;
+    int n = W * H;
+
+    cr_image u8img;
+    int r = cr_image_alloc_u8((int *)&u8img, W, H);
+    if (r != 0)
+        return r;
+
+    const float *fs = (const float *)fimg->data;
+    uint8_t *ud = (uint8_t *)u8img.data;
+    for (int i = 0; i < n; i++) {
+        int v = (int)(fs[i] + 0.5f);
+        uint8_t out;
+        if (v < 0xff) {
+            out = (uint8_t)v;
+            if (v < 1)
+                out = 0;
+        } else {
+            out = 0xff;
+        }
+        ud[i] = out;
+    }
+
+    cr_image q16;
+    r = cr_image_alloc_s16((int *)&q16, W / 4, H / 4);
+    if (r != 0) {
+        cr_cleanup_ptr8_a(&u8img);
+        return r;
+    }
+
+    float q = 0.0f;
+    uint8_t flag = 0;
+    int g = cr_quality_gate_35cf0(&q16, &q, &flag, state, (void *)&u8img,
+                                  handle, cfg);
+    cr_cleanup_ptr8_clear(&q16);
+    if (g != 0) {
+        cr_cleanup_ptr8_a(&u8img);
+        return g;
+    }
+    if (flag != 1) {
+        cr_cleanup_ptr8_a(&u8img);
+        return 0;
+    }
+
+    cr_image u8b;
+    r = cr_image_alloc_u8((int *)&u8b, W, H);
+    if (r != 0) {
+        cr_cleanup_ptr8_a(&u8img);
+        return r;
+    }
+
+    if (*(int *)(st + 0x40) == 0) {
+        cr_fill(u8b.data, 0xff, n);
+    } else {
+        r = cr_mask_boxmax_fir_clear(&u8b, packed, 0xf, 1, 1, 1.5f);
+        if (r != 0) {
+            cr_cleanup_ptr8_a(&u8img);
+            cr_cleanup_ptr8_a(&u8b);
+            return r;
+        }
+    }
+
+    cr_weighted_running_avg((int16_t *)*(void **)(st + 0x18),
+                            (int16_t **)(st + 0x58), &u8img,
+                            (const uint8_t **)&u8b.data, q,
+                            (const int16_t *)(c + 0x24));
+    cr_cleanup_ptr8_a(&u8b);
+
+    if (*(int *)(st + 0x40) < (int)mode)
+        *(int *)(st + 0x40) = *(int *)(st + 0x40) + 1;
+
+    int rv = 0;
+    if (*(int8_t *)(st + 0x08) < 1)
+        rv = cr_feature_qualify(state, (void *)cfg, q);
+    cr_cleanup_ptr8_a(&u8img);
+    return rv;
+}

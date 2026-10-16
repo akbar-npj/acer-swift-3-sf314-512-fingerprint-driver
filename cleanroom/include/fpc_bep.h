@@ -543,6 +543,13 @@ int      cr_feature_extract_step_26dc0(void *state, const cr_image *img,
                                        void *handle, const cr_image *packed,
                                        const void *cfg);               /* 0x180026dc0 */
 
+/* Float-source twin of 0x180026dc0: the source image holds float pixels that
+ * are rounded/clamped into the working u8 image before the same gate/average
+ * fold; the packed image is expanded with the masked (0xf) box-max FIR. */
+int      cr_feature_extract_step_2db20(void *state, const cr_image *fimg,
+                                       void *handle, const cr_image *packed,
+                                       const void *cfg);               /* 0x18002db20 */
+
 /* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
 typedef struct {
     int32_t         a;      /* +0x00  row stride in bits       */

@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **310** (87.3% of functions, 115,808 B = 68.3% of bytes) |
+| rewritten + parity-verified | **311** (87.6% of functions, 116,496 B = 68.7% of bytes) |
 
-Seventy-one batches done so far:
+Seventy-two batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -298,6 +298,11 @@ Seventy-one batches done so far:
     (filled `0xff` on first frame, `cr_bitmap_unpack_boxmax_fir` otherwise),
     folds it via `cr_weighted_running_avg`, and qualifies when the state byte
     clears (3 functions).
+71. float-source feature-extraction step: the 688-byte `0x18002db20` twin of
+    `0x180026dc0` whose source image holds **float** pixels — it rounds/clamps
+    them into a u8 working image, runs the same quality gate, expands the
+    packed image with `cr_mask_boxmax_fir_clear(..., 0xf, ...)`, folds it into
+    the running average and qualifies (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

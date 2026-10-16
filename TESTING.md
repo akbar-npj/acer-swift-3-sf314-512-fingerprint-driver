@@ -90,7 +90,7 @@ x64 ABI) and the clean-room implementation, and compares results bit-for-bit.
 - **`make check` is the canonical command** (non-ASan). An **ASan build** is also
   used to catch memory bugs (§4).
 
-Current baseline (2026-10-17): the suite **passes** — 324 functions `ok`, 0
+Current baseline (2026-10-17): the suite **passes** — 325 functions `ok`, 0
 `FAIL`. The last failures were vendor routines that read *uninitialised* or
 *out-of-bounds* heap memory (e.g. the streaming vertical-FIR mirror branch
 indexes `ring + rem*w` with a negative `rem`, reaching before the ring). The
@@ -196,8 +196,18 @@ The **ASan build alone** reports these three allocator tests as `FAIL` (with
 reproduces unchanged on the baseline commit — and is an artefact of the ASan
 allocator changing the descriptor-address fields those tests compare; it is not
 a regression and not a clean-room bug. The **canonical non-ASan `make check`
-passes** (324 ok / 0 FAIL as of 2026-10-17). Judge parity by the non-ASan run;
+passes** (325 ok / 0 FAIL as of 2026-10-17). Judge parity by the non-ASan run;
 use ASan only to catch heap overflows/underflows.
+
+The same `ia-fields … vendor=0 clean=0` line can also appear **rarely** (roughly
+1 run in 10) in the non-ASan build. The allocator test `memcmp`s the *high half*
+of the descriptor's data pointer (`+0x0c..+0x0f`) between the vendor heap and
+the clean-room heap; under ASLR those two heaps occasionally land in different
+high-word regions, so the comparison false-fails even though the pointer is
+valid, non-NULL and 16-byte aligned (the test separately checks NULL-ness via
+`ia-ptr` and alignment via `ia-align`). It is an environment artefact, not a
+parity bug — re-run to confirm; only a mismatch that reproduces on every run is
+real.
 
 ### `Exec format error` / muvm errors on the dev machine
 You tried to run the x86-64 binary on the arm64 dev host. Use the laptop (or a
