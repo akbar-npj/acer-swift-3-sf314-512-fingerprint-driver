@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **307** (86.5% of functions, 115,184 B = 68.0% of bytes) |
+| rewritten + parity-verified | **310** (87.3% of functions, 115,808 B = 68.3% of bytes) |
 
-Sixty-nine batches done so far:
+Seventy-one batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -290,6 +290,14 @@ Sixty-nine batches done so far:
     to a mask-density threshold `cr_lroundf(bits*weight/(bw*bh*nb))`, then
     round-robins the shuffled bins popping one point at a time into the front of
     the array (1 function).
+70. orientation / grid dispatchers + feature-extraction step: the 64-byte
+    `0x18002cfd0` tail-jump on `cfg[0x10]` to `cr_structure_orient_d3b0`/`_3b960`,
+    the 64-byte `0x180038020` that stores `grid->count=0` then tail-jumps on
+    `cfg[1]` to the blob/harris grid populators, and the 496-byte `0x180026dc0`
+    feature-extraction step that runs the quality gate, allocates a u8 image
+    (filled `0xff` on first frame, `cr_bitmap_unpack_boxmax_fir` otherwise),
+    folds it via `cr_weighted_running_avg`, and qualifies when the state byte
+    clears (3 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
