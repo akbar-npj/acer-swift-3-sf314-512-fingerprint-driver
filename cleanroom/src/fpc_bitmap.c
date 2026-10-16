@@ -1026,3 +1026,48 @@ int cr_bitmap_filter_fir(cr_image *out, const cr_image *src, int n,
 
     return cr_fir7_image_u8(out, out, sigma);
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003f360 — mask an int16 image through the bitmap filter pipeline.
+ *   int fn(void *dst, const cr_image *src, const void *cfg)
+ *
+ * `dst` is a cr_image-like descriptor whose +0x08 is an int16 pixel buffer and
+ * whose +0x10/+0x14 are the width/height; `src` is the byte image fed to the
+ * bitmap pipeline; `cfg`'s byte at +8 is the pipeline's `flag`.
+ *
+ * Builds a u8 image `t` of size dst->w x dst->h, runs
+ * cr_bitmap_filter_fir(&t, src, 5, 4.0f, cfg[8]), then for each of the w*h
+ * pixels blends the int16 value toward 64 weighted by the mask byte m:
+ *   pix[i] = (pix[i]*m + (0xff - m)*0x3fc0) / 0xff
+ * (0x3fc0 == 255*64, so this is `(m/255)*pix[i] + (255-m)*64`).  `t` is always
+ * freed (when its allocation succeeded).  Returns the pipeline's status.
+ * ------------------------------------------------------------------------ */
+int cr_bitmap_filter_apply_s16(void *dst, const cr_image *src, const void *cfg)
+{
+    const uint8_t *dp = (const uint8_t *)dst;
+    const int w = *(const int *)(dp + 0x10);
+    const int h = *(const int *)(dp + 0x14);
+    int16_t  *pix = *(int16_t **)(dp + 0x8);
+
+    cr_image t;
+    int st = cr_image_alloc_u8((int *)&t, w, h);
+    if (st != 0)
+        return st;
+
+    st = cr_bitmap_filter_fir(&t, src, 5, 4.0f,
+                              *(const char *)((const uint8_t *)cfg + 8));
+    if (st == 0) {
+        const int n = w * h;
+        if (n > 0) {
+            const uint8_t *m = (const uint8_t *)t.data;
+            for (int i = 0; i < n; i++) {
+                int d = m[i];
+                pix[i] = (int16_t)(((int)pix[i] * d
+                                    + (0xff - d) * 0x3fc0) / 0xff);
+            }
+        }
+    }
+
+    cr_cleanup_ptr8_a(&t);
+    return st;
+}

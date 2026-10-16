@@ -913,5 +913,9 @@ int      cr_correlate_34930(const uint64_t *img_out, const uint64_t *img_in,
  * when flag], extract back, unpack to bytes into out, then 7-tap FIR blur. */
 int      cr_bitmap_filter_fir(cr_image *out, const cr_image *src, int n,
                               float sigma, int flag);           /* 0x180010110 */
+/* Mask an int16 image through the above pipeline (n=5, sigma=4.0) and blend
+ * each pixel toward 64 by the mask byte.  dst = {.., data@8, w@0x10, h@0x14}. */
+int      cr_bitmap_filter_apply_s16(void *dst, const cr_image *src,
+                                    const void *cfg);           /* 0x18003f360 */
 
 #endif /* FPC_BEP_H */

@@ -1119,9 +1119,15 @@ static void test_obj_init_17ca0(void)
                      (u32)*(int16_t *)(p1c + 0x44));
         if (*(int *)(p1v + 0x50) != *(int *)(p1c + 0x50))
             mismatch("f50", (u32)t, *(u32 *)(p1v + 0x50), *(u32 *)(p1c + 0x50));
-        /* image #1 descriptor +0..0x1c, image #2 +0x20..0x3c */
+        /* image #1 descriptor +0..0x1c, image #2 +0x20..0x3c.
+         * Skip BOTH halves of each `data` pointer (+8/+0xc and +0x28/+0x2c):
+         * the two heaps live at different addresses, so comparing the high 32
+         * bits of the pointers is meaningless and ASLR-dependent (it used to
+         * make this test flake when the two arenas straddled a 4 GiB
+         * boundary). */
         for (int off = 0; off < 0x40; off += 4) {
-            if (off == 8 || off == 0x28) continue;   /* pointers compared below */
+            if (off == 8 || off == 0xc || off == 0x28 || off == 0x2c)
+                continue;   /* pointers compared below */
             u32 a = *(u32 *)(p1v + off), b = *(u32 *)(p1c + off);
             if (a != b) mismatch("img", (u32)t, a, b);
         }
@@ -3411,6 +3417,48 @@ static void test_bitmap_filter_fir(void)
         cmp_buf("out", obv, obc, sizeof obv, (u32)t);
     }
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_filter_fir\n");
+}
+
+/* 0x18003f360 — mask an int16 image through the bitmap filter pipeline. */
+static void test_bitmap_filter_apply_s16(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x18003f360));
+    begin("cr_bitmap_filter_apply_s16");
+    int bad = g_fail;
+
+    enum { MAXW = 24, MAXH = 24, NP = MAXW * MAXH };
+    static u8  sbuf[NP];
+    static int16_t dv[NP], dc[NP];
+    static u8  cfgv[16], cfgc[16];
+    static cr_image sv, sc, ov, oc;
+
+    for (int t = 0; t < 4000; t++) {
+        int w = 8 + (int)(rnd() % (MAXW - 8));   /* >= 8 for the 7-tap FIR */
+        int h = 8 + (int)(rnd() % (MAXH - 8));
+
+        for (int i = 0; i < NP; i++) sbuf[i] = (u8)rnd();
+        for (int i = 0; i < NP; i++) {
+            int16_t val = (int16_t)((int)(rnd() % 65536) - 32768);
+            dv[i] = val; dc[i] = val;
+        }
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[8] = (u8)(rnd() & 1u);
+        cfgc[8] = cfgv[8];
+
+        cr_image_set(&sv, sbuf, w, h);
+        cr_image_set(&sc, sbuf, w, h);
+        memset(&ov, 0, sizeof ov); memset(&oc, 0, sizeof oc);
+        ov.a = w; ov.b = h; ov.data = dv; ov.w = w; ov.h = h;
+        oc = ov; oc.data = dc;
+
+        int rv = v(&ov, &sv, cfgv);
+        int rc = cr_bitmap_filter_apply_s16(&oc, &sc, cfgc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("pix", (const unsigned char *)dv, (const unsigned char *)dc,
+                sizeof dv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_filter_apply_s16\n");
 }
 
 /* ---- batch 70: grid-bucketed keypoint sampler (0x1800466f0) ------------- */
@@ -10514,6 +10562,7 @@ int main(int argc, char **argv)
      * are sensitive to it; inserting a test earlier shifts the stream and can
      * expose latent divide-by-zero paths.  Keep new tests at the tail. */
     test_bitmap_filter_fir();
+    test_bitmap_filter_apply_s16();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
