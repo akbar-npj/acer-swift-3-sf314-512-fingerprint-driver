@@ -939,3 +939,90 @@ int cr_bitmap_margin_extract(cr_image *dst, const cr_image *src)
     cr_cleanup_ptr8_b(&bmp);
     return st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180010110 — bitmap filter pipeline + 7-tap FIR blur.
+ *   int fn(cr_image *out, const cr_image *src, int n, float sigma, int flag)
+ *
+ * Rasterise `src` into a packed bitmap sized src->a x src->b (b1), pad it by
+ * (n+1) on every side into a scratch bitmap (b2), then apply the morphological
+ * sequence erode(1) -> dilate(n) -> erode(n-1) (followed, when `flag` is set,
+ * by a horizontal/vertical extent fill), extract the src-sized window back
+ * into b1, expand b1 to bytes into `out`, and finish with an in-place 7-tap
+ * vertical FIR blur of `out` (sigma).  Returns 0, or the first failing
+ * callee's status.
+ *
+ * The second bitmap's width is `round_up_32(b1->w + 2*(n+1))` and its height
+ * is `b1->h + 2*(n+1)`.  NB: the two early error paths that run after b1 has
+ * been allocated call cr_sized_free() on the b1 *descriptor* rather than on
+ * its +8 data pointer, exactly as the vendor does; those paths cannot be
+ * reached for valid inputs (the allocator and cr_bitmap_copy_shift succeed).
+ * ------------------------------------------------------------------------ */
+int cr_bitmap_filter_fir(cr_image *out, const cr_image *src, int n,
+                         float sigma, int flag)
+{
+    cr_image b1;                 /* rasterised src: src->a x src->b       */
+    cr_image b2;                 /* padded scratch bitmap                 */
+    int      st;
+
+    st = cr_bitmap_alloc((uint32_t *)&b1, (uint32_t)src->a, (uint32_t)src->b);
+    if (st != 0)
+        return st;
+
+    const int m = n + 1;
+
+    cr_bitmap_set_from_image(&b1, src);
+
+    int w1 = b1.w;
+    int h1 = b1.h;
+
+    int t = (w1 + m * 2) + 0x1f;
+    if (t < 0)
+        t = (w1 + m * 2) + 0x3e;
+    int w2 = t & ~0x1f;
+    int h2 = h1 + m * 2;
+
+    st = cr_bitmap_alloc((uint32_t *)&b2, (uint32_t)w2, (uint32_t)h2);
+    if (st != 0) {
+        cr_sized_free((void **)&b1);          /* vendor quirk; see above */
+        return st;
+    }
+
+    st = cr_bitmap_copy_shift(&b2, &b1, (uint32_t)m, m);
+    if (st != 0) {
+        cr_sized_free((void **)&b1);          /* vendor quirk; see above */
+        cr_cleanup_ptr8_b(&b2);
+        return st;
+    }
+
+    cr_bitmap_erode(&b2, &b2, 1);
+    cr_bitmap_dilate(&b2, &b2, n);
+    cr_bitmap_erode(&b2, &b2, n - 1);
+
+    if (flag) {
+        st = cr_bitmap_fill_extents(&b2, &b2);
+        if (st != 0) {
+            cr_cleanup_ptr8_b(&b1);
+            cr_cleanup_ptr8_b(&b2);
+            return st;
+        }
+    }
+
+    b2.w    = w1;
+    b2.h    = h1;
+    b2.offx = m;
+    b2.offy = m;
+
+    st = cr_bitmap_extract_shift(&b1, &b2);
+    if (st != 0) {
+        cr_cleanup_ptr8_b(&b1);
+        cr_cleanup_ptr8_b(&b2);
+        return st;
+    }
+
+    cr_cleanup_ptr8_b(&b2);
+    cr_bitmap_unpack(out, &b1);
+    cr_cleanup_ptr8_b(&b1);
+
+    return cr_fir7_image_u8(out, out, sigma);
+}

@@ -3377,6 +3377,42 @@ static void test_bitmap_margin_extract(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_margin_extract\n");
 }
 
+/* 0x180010110 — bitmap filter pipeline + 7-tap FIR blur. */
+static void test_bitmap_filter_fir(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, int, float, int);
+    fn_t v = (fn_t)fn_at(RVA(0x180010110));
+    begin("cr_bitmap_filter_fir");
+    int bad = g_fail;
+
+    enum { MAXW = 24, MAXH = 24, NP = MAXW * MAXH };
+    static u8 sbuf[NP], obv[NP], obc[NP];
+    static cr_image sv, sc, ov, oc;
+
+    for (int t = 0; t < 4000; t++) {
+        int w = 8 + (int)(rnd() % (MAXW - 8));   /* >= 8: the 7-tap FIR needs it */
+        int h = 8 + (int)(rnd() % (MAXH - 8));
+        int n = 1 + (int)(rnd() % 5);
+        int flag = (int)(rnd() & 1u);
+        float sigma = (float)(rnd() % 1000) / 500.0f;
+
+        for (int i = 0; i < NP; i++) sbuf[i] = (u8)rnd();
+        memset(obv, 0xAA, sizeof obv);
+        memset(obc, 0xAA, sizeof obc);
+
+        cr_image_set(&sv, sbuf, w, h);
+        cr_image_set(&sc, sbuf, w, h);
+        cr_image_set(&ov, obv, w, h);
+        cr_image_set(&oc, obc, w, h);
+
+        int rv = v(&ov, &sv, n, sigma, flag);
+        int rc = cr_bitmap_filter_fir(&oc, &sc, n, sigma, flag);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", obv, obc, sizeof obv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_filter_fir\n");
+}
+
 /* ---- batch 70: grid-bucketed keypoint sampler (0x1800466f0) ------------- */
 /* Buckets `npts` keypoint records into a rows x cols grid, shuffles the cell
  * order, then emits up to `maxout` head payloads (record+4) into `pts[out].f0`.
@@ -10472,6 +10508,12 @@ int main(int argc, char **argv)
     test_thresh_open_mark();
     test_angle_field_downsample();
     test_angle_field_ds_run();
+
+    /* NOTE: added last on purpose.  The suite shares one deterministic RNG
+     * stream across tests, and some existing tests (e.g. cr_template_ncc_283d0)
+     * are sensitive to it; inserting a test earlier shifts the stream and can
+     * expose latent divide-by-zero paths.  Keep new tests at the tail. */
+    test_bitmap_filter_fir();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -908,4 +908,10 @@ int      cr_ncc_apply_34390(const uint64_t *img_out, const uint64_t *img_in,
 int      cr_correlate_34930(const uint64_t *img_out, const uint64_t *img_in,
                             float sigma, int n);                 /* 0x180034930 */
 
+/* ---- batch 50: bitmap filter pipeline + FIR blur ------------------------- */
+/* Rasterise src, pad by (n+1), erode(1)/dilate(n)/erode(n-1) [+extent fill
+ * when flag], extract back, unpack to bytes into out, then 7-tap FIR blur. */
+int      cr_bitmap_filter_fir(cr_image *out, const cr_image *src, int n,
+                              float sigma, int flag);           /* 0x180010110 */
+
 #endif /* FPC_BEP_H */
