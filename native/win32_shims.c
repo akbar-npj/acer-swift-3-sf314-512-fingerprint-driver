@@ -15,6 +15,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -46,32 +47,207 @@ void win32_shims_set_image_base(void *base) { g_image_base = base; }
 /* ---------------------------------------------------------------- heap ---- */
 #define HEAP_ZERO_MEMORY 0x00000008
 
+/* The DLL (fpc_enclave.dll) runs its own sub-allocator on top of the Win32
+ * heap: FUN_18006afa0 / FUN_180002fb0 carve big HeapAlloc blocks into
+ * sub-pointers and return / free those sub-pointers through HeapFree.  A blind
+ * free(subpointer) corrupts glibc's heap metadata (newer glibc aborts with
+ * "unaligned tcache chunk" / ASAN "bad-free").  We therefore track the pointers
+ * sh_HeapAlloc actually hands back from malloc and only forward those to free();
+ * every other pointer (a DLL sub-pointer) is a no-op — the underlying block
+ * stays valid inside the DLL's pool.  This keeps the process heap intact.
+ *
+ * Open-addressing hash set, single-threaded (the enclave is serialised).
+ *
+ * The set MUST be growable.  sh_HeapFree is a no-op (we deliberately never free
+ * DLL blocks), so the live set only ever grows; a fixed-size table eventually
+ * fills completely and the probe loop below spins forever looking for an empty
+ * slot (observed: difftest wedged at 99.7% CPU in hs_insert after ~800k
+ * allocations).  We rehash — dropping tombstones — once the load factor passes
+ * 1/2, which also keeps probing O(1). */
+static uintptr_t *g_hs    = NULL;   /* 0 = empty, 1 = tombstone */
+static size_t    *g_hs_sz = NULL;   /* requested size, same slot as g_hs */
+static size_t     g_hs_cap = 0;     /* power of two; 0 until first insert */
+static size_t     g_hs_live = 0;    /* non-tombstone entries */
+
+static unsigned hs_hash(uintptr_t p, size_t cap) {
+    p >>= 4; p ^= p >> 17; p ^= p >> 34;
+    return (unsigned)(p & (cap - 1));
+}
+
+static void hs_grow(void) {
+    size_t ncap = g_hs_cap ? g_hs_cap * 2 : (size_t)1 << 12;
+    uintptr_t *nh = calloc(ncap, sizeof *nh);
+    size_t    *ns = calloc(ncap, sizeof *ns);
+    if (!nh || !ns) { free(nh); free(ns); return; }   /* best effort */
+    for (size_t i = 0; i < g_hs_cap; i++) {
+        uintptr_t v = g_hs[i];
+        if (v > 1) {                                  /* skip empty/tombstone */
+            unsigned h = hs_hash(v, ncap);
+            while (nh[h]) h = (h + 1u) & (unsigned)(ncap - 1);
+            nh[h] = v;
+            ns[h] = g_hs_sz[i];
+        }
+    }
+    free(g_hs); free(g_hs_sz);
+    g_hs = nh; g_hs_sz = ns; g_hs_cap = ncap;
+}
+
+static int hs_find(uintptr_t p, unsigned *out) {
+    if (!g_hs_cap) return 0;
+    unsigned mask = (unsigned)(g_hs_cap - 1);
+    unsigned h = hs_hash(p, g_hs_cap);
+    for (size_t n = 0; n < g_hs_cap; n++) {           /* bounded: never spins */
+        uintptr_t v = g_hs[h];
+        if (v == 0) return 0;
+        if (v == p) { *out = h; return 1; }
+        h = (h + 1u) & mask;                          /* tombstones skipped */
+    }
+    return 0;
+}
+static void hs_insert(uintptr_t p) {
+    if (g_hs_live * 2 >= g_hs_cap) hs_grow();         /* also handles cap == 0 */
+    if (!g_hs_cap) return;                            /* grow failed: drop it */
+    unsigned mask = (unsigned)(g_hs_cap - 1);
+    unsigned h = hs_hash(p, g_hs_cap);
+    for (;;) {
+        uintptr_t v = g_hs[h];
+        if (v == 0 || v == 1) { g_hs[h] = p; g_hs_live++; return; }
+        if (v == p) return;
+        h = (h + 1u) & mask;
+    }
+}
+static int hs_remove(uintptr_t p) {
+    unsigned h;
+    if (hs_find(p, &h)) { g_hs[h] = 1; if (g_hs_live) g_hs_live--; return 1; }
+    return 0;
+}
+
+/* Size accessors: the size the DLL *asked* for, so sh_HeapSize reports the
+ * Windows-visible size, not our padded block. */
+static void hs_set_sz(uintptr_t p, size_t sz) {
+    unsigned h;
+    if (hs_find(p, &h)) g_hs_sz[h] = sz;
+}
+static size_t hs_get_sz(uintptr_t p) {
+    unsigned h;
+    return hs_find(p, &h) ? g_hs_sz[h] : 0;
+}
+
+/* The DLL's BEP routines occasionally write a few bytes past the end of a
+ * scratch buffer they allocated (e.g. a sliding-window box sum whose tail loop
+ * runs one window too far).  On Windows the process heap rounds every block up
+ * to a 16-byte granularity *and* keeps free-list slack after it, so the overrun
+ * lands harmlessly in unused space.  glibc does not: the bytes after the block
+ * are the next chunk's size/prev_size header, so the overrun trips
+ * `sysmalloc: assertion failed`.  We therefore hand the DLL blocks that are
+ * SHIM_GUARD bytes larger than requested, restoring the Windows-like slack.
+ * The extra bytes are filled with a canary so `SHIM_GUARD_LOG` can report the
+ * overrun (size + how far past the end) for diagnosis. */
+#define SHIM_GUARD 64
+
+/* Head slack: some DLL routines read a few dozen bytes *before* a heap block
+ * (e.g. the streaming vertical-FIR mirror branch indexes `ring + rem*w` with a
+ * negative `rem`, reaching before the ring).  On Windows that lands in the
+ * preceding heap block / unused slack; on glibc it lands in the previous
+ * chunk's header, which differs from the clean-room side's neighbouring chunk
+ * and breaks bit-parity.  Handing out blocks preceded by SHIM_HEAD *zeroed*
+ * bytes makes every such read deterministic (zero) and identical to the
+ * clean-room allocator (which reserves the same head slack). */
+#define SHIM_HEAD 4096
+
+#define GC_N 64
+static unsigned char *g_gc_ptr[GC_N];
+static size_t         g_gc_sz[GC_N];
+static int            g_gc_i;
+static int            g_guard_log = -1;   /* -1 = unread, 0/1 = cached env */
+static void guard_check(void) {
+    if (g_guard_log < 0) g_guard_log = getenv("SHIM_GUARD_LOG") ? 1 : 0;
+    if (!g_guard_log) return;   /* the padded block already prevents corruption */
+    for (int i = 0; i < GC_N; i++) {
+        unsigned char *p = g_gc_ptr[i];
+        if (!p) continue;
+        unsigned char *g = p + g_gc_sz[i];
+        for (int k = 0; k < SHIM_GUARD; k++) {
+            if (g[k] != 0xC5) {
+                fprintf(stderr, "[GUARD] block size=%zu overrun +%d byte=0x%02x\n",
+                        g_gc_sz[i], k, g[k]);
+                g_gc_ptr[i] = NULL;
+                break;
+            }
+        }
+    }
+}
+static void guard_push(unsigned char *p, size_t size) {
+    g_gc_ptr[g_gc_i] = p;
+    g_gc_sz[g_gc_i]  = size;
+    g_gc_i = (g_gc_i + 1) % GC_N;
+}
+
 static void *WINAPI sh_GetProcessHeap(void) { return (void *)0x1; }
 
 static void *WINAPI sh_HeapAlloc(void *heap, DWORD flags, SIZE_T size) {
     (void)heap;
     if (size == 0) size = 1;
-    return (flags & HEAP_ZERO_MEMORY) ? calloc(1, size) : malloc(size);
+    guard_check();
+    void *p = malloc(SHIM_HEAD + size + SHIM_GUARD);
+    if (!p) return NULL;
+    memset(p, 0, SHIM_HEAD + size);   /* deterministic head slack + body */
+    if (flags & HEAP_ZERO_MEMORY) memset((char *)p + SHIM_HEAD, 0, size);
+    memset((unsigned char *)p + SHIM_HEAD + size, 0xC5, SHIM_GUARD);
+    p = (char *)p + SHIM_HEAD;
+    hs_insert((uintptr_t)p);
+    hs_set_sz((uintptr_t)p, size);
+    guard_push((unsigned char *)p, size);
+    return p;
 }
 
+/* The DLL's allocator (flmalloc) carves sub-pointers out of HeapAlloc blocks and
+ * passes those sub-pointers back to HeapFree.  A blind free(subpointer) corrupts
+ * glibc (ASAN "bad-free" / "unaligned tcache chunk").  Distinguishing a real
+ * malloc base from a sub-pointer reliably is fragile, so the robust choice for a
+ * short-lived test harness is to NEVER free here — leaked DLL pools are bounded
+ * and far cheaper than heap corruption.  The tracking set is still used by
+ * sh_HeapSize to avoid calling malloc_usable_size on sub-pointers (which would
+ * abort glibc). */
 static BOOL WINAPI sh_HeapFree(void *heap, DWORD flags, void *p) {
-    (void)heap; (void)flags; free(p); return 1;
+    (void)heap; (void)flags; (void)p;
+    return 1;   /* success, no-op */
 }
 
 static void *WINAPI sh_HeapReAlloc(void *heap, DWORD flags, void *p, SIZE_T size) {
     (void)heap;
-    if (flags & HEAP_ZERO_MEMORY) {
-        /* grow-and-zero semantics: approximate with realloc + zero tail */
-        size_t old = p ? malloc_usable_size(p) : 0;
-        void *q = realloc(p, size ? size : 1);
-        if (q && size > old) memset((char *)q + old, 0, size - old);
+    if (size == 0) size = 1;
+    unsigned h;
+    if (p && hs_find((uintptr_t)p, &h)) {
+        /* p is one of our (padded) blocks: realloc and re-track the new base.
+         * Keep the old base as an integer so hs_remove does not read `p` after
+         * realloc invalidated it. */
+        size_t old = g_hs_sz[h];
+        uintptr_t pv = (uintptr_t)p;
+        void *raw = (char *)p - SHIM_HEAD;
+        void *q = realloc(raw, SHIM_HEAD + size + SHIM_GUARD);
+        if (!q) return NULL;
+        hs_remove(pv);
+        memset(q, 0, SHIM_HEAD);
+        if ((flags & HEAP_ZERO_MEMORY) && size > old)
+            memset((char *)q + SHIM_HEAD + old, 0, size - old);
+        memset((char *)q + SHIM_HEAD + size, 0xC5, SHIM_GUARD);
+        q = (char *)q + SHIM_HEAD;
+        hs_insert((uintptr_t)q);
+        hs_set_sz((uintptr_t)q, size);
+        guard_push((unsigned char *)q, size);
         return q;
     }
-    return realloc(p, size ? size : 1);
+    /* sub-pointer: the DLL's sub-allocator owns it; cannot realloc a slice of
+     * someone else's block, so leave it in place (best effort, never realloc()). */
+    return p;
 }
 
 static SIZE_T WINAPI sh_HeapSize(void *heap, DWORD flags, void *p) {
-    (void)heap; (void)flags; return p ? malloc_usable_size(p) : 0;
+    (void)heap; (void)flags;
+    /* Report the size the DLL requested (Windows-visible), not our padded
+     * block, and never call malloc_usable_size on an unknown pointer. */
+    return p ? (SIZE_T)hs_get_sz((uintptr_t)p) : 0;
 }
 
 /* ----------------------------------------------------- critical sections -- */

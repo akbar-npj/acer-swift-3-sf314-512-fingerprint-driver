@@ -794,7 +794,7 @@ static void test_image_data_dump(void)
             *(void **)(defs + 0x10 + (size_t)i * 8) = meta[i];
         }
         u32 idx = rnd() % 26u;
-        u8 ov[0x30], oc[0x30];
+        u8 ov[0x40], oc[0x40];   /* cr_image_data_dump writes 0x38 bytes (0x20 + cr_image_buf_desc) */
         memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
         uint32_t rv = v(defs, idx, ov);
         uint32_t rc = cr_image_data_dump(defs, idx, oc);
@@ -807,7 +807,7 @@ static void test_image_data_dump(void)
     }
     /* NULL defs */
     {
-        u8 ov[0x30], oc[0x30];
+        u8 ov[0x40], oc[0x40];
         memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
         uint32_t rv = v(NULL, 0, ov);
         uint32_t rc = cr_image_data_dump(NULL, 0, oc);
@@ -1752,7 +1752,13 @@ static void test_harris_local_max_grid(void)
         int offx = (int)(rnd() % 6u);
         int offy = (int)(rnd() % 6u);
         int stride_bits = (2 + (int)(rnd() % 3u)) * 32;   /* 64..128 bits */
-        int border = (int)(rnd() % 4u);
+        /* border (interior margin) must be >= 1: with c == 0 the vendor scans
+         * the whole image and reads one pixel past it on every side (row -1 /
+         * row h / col -1 / col w).  The vendor's pooled allocator absorbs that
+         * over-read, but our malloc'd buffer does not — ASan flags a
+         * heap-buffer-overflow, and the out-of-bounds value can't be matched
+         * anyway.  c == 0 is a degenerate margin, so skip it. */
+        int border = 1 + (int)(rnd() % 3u);        /* 1..3 */
         float coef  = (float)(rnd() % 100u) / 1000.0f;
         float sigma = 0.72f + (float)(rnd() % 150u) / 100.0f;
         int W = 1 + (int)(rnd() % 6u);
@@ -3330,7 +3336,12 @@ static void test_bitmap_margin_extract(void)
         int w  = 1 + (int)(rnd() % MAXW);        /* src->w */
         int h  = 1 + (int)(rnd() % MAXH);        /* src->h */
         int sa = ((w + 31) >> 5) << 5;           /* src stride (bits) */
-        int dh = 1 + (int)(rnd() % MAXH);        /* dst->h */
+        /* The scratch is (src->h + 12) rows tall and the final extract reads
+         * dst->h rows starting at row 6, so dst->h must be <= src->h + 6.
+         * Past that the vendor reads beyond its own scratch — harmless in the
+         * Windows pool, but an ASan heap-buffer-overflow (and unmatchable
+         * garbage) against our malloc'd buffer.  Keep dst->h in the window. */
+        int dh = 1 + (int)(rnd() % (h + 6));     /* 1 .. src->h + 6 */
         int dw = 1 + (int)(rnd() % MAXW);        /* dst->w */
         int da = ((dw + 31) >> 5) << 5;          /* dst stride (bits) */
 
@@ -3577,7 +3588,11 @@ static void test_linear_softmax2(void)
     static int   stage[12];
     static int   desc_v[16], desc_c[16], ind_v[16], ind_c[16];
     static int   lin_v[8 * NLM], lin_c[8 * NLM];
-    static float kt[2 * 25], bt[2];
+    /* The stage-0 5x5 filter bank's kernel table holds nch*nk kernels of 25
+     * floats (nk and nch are each 1..2 here, so up to 4 kernels).  A 2-kernel
+     * table made the vendor/clean-room read past it -> ASan
+     * global-buffer-overflow in cr_filter_bank_max5x5_f32. */
+    static float kt[4 * 25], bt[2];
     static float lw[NLM][3 * 64], lb[NLM][3];
 
     for (int t = 0; t < 400; t++) {
@@ -3592,7 +3607,7 @@ static void test_linear_softmax2(void)
 
         for (int i = 0; i < INMAX; i++)
             in0[i] = (float)((int)(rnd() % 4001) - 2000) / 100.0f;
-        for (int i = 0; i < 2 * 25; i++)
+        for (int i = 0; i < 4 * 25; i++)
             kt[i] = (float)((int)(rnd() % 2001) - 1000) / 250.0f;
         for (int i = 0; i < 2; i++)
             bt[i] = (float)((int)(rnd() % 2001) - 1000) / 100.0f;
@@ -3798,7 +3813,11 @@ static void test_block_conv_231a0(void)
     begin("cr_block_conv_231a0");
     int bad = g_fail;
 
-    static int16_t kbuf[9 * 8];                       /* kernel, up to K=7x9 */
+    /* Kernel table: the function advances the kernel base by K*9 shorts for
+     * each of the R slices, so it holds R*K rows of 3x3 (R,K are each 1..6).
+     * A single-slice K*9 table made it read past the end -> ASan
+     * global-buffer-overflow in cr_block_conv_231a0. */
+    static int16_t kbuf[6 * 6 * 9];                    /* kernel, R*K 3x3 rows */
     static int16_t sbuf[16];                           /* bias source        */
     static int16_t dbuf[4][(16 + 8) * 8 + 32];         /* 4 data buffers     */
     static int16_t ov[256], oc[256];
@@ -3810,7 +3829,7 @@ static void test_block_conv_231a0(void)
         int Wout = 1 + (int)(rnd() % 16u);             /* 1..16 */
         int line = Wout + 8;
 
-        for (int i = 0; i < K * 9; i++)
+        for (int i = 0; i < R * K * 9; i++)
             kbuf[i] = (int16_t)((int)(rnd() % 65536) - 32768);
         for (int i = 0; i < R + 2; i++)
             sbuf[i] = (int16_t)((int)(rnd() % 65536) - 32768);
@@ -3915,7 +3934,10 @@ static void test_template_ncc_35150(void)
     int bad = g_fail;
 
     static int16_t data[256 * 16];
-    static int16_t ref[64];
+    /* radius runs up to `rows` (max 67), so ref must hold at least 68 shorts
+     * (the twin test uses 128).  A 64-entry table overflowed -> ASan
+     * global-buffer-overflow. */
+    static int16_t ref[128];
     static int16_t ov[256 * 16], oc[256 * 16];
 
     for (int t = 0; t < 3000; t++) {
@@ -4122,7 +4144,10 @@ static void test_correlate_34930(void)
         int w  = 2 + (int)(rnd() % 48u);            /* 2..49   */
         int h  = 2 + (int)(rnd() % 48u);            /* 2..49   */
         int mn = w < h ? w : h;
-        int n  = 1 + (int)(rnd() % (uint32_t)mn);   /* 1..mn (half < mn) */
+        /* odd n only: the vendor routine writes one short past its scratch
+         * buffer when n is even, which corrupts its allocator; Gaussian
+         * windows are odd-length in practice anyway. */
+        int n  = 1 + 2 * (int)(rnd() % (uint32_t)(mn / 2));  /* 1,3,5,.. < mn */
         float sigma = (float)((int)(rnd() % 4000) - 2000) * 0.01f;
         int mode = (int)(rnd() % 2u);               /* 0 ok, 1 bad-struct */
 
@@ -8678,7 +8703,7 @@ static void test_tree_batch52(void)
         v_i_ppp v = (v_i_ppp)fn_at(RVA(0x180010e60));
         begin("cr_palette_remap");
         int bad = g_fail;
-        enum { NLUT = 256, MAXP = 64 };
+        enum { NLUT = 8 * 256, MAXP = 64 };   /* LUT must cover idx = hi*mult + lo, mult<=8 */
         int16_t lut[NLUT];
         u8 src_bytes[MAXP * 2];
         int16_t dst_v[MAXP], dst_c[MAXP];
@@ -8686,7 +8711,13 @@ static void test_tree_batch52(void)
             for (int i = 0; i < NLUT; i++) lut[i] = (int16_t)rnd();
             int mult = 1 + (int)(rnd() % 8u);
             int count = 1 + (int)(rnd() % MAXP);
-            for (int i = 0; i < count * 2; i++) src_bytes[i] = (u8)rnd();
+            /* idx = src[2i+1]*mult + src[2i]; the LUT is [256][mult] so the
+             * low byte (column) must be < mult to stay in bounds for both
+             * vendor and clean-room. */
+            for (int i = 0; i < count * 2; i += 2) {
+                src_bytes[i]     = (u8)(rnd() % (uint32_t)mult);   /* lo < mult */
+                src_bytes[i + 1] = (u8)rnd();                        /* hi 0..255 */
+            }
             /* Build ctx: ctx+0x48 → palette object */
             /* palette object: +0x00=src ptr, +0x18=dst ptr(alloc), +0x20=count */
             struct { void *src; void *pad[2]; int16_t *dst; int count; } palobj;
@@ -10171,7 +10202,6 @@ int main(int argc, char **argv)
         return 0;
     }
 
-
     printf("== math kernel ==\n");
     test_float_fn("cr_sqrtf",         RVA(0x180003080), (void *)cr_sqrtf,          0);
     test_float_fn("cr_expf",          RVA(0x180002dd0), (void *)cr_expf,           0);
@@ -10179,6 +10209,9 @@ int main(int argc, char **argv)
     test_float_fn("cr_floorf_to_int", RVA(0x180002f70), (void *)cr_floorf_to_int,  1);
     test_float_fn("cr_lroundf",       RVA(0x180002d60), (void *)cr_lroundf,        1);
     test_ldexpf();
+
+    test_correlate_34930();   /* runs early: verified in isolation; survives the
+                                 pre-existing heap crash that aborts at calib_blob */
 
     printf("\n== buffer predicates ==\n");
     test_type_predicates();
@@ -10425,7 +10458,6 @@ int main(int argc, char **argv)
     test_fft2d_prep_1e920();
     test_ncc_apply_f8b0();
     test_ncc_apply_34390();
-    test_correlate_34930();
     test_obj_init_12fe0();
     test_resize_pair_18000();
     test_hist_percentiles();

@@ -10,6 +10,13 @@
  */
 #include "fpc_bep.h"
 #include <stdlib.h>
+#include <string.h>
+
+/* Mirror of the shim's SHIM_HEAD (native/win32_shims.c): every block is
+ * preceded by CR_HEAD zeroed bytes so that vendor routines which read a few
+ * dozen bytes *before* an allocation (e.g. the streaming vertical-FIR mirror
+ * branch's negative ring index) observe the same zeros as the vendor side. */
+#define CR_HEAD 4096
 
 /* ------------------------------------------------------------------------ *
  * 0x180002fe0 — malloc wrapper.
@@ -23,9 +30,14 @@ int cr_malloc(void **out, size_t size)
         *out = NULL;
         return 1;
     }
-    void *p = malloc(size);
-    *out = p;
-    return p == NULL ? 1 : 0;
+    void *raw = malloc(CR_HEAD + size);
+    if (!raw) {
+        *out = NULL;
+        return 1;
+    }
+    memset(raw, 0, CR_HEAD + size);
+    *out = (char *)raw + CR_HEAD;
+    return 0;
 }
 
 /* ------------------------------------------------------------------------ *
@@ -36,7 +48,7 @@ void cr_free(void **p)
 {
     void *q = *p;
     if (q) {
-        free(q);
+        free((char *)q - CR_HEAD);
         *p = NULL;
     }
 }
