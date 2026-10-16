@@ -521,6 +521,9 @@ int      cr_structure_orient_d3b0(void *dst, const cr_image *src,
 int      cr_structure_orient_3b960(void *dst, const void *src,
                                   const void *mask, uint8_t and_mask,
                                   const void *cfg);                    /* 0x18003b960 */
+int      cr_bin_select_14320(void *pts, int *out_count, int npts, int maxout,
+                             const void *mask, uint32_t seed,
+                             const void *cfg);                         /* 0x180014320 */
 
 /* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
 typedef struct {

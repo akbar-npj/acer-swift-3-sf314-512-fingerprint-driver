@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **306** (86.2% of functions, 113,744 B = 67.1% of bytes) |
+| rewritten + parity-verified | **307** (86.5% of functions, 115,184 B = 68.0% of bytes) |
 
-Sixty-eight batches done so far:
+Sixty-nine batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -285,6 +285,11 @@ Sixty-eight batches done so far:
     identical per-pixel eigen/coherence encoding, writes `output1`/`output2` back
     into the o1/o3 planes, blurs those two planes and feeds `(I3,I1)` to
     `cr_cordic_atan_q15` (1 function).
+69. mask-weighted spatial bin selection: the 1440-byte `0x180014320` that bins
+    points into an NX×NY grid (per-bin linked list + population), caps each bin
+    to a mask-density threshold `cr_lroundf(bits*weight/(bw*bh*nb))`, then
+    round-robins the shuffled bins popping one point at a time into the front of
+    the array (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

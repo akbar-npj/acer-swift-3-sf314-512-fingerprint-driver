@@ -7742,6 +7742,71 @@ static void test_structure_orient_3b960(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_structure_orient_3b960\n");
 }
 
+/* ---- 0x180014320 — mask-weighted spatial bin selection ----------------- *
+ * pts: 8-byte records {int32 key; int16 x; int16 y}.  mask: {stride(+0),
+ * words(+8), w(+0x10), h(+0x14), x0(+0x18), y0(+0x1c)}.  cfg: {margin(+8),
+ * maxpts(+0x10), weight(+0x14), NX(+0x25), NY(+0x26)}. */
+static void test_bin_select_14320(void)
+{
+    typedef int (WINAPI *v_t)(void *, int *, int, int, const void *, uint32_t, const void *);
+    v_t v = (v_t)fn_at(RVA(0x180014320));
+    begin("cr_bin_select_14320");
+    int bad = g_fail;
+
+    enum { MAXPTS = 40, MAXW = 512 };
+    static uint8_t ptsv[MAXPTS * 8], ptsc[MAXPTS * 8];
+    static uint8_t mcfg[0x20];
+    static uint8_t cfg[0x40];
+    static uint32_t mwords[MAXW];
+
+    for (int t = 0; t < 8000; t++) {
+        int margin = (int)(rnd() % 3u);
+        int W = 2 * margin + 1 + (int)(rnd() % 48u);
+        int H = 2 * margin + 1 + (int)(rnd() % 48u);
+        int NX = 1 + (int)(rnd() % 5u);
+        int NY = 1 + (int)(rnd() % 5u);
+        int npts = (int)(rnd() % (MAXPTS + 1));
+        int maxout = (int)(rnd() % (MAXPTS + 3));
+        int maxpts = npts + (int)(rnd() % 5u);
+        int stride = 32 * (1 + (int)(rnd() % 4u));        /* 32..128 */
+        int x0 = (int)(rnd() % 4u);
+        int y0 = (int)(rnd() % 4u);
+        int weight = (int)(rnd() % 2000u);
+        uint32_t seed = rnd();
+
+        for (int i = 0; i < MAXW; i++) mwords[i] = rnd();
+        for (int i = 0; i < MAXPTS; i++) {
+            *(int32_t *)(ptsv + i * 8) = (int32_t)rnd();
+            *(int16_t *)(ptsv + i * 8 + 4) = (int16_t)((int)(rnd() % 400u) - 100);
+            *(int16_t *)(ptsv + i * 8 + 6) = (int16_t)((int)(rnd() % 400u) - 100);
+        }
+        memcpy(ptsc, ptsv, sizeof ptsv);
+
+        memset(mcfg, 0, sizeof mcfg);
+        *(int *)(mcfg + 0x00) = stride;
+        *(void **)(mcfg + 0x08) = mwords;
+        *(int *)(mcfg + 0x10) = W;
+        *(int *)(mcfg + 0x14) = H;
+        *(int *)(mcfg + 0x18) = x0;
+        *(int *)(mcfg + 0x1c) = y0;
+
+        memset(cfg, 0, sizeof cfg);
+        *(int8_t *)(cfg + 0x08) = (int8_t)margin;
+        *(int16_t *)(cfg + 0x10) = (int16_t)maxpts;
+        *(int *)(cfg + 0x14) = weight;
+        cfg[0x25] = (uint8_t)NX;
+        cfg[0x26] = (uint8_t)NY;
+
+        int ov = 0x12345678, oc = 0x12345678;
+        int rv = v(ptsv, &ov, npts, maxout, mcfg, seed, cfg);
+        int rc = cr_bin_select_14320(ptsc, &oc, npts, maxout, mcfg, seed, cfg);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (ov != oc) mismatch("count", (u32)t, (u32)ov, (u32)oc);
+        cmp_buf("pts", ptsv, ptsc, (u32)sizeof ptsv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_bin_select_14320\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -11612,6 +11677,7 @@ int main(int argc, char **argv)
     test_blob_detect_1bbf0();
     test_structure_orient_d3b0();
     test_structure_orient_3b960();
+    test_bin_select_14320();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

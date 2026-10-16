@@ -1050,3 +1050,155 @@ int cr_structure_orient_3b960(void *dst, const void *src, const void *mask,
     cr_sized_free_if((void **)pool);
     return 0;
 }
+
+/* 0x180014320 — mask-weighted spatial bin selection.
+ *
+ * int fn(void *pts, int *out_count, int npts, int maxout, const void *mask,
+ *        uint32_t seed, const void *cfg)  [rcx,rdx,r8d,r9d,[rsp+0x20],+0x28,+0x30]
+ *
+ * pts: npts records of 8 bytes { int32 key(+0); int16 x(+4); int16 y(+6) }.
+ * mask: bitmap descriptor { int stride(+0); int pad(+4); uint32 *words(+8);
+ *       int w(+0x10); int h(+0x14); int x0(+0x18); int y0(+0x1c) }.
+ * cfg:  { int8 margin(+8); int16 maxpts(+0x10); int weight(+0x14);
+ *         uint8 NX(+0x25); uint8 NY(+0x26) }.
+ * seed: RNG seed handed to cr_shuffle_indices.
+ *
+ * Bins every point into an NX*NY grid (cell = ceil((dim-2m)/n)), building a
+ * per-bin singly-linked list of point indices (bin_head / next_ptr) and a bin
+ * population (bin_count); the key is first copied from +0 to +4 of each record.
+ * Then, for every bin, sums the mask bits over its pixel window, computes a
+ * density threshold cr_lroundf(bits*weight / (bw*bh*nb)) and caps the bin
+ * population to it.  Finally counts empty bins, shuffles the bin order, and
+ * round-robins over the shuffled bins popping one point at a time into the
+ * front of pts (out[i] = in[head].key) until maxout points or all bins empty.
+ * Sets *out_count and returns 0 / first failing status. */
+int cr_bin_select_14320(void *pts, int *out_count, int npts, int maxout,
+                        const void *mask, uint32_t seed, const void *cfg)
+{
+    const uint8_t *cf = (const uint8_t *)cfg;
+    const uint8_t *mk = (const uint8_t *)mask;
+    int margin = (int)*(const int8_t *)(cf + 8);
+    int NX = cf[0x25];
+    int NY = cf[0x26];
+    int H  = *(const int *)(mk + 0x14);
+    int W  = *(const int *)(mk + 0x10);
+    int weight = *(const int *)(cf + 0x14);
+    int maxpts = (int)*(const int16_t *)(cf + 0x10);
+    int stride = *(const int *)(mk + 0x00);
+    int x0 = *(const int *)(mk + 0x18);
+    int y0 = *(const int *)(mk + 0x1c);
+    const uint32_t *words = *(const uint32_t *const *)(mk + 0x08);
+
+    int nb = NX * NY;
+    int32_t *bin_count = NULL, *next_ptr = NULL, *bin_head = NULL, *order = NULL;
+    int st;
+
+    st = cr_malloc_aligned16((void **)&bin_count, (size_t)nb * 4);
+    if (st != 0) return st;
+    st = cr_malloc_aligned16((void **)&next_ptr, (size_t)maxpts * 4);
+    if (st != 0) { cr_sized_free((void **)&bin_count); return st; }
+    st = cr_malloc_aligned16((void **)&bin_head, (size_t)nb * 4);
+    if (st != 0) { cr_sized_free((void **)&bin_count); cr_sized_free((void **)&next_ptr); return st; }
+    st = cr_malloc_aligned16((void **)&order, (size_t)nb * 4);
+    if (st != 0) { cr_sized_free((void **)&bin_count); cr_sized_free((void **)&next_ptr);
+                   cr_sized_free((void **)&bin_head); return st; }
+
+    for (int i = 0; i < nb; i++) { bin_head[i] = -1; bin_count[i] = 0; }
+
+    int Wm = W + margin * -2;
+    int Hm = H + margin * -2;
+    int bw = (Wm - 1 + NX) / NX;
+    int bh = (NY - 1 + Hm) / NY;
+
+    for (int idx = npts - 1; idx >= 0; idx--) {
+        uint8_t *rec = (uint8_t *)pts + (int64_t)idx * 8;
+        int bx = (*(const int16_t *)(rec + 4) - margin) / bw;
+        if (bx < 0) bx = 0;
+        int by = (*(const int16_t *)(rec + 6) - margin) / bh;
+        *(int32_t *)(rec + 4) = *(const int32_t *)rec;
+        if (by < 0) by = 0;
+        if (NY - 1 < by) by = NY - 1;
+        if (NX - 1 < bx) bx = NX - 1;
+        int bi = by * NX + bx;
+        bin_count[bi]++;
+        if (bin_head[bi] == -1) {
+            bin_head[bi] = idx;
+            next_ptr[idx] = -1;
+        } else {
+            next_ptr[idx] = bin_head[bi];
+            bin_head[bi] = idx;
+        }
+    }
+
+    if (NY != 0) {
+        int row = margin;
+        int bin_i = 0;
+        for (int byi = 0; byi < NY; byi++) {
+            int yb = bh + row;
+            if (NX != 0) {
+                int ye = Hm + margin;
+                if (yb < ye) ye = yb;
+                int col = margin;
+                int bc = bin_i;
+                for (int bxi = 0; bxi < NX; bxi++) {
+                    int xb = bw + col;
+                    int xe = Wm + margin;
+                    if (xb <= xe) xe = xb;
+                    int cnt = 0;
+                    if (row < ye) {
+                        for (int r = row; r < ye; r++) {
+                            if (col < xe) {
+                                int rowbase = (y0 + r) * stride;
+                                int lin = x0 + col + rowbase;
+                                int end = x0 + xe + rowbase;
+                                for (; lin != end; lin++)
+                                    cnt += (int)((words[lin >> 5] >>
+                                          (((uint8_t)lin - (uint8_t)rowbase) & 0x1f)) & 1u);
+                            }
+                        }
+                    }
+                    int thr = cr_lroundf((float)(cnt * weight) / (float)(bw * bh * nb));
+                    if (bin_count[bc] <= thr) thr = bin_count[bc];
+                    bin_count[bc] = thr;
+                    col = xb;
+                    bc++;
+                }
+            }
+            row = yb;
+            bin_i += NX;
+        }
+    }
+
+    int empty = 0;
+    for (int i = 0; i < nb; i++) empty += (bin_count[i] == 0);
+
+    cr_shuffle_indices(order, nb, (uint64_t)seed);
+
+    int out = 0;
+    if (maxout >= 1) {
+        int idx = 0;
+        do {
+            int bi = order[idx];
+            int wrap = (nb - 1 <= idx);
+            idx++;
+            if (wrap) idx = 0;
+            if (bin_head[bi] != -1 && bin_count[bi] > 0) {
+                int oi = out;
+                out++;
+                *(int32_t *)((uint8_t *)pts + (int64_t)oi * 8) =
+                    *(const int32_t *)((const uint8_t *)pts + 4 + (int64_t)bin_head[bi] * 8);
+                bin_head[bi] = next_ptr[bin_head[bi]];
+                int c = bin_count[bi];
+                bin_count[bi] = c - 1;
+                empty += (c - 1 == 0);
+            }
+        } while (empty != nb && out < maxout);
+    }
+    *out_count = out;
+
+    cr_sized_free((void **)&next_ptr);
+    cr_sized_free((void **)&bin_head);
+    cr_sized_free((void **)&order);
+    cr_sized_free((void **)&bin_count);
+    return 0;
+}
