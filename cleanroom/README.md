@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **305** (85.9% of functions, 112,336 B = 66.3% of bytes) |
+| rewritten + parity-verified | **306** (86.2% of functions, 113,744 B = 67.1% of bytes) |
 
-Sixty-seven batches done so far:
+Sixty-eight batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -279,6 +279,12 @@ Sixty-seven batches done so far:
     eigenvector scaled by coherence (zeroed per-pixel when `flag==1` and the mask
     bit is clear), blurs it (`count==1` → single dispatch, `count>0` → that many
     FIR passes), and finishes with `cr_cordic_atan_q15` (1 function).
+68. Gaussian-derivative structure-tensor orientation, 3-image twin: the 1408-byte
+    `0x18003b960` sibling that takes the three tensor planes precomputed from
+    `cr_gauss_deriv_triple_guarded` (tensor `[[o1,o2],[o2,o3]]`), applies the
+    identical per-pixel eigen/coherence encoding, writes `output1`/`output2` back
+    into the o1/o3 planes, blurs those two planes and feeds `(I3,I1)` to
+    `cr_cordic_atan_q15` (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

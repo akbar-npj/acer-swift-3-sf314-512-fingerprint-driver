@@ -937,3 +937,116 @@ int cr_structure_orient_d3b0(void *dst, const cr_image *src, const void *mask,
     cr_sized_free_if((void **)pool);
     return 0;
 }
+
+/* 0x18003b960 — Gaussian-derivative structure-tensor orientation (3-image twin).
+ *
+ * Near-identical to cr_structure_orient_d3b0 (0x18000d3b0) but the per-pixel
+ * tensor components arrive precomputed from cr_gauss_deriv_triple_guarded into
+ * three int16 images o1/o2/o3 (I1/I2/I3).  The 2x2 tensor is [[o1, o2],[o2, o3]],
+ * i.e. the loop's roles are fVar15=o3 (other diagonal), fVar19=o2 (off-diagonal)
+ * and fVar18=o1 (baseline diagonal).  output1 is written back into I1 and
+ * output2 into I3; I1 and I3 are then blurred and cr_cordic_atan_q15(dst->data,
+ * I3, I1, N, 2) is run.  rcx=dst, rdx=src image, r8=mask, r9=and_mask, [rsp]=cfg.
+ * cfg: int16 +0xc=count, uint8 +0xf=flag, float +0x04=sigma1, +0x08=sigma2.
+ * Returns 0 / first failing status. */
+int cr_structure_orient_3b960(void *dst, const void *src, const void *mask,
+                              uint8_t and_mask, const void *cfg)
+{
+    const uint8_t *c = (const uint8_t *)cfg;
+    const uint8_t *s = (const uint8_t *)src;
+    int W = *(const int *)(s + 0x10);
+    int H = *(const int *)(s + 0x14);
+    int16_t count = *(const int16_t *)(c + 0x0c);
+    uint8_t flag  = c[0x0f];
+    float   sigma1 = *(const float *)(c + 0x04);
+    float   sigma2 = *(const float *)(c + 0x08);
+
+    cr_image I1, I2, I3;
+    uint32_t r = cr_image_set(&I1, NULL, W, H);
+    if (r != 0) return (int)r;
+    r = cr_image_set(&I2, NULL, W, H);
+    if (r != 0) return (int)r;
+    r = cr_image_set(&I3, NULL, W, H);
+    if (r != 0) return (int)r;
+
+    int N = H * W;
+    uint64_t pool[2];
+    uint32_t pr = cr_pool_alloc3((void **)pool, &I1.data, (uint32_t)(N * 2),
+                                 &I2.data, (uint32_t)(N * 2),
+                                 &I3.data, (uint32_t)(N * 2));
+    if (pr != 0) return (int)pr;
+
+    int st = cr_gauss_deriv_triple_guarded(&I1, &I2, &I3, src, sigma1);
+    if (st != 0) { cr_sized_free_if((void **)pool); return st; }
+
+    int16_t *p1 = (int16_t *)I1.data;  /* o1: baseline diagonal, gets output1 */
+    int16_t *p2 = (int16_t *)I2.data;  /* o2: off-diagonal (read only) */
+    int16_t *p3 = (int16_t *)I3.data;  /* o3: other diagonal, gets output2 */
+    const uint8_t *maskd = *(const uint8_t *const *)((const uint8_t *)mask + 8);
+
+    for (int l = 0; l < N; l++) {
+        /* Assembly mapping: gauss outputs o1->I1, o2->I2, o3->I3, and the
+         * per-pixel roles are fVar15=o3 (other diagonal), fVar19=o2
+         * (off-diagonal), fVar18=o1 (baseline diagonal). */
+        float o1 = (float)(int)p1[l];
+        float o2 = (float)(int)p2[l];
+        float o3 = (float)(int)p3[l];
+        float f15 = o3, f19 = o2, f18 = o1;
+        float f14, f17, f16;
+        int small = (f19 * f19 < 1e-12f);
+
+        if (small) {
+            f14 = 0.0f; f17 = 0.0f; f16 = 1.0f; f19 = 1.0f;
+        } else {
+            float f20 = (f15 + f18) * 0.5f;
+            f14 = cr_sqrtf(f20 * f20 - (f15 * f18 - f19 * f19));
+            f15 = f20 - f14;   /* l2 */
+            f17 = (f20 + f14) - f18;  /* l1 - c */
+            f16 = f15 - f18;   /* l2 - c */
+            f18 = f20 + f14;   /* l1 */
+            f14 = f19;   /* ab */
+        }
+        if (f18 < 0.0f) f18 = -f18;   /* |l1| (or |c| in small) */
+        if (f15 < 0.0f) f15 = -f15;   /* |l2| (or |a| in small) */
+        /* REA: uVar7 = (fVar15 <= fVar18) == (|l2| <= |l1|) == mb.
+         * cross = uVar7 ? fVar14 : fVar19 ;  diff = uVar7 ? fVar16 : fVar17. */
+        int mb = !(f18 < f15);   /* uVar7 = (|l2| <= |l1|) */
+        float cross = mb ? f14 : f19;   /* uVar7 ? fVar14 : fVar19 */
+        float diff  = mb ? f16 : f17;   /* uVar7 ? fVar16 : fVar17 */
+        float coh = ((f18 - f15) * (f18 - f15)) /
+                    (f18 * f18 + f15 * f15 + 1e-07f);
+        coh = coh * 16383.0f;
+        float norm = cross * cross + diff * diff;
+        float cd   = cross * diff / norm;
+        if (flag == 1 && (maskd[l] & and_mask) == 0)
+            coh = 0.0f;
+        /* output1 -> I1 (image0), output2 -> I3 (image2); the blur then
+         * rewrites I1 and I3 and the cordic reads (I3, I1). */
+        p1[l] = (int16_t)(int32_t)((cross * cross - diff * diff) / norm * coh);
+        p3[l] = (int16_t)(int32_t)((cd + cd) * coh);
+    }
+
+    int16_t *out = *(int16_t *const *)((const uint8_t *)dst + 8);
+
+    if (count == 1) {
+        int m = (I1.w <= I3.h) ? I1.w : I3.h;
+        int cc = (m - 1) | 1;
+        if (cc > 0x51) cc = 0x51;
+        uint16_t cnt = (uint16_t)cc;
+        int e = cr_blur_dispatch_1c6a0(&I1, &I1, sigma2, cnt, 0);
+        if (e != 0) { cr_sized_free_if((void **)pool); return e; }
+        e = cr_blur_dispatch_1c6a0(&I3, &I3, sigma2, cnt, 0);
+        if (e != 0) { cr_sized_free_if((void **)pool); return e; }
+    } else if (count > 0) {
+        for (int k = 0; k < count; k++) {
+            int e = cr_gaussian_fir_2pass(&I1, &I1, sigma2);
+            if (e != 0) { cr_sized_free_if((void **)pool); return e; }
+            e = cr_gaussian_fir_2pass(&I3, &I3, sigma2);
+            if (e != 0) { cr_sized_free_if((void **)pool); return e; }
+        }
+    }
+
+    cr_cordic_atan_q15(out, p3, p1, N, 2);
+    cr_sized_free_if((void **)pool);
+    return 0;
+}

@@ -629,6 +629,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x18000d3b0` | `fpc_bio_bep_sw23_...` | `cr_structure_orient_d3b0` | `int fn(void *dst, const cr_image *src, const void *mask, uint8_t and_mask, const void *cfg)` (rcx/rdx/r8/r9/[rsp] = cfg). Reads `W=src->w`, `H=src->h`, `cfg` int16 `+0x0c` = `count`, uint8 `+0x0f` = `flag`, float `+0x04` = `sigma1`, float `+0x08` = `sigma2`. Allocates two `W×H` int16 images `A,B` via `cr_image_set` + `cr_pool_alloc2`, then `cr_gauss_deriv_3img(&A,&B,src,sigma1)`. Per pixel computes the 2×2 structure-tensor eigen-decomposition of `(aa,ab,bb)=(A²,A·B,B²)`: `half=(aa+bb)/2`, `s=√(half²-(aa·bb-ab²))`, `l1=half+s`, `l2=half-s`; dominant eigenvector encoded as `(cross,diff)=(ab, |l1|≥|l2| ? l2-aa : l1-aa)`; coherence `coh = ((|l1|-|l2|)² / (|l1|²+|l2|²+1e-7)) * 16383`; edge case `ab² ≤ 1e-12` → `(cross,diff)=(|aa|≥|bb| ? 0:1, |aa|≥|bb| ? 1:0)`. `A[i]=(cross²-diff²)/norm * coh`, `B[i]=2·cross·diff/norm * coh`; when `flag==1` and `(mask[i] & and_mask)==0`, `coh=0`. Then blurred: `count==1` → single `cr_blur_dispatch_1c6a0` pass on each of `A,B` (radius `(min(W,H)-1)|1` capped at `0x51`), `count>0` → `count` passes of `cr_gaussian_fir_2pass`, else none. Finally `cr_cordic_atan_q15(dst->data, B, A, W*H, 2)` and free. Returns 0 / first failing status. Passed the difftest (319 ok). |
 
+### Batch 81 — Gaussian-derivative structure-tensor orientation (3-image twin)
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18003b960` | `fpc_bio_bep_sw23_...` | `cr_structure_orient_3b960` | Same signature/flow as `cr_structure_orient_d3b0` but the three tensor planes arrive precomputed from `cr_gauss_deriv_triple_guarded(&I1,&I2,&I3,src,sigma1)` (outputs `o1,o2,o3`). The assembly fixes the per-pixel roles: the 2×2 tensor is `[[o1, o2],[o2, o3]]`, i.e. `fVar15=o3` (other diagonal), `fVar19=o2` (off-diagonal / small-test / `cross`), `fVar18=o1` (baseline diagonal). The eigen-decomposition, `(cross,diff)` selection (`uVar7 = (|l2|≤|l1|)`), coherence, `flag`/mask zeroing, and int16 rounding are identical to `d3b0`. `output1` is stored back into **I1** and `output2` into **I3** (I2 is never rewritten); `I1` and `I3` are then blurred (`count==1` → `cr_blur_dispatch_1c6a0` radius `(min(W,H)-1)|1` capped `0x51`; `count>0` → `count` × `cr_gaussian_fir_2pass`) and finally `cr_cordic_atan_q15(dst->data, I3, I1, W*H, 2)`. Returns 0 / first failing status. Passed the difftest (320 ok). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

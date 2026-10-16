@@ -518,6 +518,9 @@ int      cr_blob_detect_1bbf0(cr_grid *grid, const cr_image *desc,
 int      cr_structure_orient_d3b0(void *dst, const cr_image *src,
                                   const void *mask, uint8_t and_mask,
                                   const void *cfg);                    /* 0x18000d3b0 */
+int      cr_structure_orient_3b960(void *dst, const void *src,
+                                  const void *mask, uint8_t and_mask,
+                                  const void *cfg);                    /* 0x18003b960 */
 
 /* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
 typedef struct {
