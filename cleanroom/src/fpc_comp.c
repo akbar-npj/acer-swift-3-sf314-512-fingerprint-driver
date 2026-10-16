@@ -59,6 +59,40 @@ int cr_gauss_fir_apply(void *a, void *b, int r8, uint16_t count,
     return status;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x18001c6a0 — blur/kernel-apply dispatcher.
+ *   int fn(void *a, void *b, float sigma, int count, int sel)
+ *
+ * Leaf tail-jump.  Under the Microsoft x64 ABI a float at argument position 3
+ * lands in xmm2 and the position-4 int in r9, so the vendor reads:
+ *   a=rcx, b=rdx, sigma=xmm2, count=r9 (zero-extended to 16 bits via
+ *   `movzx r9d,r9w`) and the selector from [rsp+0x28] (argument 5, on the
+ *   stack).  It overwrites r8 with the jump-table base and dispatches on the
+ *   selector's low byte (`cmp r8b,4 ; ja default`).
+ *
+ * Jump table @ 0x18008c4b0 (dumped from the DLL; note the *non-obvious* order):
+ *   sel 0 -> 0x180046610 cr_gauss_fir_apply            (sigma in xmm2)
+ *   sel 1 -> 0x180013a30 cr_sep_gauss_blur_s16_reflect (sigma in xmm2)
+ *   sel 2 -> 0x180034930 cr_correlate_34930            (sigma in xmm2)
+ *   sel 3 -> 0x180034390 cr_ncc_apply_34390            (sigma in xmm2)
+ *   sel 4 -> 0x1800278f0 cr_sep_gauss_blur_s16         (sigma in xmm2)
+ *   sel > 4 (unsigned low byte) -> return 0x69
+ * Every target reads sigma from xmm2 and count from r9, so the dispatcher just
+ * forwards them.  r8 is clobbered and ignored by all targets.
+ * ------------------------------------------------------------------------ */
+int cr_blur_dispatch_1c6a0(void *a, void *b, float sigma, int count, int sel)
+{
+    unsigned n = (unsigned)(uint16_t)count;   /* vendor: movzx r9d,r9w */
+    switch ((uint8_t)sel) {                   /* vendor: cmp r8b,4 ; ja */
+    case 0: return cr_gauss_fir_apply(a, b, 0, (uint16_t)n, 0.0f, 0.0f, sigma);
+    case 1: return cr_sep_gauss_blur_s16_reflect(a, b, sigma, (int)n);
+    case 2: return cr_correlate_34930(a, b, sigma, (int)n);
+    case 3: return cr_ncc_apply_34390(a, b, sigma, (uint16_t)n);
+    case 4: return cr_sep_gauss_blur_s16(a, b, sigma, n);
+    default: return 0x69;
+    }
+}
+
 /* 0x180044a20 — fixed 7-tap twin.  When W is 8-aligned it uses the guarded
  * row/reflect FIRs (returning the guard status); otherwise the fixed fir7_reflect
  * + vfir7_cols pair (always returning 0). */

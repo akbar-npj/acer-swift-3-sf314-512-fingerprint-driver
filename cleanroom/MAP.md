@@ -581,6 +581,12 @@ side effects, never raw pointer values.
 | `0x18000f8b0` | `fpc_bio_bep_sw23_*` | `cr_ncc_apply_f8b0` | Thin template-NCC apply. `int fn(const uint64_t *img_out, const uint64_t *img_in, uint16_t radius)`. Validates the two 4×uint64 image descriptors (`[0]==[2]` and `[3]==0` else 0x69; `[1]`=int16 data ptr, `[2]`=w\|h<<32), allocates a radius-length int16 ref buffer filled with `(short)(32768.0/radius)`, then runs `cr_template_ncc_283d0(out, in, ref, radius, w, h)` and `cr_template_ncc_35150(out, out, ref, radius, w, h)` in place; returns the status (0 / 0x69 / 1). Passed the difftest bit-for-bit (304 ok). |
 | `0x180034390` | `fpc_bio_bep_sw23_*` | `cr_ncc_apply_34390` | Same as `cr_ncc_apply_f8b0` but the ref buffer (n int16) is filled by `cr_gaussian_window_q15(ref, sigma, n)` instead of a constant; the 4th arg is `n` (also used as the NCC radius). Passed the difftest bit-for-bit (304 ok). |
 
+### Batch 73 — blur/kernel-apply dispatcher
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18001c6a0` | `fpc_bio_bep_sw23_32f906bc87.part.2` | `cr_blur_dispatch_1c6a0` | `int fn(void *a, void *b, float sigma, int count, int sel)`. Leaf tail-jump: reads `sel` from `[rsp+0x28]` (argument 5, on the stack), zero-extends `count` (`movzx r9d,r9w`), overwrites `r8` with the jump-table base `0x18008c4b0` and jumps through the 5-entry table on the **low byte** of `sel` (`cmp r8b,4 ; ja default`). The table order is *not* the natural one — dumped from the DLL: `sel 0 → cr_gauss_fir_apply (0x180046610)`, `sel 1 → cr_sep_gauss_blur_s16_reflect (0x180013a30)`, `sel 2 → cr_correlate_34930 (0x180034930)`, `sel 3 → cr_ncc_apply_34390 (0x180034390)`, `sel 4 → cr_sep_gauss_blur_s16 (0x1800278f0)`, `sel > 4 → 0x69`. Every target reads `sigma` from **xmm2** and `count` from `r9`, so the dispatcher just forwards them (`r8` is clobbered and ignored). **ABI trap:** the signature is `(ptr, ptr, float, int, int)` — under the Microsoft x64 convention the position-3 float lands in `xmm2`, the position-4 int in `r9`, and the position-5 int on the stack, which is exactly what the vendor reads. Modelling it as `(ptr, ptr, int, int, int, float, float, float)` (a plausible but wrong guess) sends the floats to the stack and leaves `xmm2` stale, so the sigma-dependent targets (sel 0/1) mismatch. Passed the difftest (312 ok). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

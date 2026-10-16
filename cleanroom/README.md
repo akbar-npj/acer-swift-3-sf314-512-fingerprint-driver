@@ -100,8 +100,14 @@ cleanroom/
   inverse-sqrt seed table lives at `0x180159500`; the difftest confirms parity
   only because it is reproduced verbatim.
 - **Prototypes must match the vendor's argument *position*, including floats.**
-  GCC's `ms_abi` assigns XMM registers *positionally*: a `float` at argument
-  index *i* lands in `xmm_i` (not "the i-th float in xmm0..3"). So
+  GCC's `ms_abi` assigns registers *positionally*: a `float` at argument index
+  *i* (1-based) lands in `xmm(i-1)` (not "the i-th float in xmm0..3"), and a
+  non-float at index *i* lands in `rcx,rdx,r8,r9` for *i*=1..4. Arguments at
+  index *i* ≥ 5 go **on the stack**, whatever their class — so a prototype with
+  more than four register arguments silently pushes its floats instead of
+  loading `xmm` (this bit `cr_blur_dispatch_1c6a0`: modelled as
+  `(void*,void*,int,int,int,float,float,float)` its `sigma` went to the stack
+  and the vendor read a stale `xmm2`). So
   `fpc_bio_bep_sw23_3d13ea8103` — whose float is the 2nd argument and whose
   body does `movss [..],xmm1` — must be declared `void (*)(void*, float)`, not
   `(void*, float, float)`. Getting this wrong makes the vendor read a stale
@@ -147,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **212** (59.7% of functions, 53,440 B = 31.44% of bytes) |
+| rewritten + parity-verified | **298** (83.9% of functions, 105,120 B = 62.0% of bytes) |
 
-Fifty-eight batches done so far:
+Fifty-nine batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -237,6 +243,11 @@ Fifty-eight batches done so far:
 59. gaussian-blur + blit wrappers: the separable 7-tap Gaussian blur of two int16 images
     and the three "copy source into a sub-window of a container, then fix its border"
     wrappers (mirror-extend / edge-replicate / constant-fill) (4 functions)
+60. blur/kernel-apply dispatcher: the 96-byte leaf tail-jump at `0x18001c6a0` that
+    routes on a stack selector to `cr_gauss_fir_apply` / `cr_sep_gauss_blur_s16_reflect`
+    / `cr_correlate_34930` / `cr_ncc_apply_34390` / `cr_sep_gauss_blur_s16` (1 function).
+    Watch the ABI: `(ptr, ptr, float sigma, int count, int sel)` — the position-3 float
+    lands in `xmm2`, not `xmm0`.
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

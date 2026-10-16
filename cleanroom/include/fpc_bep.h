@@ -141,6 +141,8 @@ int cr_gauss_fir_apply(void *a, void *b, int r8, uint16_t count,
                        float unk0, float unk1, float sigma); /* 0x180046610 */
 int cr_gauss_fir7_apply(void *a, void *b, float unk0, float unk1,
                         float sigma);                        /* 0x180044a20 */
+int cr_blur_dispatch_1c6a0(void *a, void *b, float sigma, int count,
+                           int sel);                         /* 0x18001c6a0 */
 
 /* ---- image descriptor -------------------------------------------------- *
  * Matches the vendor layout the leaf functions touch:

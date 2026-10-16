@@ -4585,6 +4585,136 @@ static void test_correlate_34930(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_correlate_34930\n");
 }
 
+/* ---- batch 73k: blur/kernel-apply dispatcher (0x18001c6a0) -------------- */
+static void test_blur_dispatch_1c6a0(void)
+{
+    /* FUN_18001c6a0 is a leaf tail-jump dispatcher with signature
+     *   int fn(void *a, void *b, float sigma, int count, int sel)
+     * Under the MS x64 ABI a float at position 3 goes to xmm2, the position-4
+     * int to r9, and the position-5 int (sel) on the stack at [rsp+0x28] —
+     * exactly the registers the vendor reads (a=rcx, b=rdx, sigma=xmm2,
+     * count=r9 zero-extended to 16 bits, sel=[rsp+0x28]).  It overwrites r8 with
+     * the jump-table base and jumps through the table @ 0x18008c4b0 (dumped):
+     *   sel 0 -> cr_gauss_fir_apply            (0x20 gf_desc)
+     *   sel 1 -> cr_sep_gauss_blur_s16_reflect (full cr_image)
+     *   sel 2 -> cr_correlate_34930            (4-qword desc)
+     *   sel 3 -> cr_ncc_apply_34390            (4-qword desc)
+     *   sel 4 -> cr_sep_gauss_blur_s16         (full cr_image)
+     *   sel > 4 (unsigned low byte) -> return 0x69
+     * Every target reads sigma from xmm2 and count from r9. */
+    typedef int (WINAPI *v_disp_t)(void *a, void *b, float sigma, int count,
+                                   int sel);
+    v_disp_t v = (v_disp_t)fn_at(RVA(0x18001c6a0));
+    begin("cr_blur_dispatch_1c6a0");
+    int bad = g_fail;
+
+    /* gf_desc (sel 0) */
+    static unsigned char gfa[0x20], gfb[0x20], gca[0x20], gcb[0x20];
+    static int16_t gav[4096], gac[4096], gbv[4096], gbc[4096];
+    static const uint16_t gf_counts[] = {1,3,5,7,9,11,15,31,63,127};
+    /* full-view cr_image (sel 1/4) */
+    enum { MAXD = 40, NP = MAXD * MAXD };
+    static int16_t sv[NP], sc[NP], dv[NP], dc[NP];
+    static cr_image sdv, sdc, ddv, ddc;
+    /* 4-qword desc (sel 2/3): d[2]=w|h<<32, d[1]=data, d[3]=0, d[0]=d[2] */
+    static uint64_t d1v[4], d2v[4], d1c[4], d2c[4];
+    static int16_t inb[128*128], outbv[128*128], outbc[128*128];
+
+    for (int sel = 0; sel < 8; sel++) {
+        int s = (sel < 6) ? sel : (sel == 6 ? 0xff : 0x100);   /* incl. high-byte */
+        int niter = (s >= 5 && (s & 0xff) > 4) ? 32 : 1500;
+        for (int t = 0; t < niter; t++) {
+            int rv, rc;
+            u32 tag = (u32)((sel << 24) | t);
+
+            if ((s & 0xff) == 0) {                   /* gauss_fir (gf_desc) */
+                int W = (int)(rnd() % 64u) + 1;
+                int L = (int)(rnd() % 64u) + 1;
+                uint16_t count = gf_counts[rnd() %
+                                 (uint32_t)(sizeof gf_counts / sizeof gf_counts[0])];
+                float sigma = cr_u2f(rnd());
+                int n = W * L;
+                for (int i = 0; i < n; i++) {
+                    int16_t x = (int16_t)(rnd() & 0xffffu); gav[i] = x; gac[i] = x;
+                    x = (int16_t)(rnd() & 0xffffu); gbv[i] = x; gbc[i] = x;
+                }
+                mk_gf_desc(gfa, gav, W, L); mk_gf_desc(gfb, gbv, W, L);
+                mk_gf_desc(gca, gac, W, L); mk_gf_desc(gcb, gbc, W, L);
+                rv = v(gfa, gfb, sigma, (int)count, s);
+                rc = cr_blur_dispatch_1c6a0(gca, gcb, sigma, (int)count, s);
+                if (rv != rc) { mismatch("ret", tag, (u32)rv, (u32)rc); continue; }
+                if (rv == 0)
+                    cmp_buf("dst", (unsigned char *)gav, (unsigned char *)gac,
+                            (u32)(n * 2), tag);
+            } else if ((s & 0xff) == 1 || (s & 0xff) == 4) {  /* sep_gauss */
+                int klen = 1 + 2 * (int)(rnd() % 7);
+                int W = klen + (int)(rnd() % (MAXD - klen + 1));
+                int H = klen + (int)(rnd() % (MAXD - klen + 1));
+                float sigma = 0.5f + (float)(rnd() % 400) / 100.0f;
+                for (int i = 0; i < W * H; i++) {
+                    int16_t x = (int16_t)rnd();
+                    sv[i] = x; sc[i] = x; dv[i] = 0x7f; dc[i] = 0x7f;
+                }
+                memset(&sdv, 0, sizeof sdv); memset(&sdc, 0, sizeof sdc);
+                sdv.a = W; sdv.b = H; sdv.data = sv; sdv.w = W; sdv.h = H;
+                sdc.a = W; sdc.b = H; sdc.data = sc; sdc.w = W; sdc.h = H;
+                memset(&ddv, 0, sizeof ddv); memset(&ddc, 0, sizeof ddc);
+                ddv.a = W; ddv.b = H; ddv.data = dv; ddv.w = W; ddv.h = H;
+                ddc.a = W; ddc.b = H; ddc.data = dc; ddc.w = W; ddc.h = H;
+                rv = v(&ddv, &sdv, sigma, klen, s);
+                rc = cr_blur_dispatch_1c6a0(&ddc, &sdc, sigma, klen, s);
+                if (rv != rc) { mismatch("ret", tag, (u32)rv, (u32)rc); continue; }
+                if (rv == 0)
+                    cmp_buf("dst", (unsigned char *)dv, (unsigned char *)dc,
+                            (u32)(W * H * 2), tag);
+            } else if ((s & 0xff) == 2 || (s & 0xff) == 3) {  /* ncc/correlate */
+                int w = 2 + (int)(rnd() % 48u);
+                int h = 2 + (int)(rnd() % 48u);
+                int mn = w < h ? w : h;
+                int n = 1 + 2 * (int)(rnd() % (uint32_t)(mn / 2));   /* odd */
+                float sigma = ((s & 0xff) == 3)
+                    ? (float)((int)(rnd() % 2000) - 1000) * 0.01f
+                    : (float)((int)(rnd() % 4000) - 2000) * 0.01f;
+                for (int i = 0; i < w * h; i++)
+                    inb[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+                memset(outbv, 0, (size_t)w * h * 2);
+                memset(outbc, 0, (size_t)w * h * 2);
+                uint64_t wh = (uint64_t)(uint32_t)w | ((uint64_t)(uint32_t)h << 32);
+                d1v[2] = wh; d1v[1] = (uint64_t)(uintptr_t)outbv; d1v[3] = 0; d1v[0] = wh;
+                d2v[2] = wh; d2v[1] = (uint64_t)(uintptr_t)inb;   d2v[3] = 0; d2v[0] = wh;
+                d1c[2] = wh; d1c[1] = (uint64_t)(uintptr_t)outbc; d1c[3] = 0; d1c[0] = wh;
+                d2c[2] = wh; d2c[1] = (uint64_t)(uintptr_t)inb;   d2c[3] = 0; d2c[0] = wh;
+                rv = v(d1v, d2v, sigma, n, s);
+                rc = cr_blur_dispatch_1c6a0(d1c, d2c, sigma, n, s);
+                if (rv != rc) { mismatch("ret", tag, (u32)rv, (u32)rc); continue; }
+                if (rv == 0)
+                    cmp_buf("dst", (unsigned char *)outbv, (unsigned char *)outbc,
+                            (u32)(w * h * 2), tag);
+            } else {                                  /* default -> 0x69, no touch */
+                int W = 4, H = 4;
+                for (int i = 0; i < W * H; i++) {
+                    int16_t x = (int16_t)rnd();
+                    sv[i] = x; sc[i] = x; dv[i] = 0x7f; dc[i] = 0x7f;
+                }
+                memset(&sdv, 0, sizeof sdv); memset(&sdc, 0, sizeof sdc);
+                sdv.a = W; sdv.b = H; sdv.data = sv; sdv.w = W; sdv.h = H;
+                sdc.a = W; sdc.b = H; sdc.data = sc; sdc.w = W; sdc.h = H;
+                memset(&ddv, 0, sizeof ddv); memset(&ddc, 0, sizeof ddc);
+                ddv.a = W; ddv.b = H; ddv.data = dv; ddv.w = W; ddv.h = H;
+                ddc.a = W; ddc.b = H; ddc.data = dc; ddc.w = W; ddc.h = H;
+                rv = v(&ddv, &sdv, 0.5f, 5, s);
+                rc = cr_blur_dispatch_1c6a0(&ddc, &sdc, 0.5f, 5, s);
+                if (rv != rc) { mismatch("ret", tag, (u32)rv, (u32)rc); continue; }
+                if (rv == 0x69)
+                    cmp_buf("dst", (unsigned char *)dv, (unsigned char *)dc,
+                            (u32)(W * H * 2), tag);
+            }
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_blur_dispatch_1c6a0\n");
+}
+
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -10886,6 +11016,7 @@ int main(int argc, char **argv)
     test_fft_weighted_apply_32af0();
     test_obj_init_13340();
     test_harris_local_minmax_grid();
+    test_blur_dispatch_1c6a0();
     test_sep_gauss_blur_reflect();
 
     printf("\n=============================\n");

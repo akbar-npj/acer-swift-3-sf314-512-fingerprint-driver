@@ -90,7 +90,7 @@ x64 ABI) and the clean-room implementation, and compares results bit-for-bit.
 - **`make check` is the canonical command** (non-ASan). An **ASan build** is also
   used to catch memory bugs (§4).
 
-Current baseline (2026-10-16): the suite **passes** — 305 functions `ok`, 0
+Current baseline (2026-10-16): the suite **passes** — 312 functions `ok`, 0
 `FAIL`. The last failures were vendor routines that read *uninitialised* or
 *out-of-bounds* heap memory (e.g. the streaming vertical-FIR mirror branch
 indexes `ring + rem*w` with a negative `rem`, reaching before the ring). The
@@ -189,6 +189,15 @@ Document the reason in a comment at the guard.
 The clean-room function is not yet parity-correct (WIP). Check
 `cleanroom/REACHABLE.md` / `MAP.md` / `done.txt` for its status. A function is
 "done" only at zero mismatches.
+
+### ASan-only: `cr_image_alloc_u8` / `cr_image_alloc_s16` / `cr_bitmap_alloc` fail
+The **ASan build alone** reports these three allocator tests as `FAIL` (with
+`ia-fields … vendor=0 clean=0` style lines). This is **pre-existing** — it
+reproduces unchanged on the baseline commit — and is an artefact of the ASan
+allocator changing the descriptor-address fields those tests compare; it is not
+a regression and not a clean-room bug. The **canonical non-ASan `make check`
+passes** (312 ok / 0 FAIL as of 2026-10-16). Judge parity by the non-ASan run;
+use ASan only to catch heap overflows/underflows.
 
 ### `Exec format error` / muvm errors on the dev machine
 You tried to run the x86-64 binary on the arm64 dev host. Use the laptop (or a
