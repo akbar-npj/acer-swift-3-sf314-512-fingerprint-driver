@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **304** (85.6% of functions, 111,008 B = 65.5% of bytes) |
+| rewritten + parity-verified | **305** (85.9% of functions, 112,336 B = 66.3% of bytes) |
 
-Sixty-six batches done so far:
+Sixty-seven batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -273,6 +273,12 @@ Sixty-six batches done so far:
     Gaussian into a rotating ring buffer, takes the 3×3 Laplacian of three
     consecutive rows, and inserts every masked 3×3 local maximum into the grid
     (1 function).
+67. Gaussian-derivative structure-tensor orientation: the 1328-byte `0x18000d3b0`
+    that builds the A=d/dx / B=d/dy Gaussian-derivative pair, computes the 2×2
+    structure-tensor eigen-decomposition per pixel, encodes the dominant
+    eigenvector scaled by coherence (zeroed per-pixel when `flag==1` and the mask
+    bit is clear), blurs it (`count==1` → single dispatch, `count>0` → that many
+    FIR passes), and finishes with `cr_cordic_atan_q15` (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

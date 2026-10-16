@@ -810,3 +810,130 @@ int cr_blob_detect_1bbf0(cr_grid *grid, const cr_image *desc,
     cr_sized_free((void **)&buf);
     return 0;
 }
+
+/* 0x18000d3b0 — Gaussian-derivative structure-tensor orientation encoder.
+ *
+ * Builds two W×H int16 images A (Gaussian d/dx) and B (Gaussian d/dy) from the
+ * source via cr_gauss_deriv_3img, then for every pixel computes the 2×2
+ * structure-tensor eigen-decomposition of (aa, ab, bb) = (A², A·B, B²):
+ *   half = (aa+bb)*0.5;  s = cr_sqrtf(half² - (aa·bb - ab²));  l1 = half+s; l2 = half-s
+ * and encodes the dominant eigenvector as a double-angle pair
+ *   (cross, diff) = (ab, |l1|>=|l2| ? l2-aa : l1-aa)
+ * scaled by the coherence ((|l1|-|l2|)² / (|l1|²+|l2|²+1e-7)) * 16383 into
+ *   A[i] = (int16)((cross²-diff²)/norm · coh),  B[i] = (int16)(2·cross·diff/norm · coh).
+ * When cfg->flag == 1 the coherence is zeroed for pixels where
+ * (mask[i] & and_mask) == 0.  Both images are then blurred (a single
+ * cr_blur_dispatch_1c6a0 pass when count == 1, else `count` passes of
+ * cr_gaussian_fir_2pass) and finally fed to cr_cordic_atan_q15(dst, B, A, N, 2).
+ * Returns 0, or the first failing status (the pool is always freed). */
+int cr_structure_orient_d3b0(void *dst, const cr_image *src, const void *mask,
+                             uint8_t and_mask, const void *cfg)
+{
+    const uint8_t *c = (const uint8_t *)cfg;
+    int W = *(const int *)((const uint8_t *)src + 0x10);
+    int H = *(const int *)((const uint8_t *)src + 0x14);
+    int16_t count = *(const int16_t *)(c + 0x0c);
+    uint8_t flag  = c[0x0f];
+    float   sigma1 = *(const float *)(c + 0x04);
+    float   sigma2 = *(const float *)(c + 0x08);
+
+    cr_image A, B;
+    uint32_t r = cr_image_set(&A, NULL, W, H);
+    if (r != 0) return (int)r;
+    r = cr_image_set(&B, NULL, W, H);
+    if (r != 0) return (int)r;
+
+    int N = H * W;
+    uint64_t pool[2];
+    uint32_t pr = cr_pool_alloc2((void **)pool, &A.data, (uint32_t)(N * 2),
+                                 &B.data, (uint32_t)(N * 2));
+    if (pr != 0) return (int)pr;
+
+    int st = cr_gauss_deriv_3img(&A, &B, (void *)src, sigma1);
+    if (st != 0) { cr_sized_free_if((void **)pool); return st; }
+
+    int16_t *Ad = (int16_t *)A.data;
+    int16_t *Bd = (int16_t *)B.data;
+    const uint8_t *maskd = *(const uint8_t *const *)((const uint8_t *)mask + 8);
+
+    for (int i = 0; i < N; i++) {
+        float fb = (float)(int)Bd[i];
+        float fa = (float)(int)Ad[i];
+        float bb  = fb * fb;
+        float ab  = fb * fa;
+        float aa  = fa * fa;
+        float ab2 = ab * ab;
+
+        float cross, diff, s6, s2;
+        if (1e-12f > ab2) {
+            s6 = aa;
+            s2 = bb;
+            int mb = !(s6 < s2);
+            cross = mb ? 0.0f : 1.0f;
+            diff  = mb ? 1.0f : 0.0f;
+        } else {
+            float det  = bb * aa;
+            float half = (bb + aa) * 0.5f;
+            det = det - ab2;
+            float t = half * half;
+            t = t - det;
+            float s  = cr_sqrtf(t);
+            float l1 = half + s;
+            float l2 = half - s;
+            float d1 = l1 - aa;
+            float d2 = l2 - aa;
+            s6 = (0.0f > l1) ? -l1 : l1;
+            s2 = (0.0f > l2) ? -l2 : l2;
+            int mb = !(s6 < s2);
+            cross = ab;
+            diff  = mb ? d2 : d1;
+        }
+
+        float n1  = s6 * s6;
+        float n2  = s2 * s2;
+        float dd  = s6 - s2;
+        float den = (n1 + n2) + 1e-07f;
+        dd = dd * dd;
+        float coh = dd / den;
+        coh = coh * 16383.0f;
+
+        float c2   = cross * cross;
+        float df2  = diff * diff;
+        float cd   = cross * diff;
+        float norm = c2 + df2;
+        float vA   = c2 - df2;
+        float vB   = cd / norm;
+        vA = vA / norm;
+        vB = vB + vB;
+
+        if (flag == 1 && (maskd[i] & and_mask) == 0)
+            coh = 0.0f;
+
+        Ad[i] = (int16_t)(int32_t)(vA * coh);
+        Bd[i] = (int16_t)(int32_t)(vB * coh);
+    }
+
+    int16_t *out = *(int16_t *const *)((const uint8_t *)dst + 8);
+
+    if (count == 1) {
+        int m = (A.w <= B.h) ? A.w : B.h;
+        int cc = (m - 1) | 1;
+        if (cc > 0x51) cc = 0x51;
+        uint16_t cnt = (uint16_t)cc;
+        int e = cr_blur_dispatch_1c6a0(&A, &A, sigma2, cnt, 0);
+        if (e != 0) { cr_sized_free_if((void **)pool); return e; }
+        e = cr_blur_dispatch_1c6a0(&B, &B, sigma2, cnt, 0);
+        if (e != 0) { cr_sized_free_if((void **)pool); return e; }
+    } else if (count > 0) {
+        for (int k = 0; k < count; k++) {
+            int e = cr_gaussian_fir_2pass(&A, &A, sigma2);
+            if (e != 0) { cr_sized_free_if((void **)pool); return e; }
+            e = cr_gaussian_fir_2pass(&B, &B, sigma2);
+            if (e != 0) { cr_sized_free_if((void **)pool); return e; }
+        }
+    }
+
+    cr_cordic_atan_q15(out, Bd, Ad, N, 2);
+    cr_sized_free_if((void **)pool);
+    return 0;
+}

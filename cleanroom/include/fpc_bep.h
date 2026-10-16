@@ -512,6 +512,13 @@ int      cr_grid_insert(cr_grid *g, uint8_t x, uint8_t y, float v,
 int      cr_blob_detect_1bbf0(cr_grid *grid, const cr_image *desc,
                               const int32_t *maskcfg, const void *cfg); /* 0x18001bbf0 */
 
+/* Gaussian-derivative structure-tensor double-angle orientation encoder;
+ * cfg: float +4 (deriv sigma), float +8 (blur sigma), int16 +0xc (blur count),
+ * byte +0xf (mask flag).  mask descriptor data pointer at +8. */
+int      cr_structure_orient_d3b0(void *dst, const cr_image *src,
+                                  const void *mask, uint8_t and_mask,
+                                  const void *cfg);                    /* 0x18000d3b0 */
+
 /* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
 typedef struct {
     int32_t         a;      /* +0x00  row stride in bits       */

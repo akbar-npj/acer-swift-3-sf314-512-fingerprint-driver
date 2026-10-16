@@ -7634,9 +7634,61 @@ static void test_grid_insert(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_grid_insert\n");
 }
 
-/* 0x18001bbf0 — scale-space Laplacian blob/keypoint detector.
- * Four pointers -> rcx/rdx/r8/r9.  desc: +0x00 stride, +0x04 rows, +0x08 pixels,
- * +0x10/+0x14 scaled w/h, +0x18/+0x1c margins.  cfg: byte +8 = margin mode,
+/* ---- 0x18000d3b0 — Gaussian-derivative structure-tensor orientation ---- */
+static void test_structure_orient_d3b0(void)
+{
+    typedef int (WINAPI *v_i_ppppubp)(void *, const void *, const void *,
+                                      uint8_t, const void *);
+    v_i_ppppubp v = (v_i_ppppubp)fn_at(RVA(0x18000d3b0));
+    begin("cr_structure_orient_d3b0");
+    int bad = g_fail;
+
+    enum { MAXW = 33, MAXH = 32, MAXN = MAXW * MAXH };
+
+    static int16_t srcd[MAXN];
+    static int16_t dvd[MAXN], dcd[MAXN];                  /* dst int16 data */
+    static uint8_t mvd[MAXN];                             /* mask u8 data (read-only) */
+    static u8 srcv[0x20], srcc[0x20];                     /* cr_image */
+    static u8 dstv[0x20], dstc[0x20];
+    static u8 mskv[0x20], mskc[0x20];
+    static u8 cfg[0x20];                                  /* shared (identical) */
+
+    for (int t = 0; t < 4000; t++) {
+        int w = 16 + (int)(rnd() % 18u);                  /* 16..33 */
+        int h = 16 + (int)(rnd() % 17u);                  /* 16..32 */
+        int N = w * h;
+
+        for (int i = 0; i < N; i++) srcd[i] = (int16_t)rnd();
+        for (int i = 0; i < N; i++) { dvd[i] = 0x5A5A; dcd[i] = 0x5A5A; }
+        for (int i = 0; i < N; i++) mvd[i] = (uint8_t)rnd();
+
+        mk_img2(srcv, srcd, w, h);  memcpy(srcc, srcv, 0x20);
+        mk_img2(dstv, dvd,  w, h);  mk_img2(dstc, dcd, w, h);
+        mk_img2(mskv, (int16_t *)mvd, w, h);  memcpy(mskc, mskv, 0x20);
+
+        /* cfg: 0x04 sigma1, 0x08 sigma2, 0x0c int16 count, 0x0f uint8 flag */
+        float sigma1 = (float)(rnd() % 220u) / 100.0f;    /* 0..2.19 */
+        float sigma2 = (float)(rnd() % 220u) / 100.0f;
+        int16_t count = (int16_t)((int)(rnd() % 6u) - 1); /* -1..4 */
+        uint8_t flag  = (uint8_t)(rnd() % 4u);
+        uint8_t and_mask = (uint8_t)rnd();
+        memset(cfg, 0, 0x20);
+        *(float  *)(cfg + 0x04) = sigma1;
+        *(float  *)(cfg + 0x08) = sigma2;
+        *(int16_t *)(cfg + 0x0c) = count;
+        cfg[0x0f] = flag;
+
+        int rv = v(dstv, srcv, mskv, and_mask, cfg);
+        int rc = cr_structure_orient_d3b0(dstc, (const cr_image *)srcc,
+                                          mskc, and_mask, cfg);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("dst", (const unsigned char *)dvd, (const unsigned char *)dcd,
+                (u32)(N * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_structure_orient_d3b0\n");
+}
+
+/* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
 static void test_blob_detect_1bbf0(void)
@@ -11504,6 +11556,7 @@ int main(int argc, char **argv)
     test_matched_filter_45eb0();
     test_quality_gate_35cf0();
     test_blob_detect_1bbf0();
+    test_structure_orient_d3b0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
