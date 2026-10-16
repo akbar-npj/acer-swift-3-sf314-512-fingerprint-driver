@@ -4770,6 +4770,69 @@ static void test_blur_diff_norm(void)
 }
 
 
+/* ---- batch 75: u8 blurred-pair difference normaliser (0x1800148c0) ----- */
+static void test_blur_diff_norm_u8(void)
+{
+    /* FUN_1800148c0:
+     *   int fn(cr_image *dst, const cr_image *src, const void *obj)
+     * Three pointers -> rcx, rdx, r8 (plain MS x64 ABI, no float positions).
+     * Converts the float source (scaled by 64) into an int16 scratch, blurs it
+     * twice (sigma obj[0] / obj[1], selector byte obj+12, count 0xf), and
+     * writes the normalised difference as u8 into dst->data.  src must be a
+     * valid descriptor (a==w, b==h, offx==offy==0). */
+    typedef int (WINAPI *v_bdn8_t)(cr_image *dst, const cr_image *src,
+                                   const void *obj);
+    v_bdn8_t v = (v_bdn8_t)fn_at(RVA(0x1800148c0));
+    begin("cr_blur_diff_norm_u8");
+    int bad = g_fail;
+
+    enum { MAXN = 64 * 64 };
+    static float sf[MAXN], scf[MAXN];
+    static uint8_t dv[MAXN], dc[MAXN];
+    static cr_image dstv, dstc, srcv, srcc;
+    static unsigned char obj[16];
+
+    for (int sel = 0; sel < 7; sel++) {
+        int s = (sel < 5) ? sel : (sel == 5 ? 5 : 0xff);
+        for (int t = 0; t < 400; t++) {
+            int W = 24 + (int)(rnd() % 25u);          /* 24..48 */
+            int H = 24 + (int)(rnd() % 25u);
+            int N = W * H;
+            float s0 = 0.5f + (float)(rnd() % 350) / 100.0f;
+            float s1 = 0.5f + (float)(rnd() % 350) / 100.0f;
+            u32 tag = (u32)((sel << 20) | t);
+
+            for (int i = 0; i < N; i++) {
+                float x = (float)((int)(rnd() % 4001) - 2000) * 0.1f;
+                sf[i] = x; scf[i] = x;
+            }
+            memset(dv, 0xa5, sizeof dv);
+            memset(dc, 0xa5, sizeof dc);
+
+            memset(&srcv, 0, sizeof srcv);
+            memset(&srcc, 0, sizeof srcc);
+            srcv.a = W; srcv.b = H; srcv.data = sf; srcv.w = W; srcv.h = H;
+            srcc.a = W; srcc.b = H; srcc.data = scf; srcc.w = W; srcc.h = H;
+
+            memset(&dstv, 0, sizeof dstv);
+            memset(&dstc, 0, sizeof dstc);
+            dstv.data = dv; dstc.data = dc;
+
+            memset(obj, 0, sizeof obj);
+            memcpy(obj + 0, &s0, 4);
+            memcpy(obj + 4, &s1, 4);
+            obj[12] = (unsigned char)s;
+
+            int rv = v(&dstv, &srcv, obj);
+            int rc = cr_blur_diff_norm_u8(&dstc, &srcc, obj);
+            if (rv != rc) { mismatch("ret", tag, (u32)rv, (u32)rc); continue; }
+            cmp_buf("dst", dv, dc, (size_t)N, tag);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_blur_diff_norm_u8\n");
+}
+
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -11074,6 +11137,7 @@ int main(int argc, char **argv)
     test_blur_dispatch_1c6a0();
     test_sep_gauss_blur_reflect();
     test_blur_diff_norm();
+    test_blur_diff_norm_u8();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

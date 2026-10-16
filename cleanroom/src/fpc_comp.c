@@ -167,6 +167,78 @@ int cr_blur_diff_norm(cr_image *src, const void *obj)
     return r;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x1800148c0 — u8 blurred-pair difference normaliser (float source).
+ *   int fn(cr_image *dst, const cr_image *src, const void *obj)
+ *
+ * W = src->w, H = src->h, N = W*H.  Allocates three N*2-byte int16 blocks via
+ * cr_pool_alloc3 (ia/ib/ic) and wraps them as cr_image.  ia becomes the float
+ * source scaled by 64 and rounded to int16 (cr_f32_to_i16_scaled shift 6), then
+ * ia is blurred twice:
+ *     ib = cr_blur_dispatch_1c6a0(&ib, &ia, obj[0], 0xf, ob[12])
+ *     ic = cr_blur_dispatch_1c6a0(&ic, &ia, obj[1], 0xf, ob[12])
+ * On success with N > 0:
+ *     ia[i] = (int16_t)(ib[i] - ic[i])           ; m = max |ia[i]|
+ *     scale = m ? (int)(0x7f0000/m) : 0x400      (32-bit signed division)
+ *     t     = ((ia[i]*scale + 0x8000) >> 16) + 0x80
+ *     dst->data[i] = t > 0xfe ? 0xff : (t <= 0 ? 0 : (uint8_t)t)
+ *
+ * Returns 0 on success, else the first failing status.  The pool is freed on
+ * every post-allocation path.
+ * ------------------------------------------------------------------------ */
+int cr_blur_diff_norm_u8(cr_image *dst, const cr_image *src, const void *obj)
+{
+    const float *of = (const float *)obj;
+    const uint8_t *ob = (const uint8_t *)obj;
+    int W = src->w;
+    int H = src->h;
+    int N = W * H;
+
+    void *hdr = NULL, *b0 = NULL, *b1 = NULL, *b2 = NULL;
+    int r = cr_pool_alloc3(&hdr, &b0, (uint32_t)(N * 2),
+                           &b1, (uint32_t)(N * 2),
+                           &b2, (uint32_t)(N * 2));
+    if (r == 0) {
+        cr_image ia, ib, ic;
+        r = (int)cr_image_set(&ia, b0, W, H);
+        if (r == 0) r = (int)cr_image_set(&ib, b1, W, H);
+        if (r == 0) r = (int)cr_image_set(&ic, b2, W, H);
+        if (r == 0) {
+            cr_f32_to_i16_scaled(&ia, src, 6);
+            r = cr_blur_dispatch_1c6a0(&ib, &ia, of[0], 0xf, ob[12]);
+            if (r == 0)
+                r = cr_blur_dispatch_1c6a0(&ic, &ia, of[1], 0xf, ob[12]);
+            if (r == 0 && N > 0) {
+                int16_t *A = (int16_t *)b0;
+                int16_t *B = (int16_t *)b1;
+                int16_t *C = (int16_t *)b2;
+                uint8_t *D = (uint8_t *)dst->data;
+                int m = 0;
+                for (int i = 0; i < N; i++) {
+                    int16_t d = (int16_t)(B[i] - C[i]);
+                    A[i] = d;
+                    int a  = (int)d;
+                    int s  = -(int)((unsigned)a >> 31);   /* 0 or -1 */
+                    int av = (a ^ s) - s;
+                    if (m < av) m = av;
+                }
+                int scale = 0x400;
+                if (m != 0) scale = 0x7f0000 / m;
+                for (int i = 0; i < N; i++) {
+                    int t = (((int)A[i] * scale + 0x8000) >> 16) + 0x80;
+                    uint8_t v;
+                    if (t > 0xfe)    v = 0xff;
+                    else if (t <= 0) v = 0;
+                    else             v = (uint8_t)t;
+                    D[i] = v;
+                }
+            }
+        }
+        cr_sized_free_if(&hdr);
+    }
+    return r;
+}
+
 /* 0x180044a20 — fixed 7-tap twin.  When W is 8-aligned it uses the guarded
  * row/reflect FIRs (returning the guard status); otherwise the fixed fir7_reflect
  * + vfir7_cols pair (always returning 0). */

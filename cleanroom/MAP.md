@@ -593,6 +593,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x18001ee30` | `fpc_bio_bep_sw23_3d3372550f` | `cr_blur_diff_norm` | `int fn(cr_image *src, const void *obj)` (two pointers → rcx/rdx, no float argument positions). `W=src->w`, `H=src->h`, `N=W*H`. Allocates two `N*2`-byte int16 blocks with `cr_pool_alloc2` and wraps them as `cr_image ia/ib` via `cr_image_set`. Runs `cr_blur_dispatch_1c6a0` twice on the same source — `sigma0 = obj[0]`, `sigma1 = obj[1]`, `count = 0xf`, selector byte `obj+12` — then writes in place into `src->data`: `dst[i] = (int16_t)(A[i] - B[i])`, tracking `m = max |dst[i]|`. Frees the pool, sets `scale = m ? (int)(0x7f0000/m) : 0x400`, and maps every pixel through `t = (dst[i]*scale >> 10) + 0x2000`, clamped to `[0, 0x3fc0]` (`t < 1 → 0`, `t >= 0x3fc0 → 0x3fc0`). Returns 0 on success, else the first failing status; the pool is freed on every post-allocation path. The caller (`0x180018c60`) passes `obj = RBX+0xe4`, so the selector is a config byte at `obj+12`. Passed the difftest (313 ok). |
 
+### Batch 75 — u8 blurred-pair difference normaliser (float source)
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x1800148c0` | `fpc_bio_bep_sw23_1c8303fae6` | `cr_blur_diff_norm_u8` | `int fn(cr_image *dst, const cr_image *src, const void *obj)` (three pointers → rcx/rdx/r8). `W=src->w`, `H=src->h`, `N=W*H`. Allocates three `N*2`-byte int16 blocks with `cr_pool_alloc3` (`ia/ib/ic`); `ia` becomes the float source scaled by 64 and rounded (`cr_f32_to_i16_scaled(&ia, src, 6)`). Blurs `ia` twice — `sigma0 = obj[0]`, `sigma1 = obj[1]`, `count = 0xf`, selector byte `obj+12` — then `ia[i] = (int16_t)(ib[i] - ic[i])`, `m = max |ia[i]|`, `scale = m ? (int)(0x7f0000/m) : 0x400` (32-bit signed division), and writes `dst->data[i] = clamp(((ia[i]*scale + 0x8000) >> 16) + 0x80, 0, 0xff)` (`t > 0xfe → 0xff`, `t <= 0 → 0`). Returns 0 on success, else the first failing status; the pool is freed on every post-allocation path. u8-output sibling of `cr_blur_diff_norm`. Passed the difftest (314 ok). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |
