@@ -705,3 +705,108 @@ int cr_gauss_fir7_apply(void *a, void *b, float unk0, float unk1, float sigma)
     cr_vfir7_cols(a_data, a_data, coef, W, L);
     return 0;
 }
+
+/* 0x18001bbf0 — scale-space Laplacian blob/keypoint detector.
+ *
+ * Validates the scaled-image bounds held in `desc` (a = image width,
+ * b = image height, data = pixels, w/h = scaled width/height, offx/offy =
+ * margins), then runs an 11-tap separable Gaussian over successive source rows
+ * into a 6-row int16 scratch ring, takes the 3x3 Laplacian of three
+ * consecutive smoothed rows, and for every strictly-greater 3x3 local maximum
+ * whose mask bit is set inserts a grid point
+ *   (x = mode + col, y = row, v = (float)centre).
+ * cfg: byte +8 = mode (margin), float +0x1c = sigma.
+ * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin.
+ * Returns 0x69 on bounds/alloc failure, else 0. */
+int cr_blob_detect_1bbf0(cr_grid *grid, const cr_image *desc,
+                         const int32_t *maskcfg, const void *cfg)
+{
+    const uint8_t *c = (const uint8_t *)cfg;
+    int mode = (int)(int8_t)c[8];
+    int D6 = desc->offx;
+    int D7 = desc->offy;
+
+    if (D6 + mode <= 6) return 0x69;
+    int w = desc->a;
+    if (desc->w + 7 + (D6 - mode) > w) return 0x69;
+    if (D7 + mode <= 6) return 0x69;
+    int D5 = desc->h;
+    if (D5 + 7 + (D7 - mode) > desc->b) return 0x69;
+
+    int Wn = desc->w - 2 * mode;
+    int W2 = Wn + 2;
+    int W4 = Wn + 4;
+    int S  = Wn + 0xe;
+
+    int16_t *buf = NULL;
+    int status = cr_malloc_aligned16((void **)&buf,
+                     (size_t)(((uint32_t)Wn + 0xcu + (uint32_t)W4) * 3u) * 2u);
+    if (status != 0) return status;
+
+    const uint8_t *pix = (const uint8_t *)desc->data;
+    int32_t off = (int32_t)((D7 + mode - 2) * w) + D6 + mode;
+    const uint8_t *src = pix + (intptr_t)(int64_t)off - 2;
+
+    int16_t coef[24];
+    cr_gaussian_window_q15(coef, *(const float *)(const void *)(c + 0x1c), 11);
+
+    int16_t *row0 = buf;
+    int16_t *row1 = buf + S;
+    int16_t *row2 = buf + 2 * S;
+    int16_t *p3S  = buf + 3 * S;
+
+    cr_sep11_row(row2, src, coef, W4, w); src += w;
+    cr_sep11_row(row1, src, coef, W4, w); src += w;
+    cr_sep11_row(row0, src, coef, W4, w); src += w;
+    cr_laplacian_3x3(p3S + W2, row2, row1, row0, W2);
+    cr_sep11_row(row2, src, coef, W4, w);
+    cr_laplacian_3x3(p3S, row1, row0, row2, W2);
+
+    int bound = D5 - mode;
+    if (mode < bound) {
+        int16_t *psVar7  = row1;
+        int16_t *psVar16 = row2;
+        int16_t *psVar23 = row0;
+        int16_t *psVar8  = buf + 5 * S - 0x18;
+        int16_t *psVar21 = p3S;
+        int16_t *psVar19 = p3S + W2;
+        const uint32_t *mask =
+            (const uint32_t *)(uintptr_t)(((uint64_t)(uint32_t)maskcfg[3] << 32) |
+                                          (uint32_t)maskcfg[2]);
+        int y = mode;
+        do {
+            int16_t *psVar22 = psVar16;
+            int16_t *psVar18 = psVar8;
+            psVar16 = psVar7;
+            src += w;
+            cr_sep11_row(psVar16, src, coef, W4, w);
+            cr_laplacian_3x3(psVar18, psVar23, psVar22, psVar16, W2);
+            if (Wn > 0) {
+                for (int col = 0; col < Wn; col++) {
+                    int16_t sVar5 = psVar21[col + 1];
+                    if (psVar19[col] < sVar5 && psVar19[col + 1] < sVar5 &&
+                        psVar19[col + 2] < sVar5 &&
+                        psVar21[col] < sVar5 && psVar21[col + 2] < sVar5 &&
+                        psVar18[col] < sVar5 && psVar18[col + 1] < sVar5 &&
+                        psVar18[col + 2] < sVar5) {
+                        int32_t bit = mode + col + maskcfg[6];
+                        int32_t idx = (maskcfg[7] + y) * maskcfg[0] + bit;
+                        if ((mask[idx >> 5] >> (uint32_t)(bit & 0x1f)) & 1u) {
+                            cr_grid_insert(grid, (uint8_t)(mode + col), (uint8_t)y,
+                                           (float)(int)sVar5, (cr_grid_cfg *)cfg);
+                        }
+                    }
+                }
+            }
+            y++;
+            psVar7  = psVar23;
+            psVar8  = psVar19;
+            psVar19 = psVar21;
+            psVar21 = psVar18;
+            psVar23 = psVar22;
+        } while (y != bound);
+    }
+
+    cr_sized_free((void **)&buf);
+    return 0;
+}

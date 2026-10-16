@@ -7634,6 +7634,112 @@ static void test_grid_insert(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_grid_insert\n");
 }
 
+/* 0x18001bbf0 — scale-space Laplacian blob/keypoint detector.
+ * Four pointers -> rcx/rdx/r8/r9.  desc: +0x00 stride, +0x04 rows, +0x08 pixels,
+ * +0x10/+0x14 scaled w/h, +0x18/+0x1c margins.  cfg: byte +8 = margin mode,
+ * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
+ * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
+static void test_blob_detect_1bbf0(void)
+{
+    typedef int (WINAPI *v_i_pppp)(void *, const void *, const void *, const void *);
+    v_i_pppp v = (v_i_pppp)fn_at(RVA(0x18001bbf0));
+    begin("cr_blob_detect_1bbf0");
+    int bad = g_fail;
+
+    enum { STRIDE = 64, ROWS = 40, SRCN = STRIDE * ROWS, MWORDS = 128 };
+
+    static uint8_t srcb[SRCN];
+    static uint8_t desc_v[0x20], desc_c[0x20];
+    static uint8_t mcfg_v[0x20], mcfg_c[0x20];
+    static uint8_t cfg[0x40];
+    static uint32_t mwords[MWORDS];
+
+    for (int t = 0; t < 6000; t++) {
+        int mode = 1 + (int)(rnd() % 4);                 /* margin 1..4 */
+        int Wn   = 1 + (int)(rnd() % 6);                 /* 1..6 */
+        int sw   = Wn + 2 * mode;                        /* scaled width */
+        int sh   = 2 * mode + 1 + (int)(rnd() % 6);      /* scaled height */
+        int mx   = (7 - mode) + (int)(rnd() % 5);
+        int my   = (7 - mode) + (int)(rnd() % 5);
+        int mstride = 1 + (int)(rnd() % 64);
+        int gmode = ((int)(rnd() % 4) == 0) ? 2
+                  : ((int)(rnd() % 8) == 0) ? 7 : 5;
+        int cap  = 1 + (int)(rnd() % 16);
+        int cap2 = (int)(rnd() % 17);
+        int divx = 1 + (int)(rnd() % 8);
+        int divy = 1 + (int)(rnd() % 8);
+        int W = 1 + (int)(rnd() % 8);
+        int H = 1 + (int)(rnd() % 8);
+
+        for (int i = 0; i < SRCN; i++) srcb[i] = (uint8_t)rnd();
+        for (int i = 0; i < MWORDS; i++) mwords[i] = rnd();
+
+        memset(desc_v, 0, sizeof desc_v);
+        *(int *)(desc_v + 0x00) = STRIDE;
+        *(int *)(desc_v + 0x04) = ROWS;
+        *(void **)(desc_v + 0x08) = srcb;
+        *(int *)(desc_v + 0x10) = sw;
+        *(int *)(desc_v + 0x14) = sh;
+        *(int *)(desc_v + 0x18) = mx;
+        *(int *)(desc_v + 0x1c) = my;
+        memcpy(desc_c, desc_v, sizeof desc_v);
+
+        memset(mcfg_v, 0, sizeof mcfg_v);
+        *(int *)(mcfg_v + 0x00) = mstride;
+        *(void **)(mcfg_v + 0x08) = mwords;
+        *(int *)(mcfg_v + 0x18) = 0;
+        *(int *)(mcfg_v + 0x1c) = 0;
+        memcpy(mcfg_c, mcfg_v, sizeof mcfg_v);
+
+        memset(cfg, 0, sizeof cfg);
+        *(int8_t *)(cfg + 0x08) = (int8_t)mode;
+        *(int16_t *)(cfg + 0x10) = (int16_t)cap2;
+        *(float *)(cfg + 0x1c) = (float)(1 + (int)(rnd() % 400u)) * 0.25f;
+        *(uint8_t *)(cfg + 0x24) = (uint8_t)gmode;
+
+        struct grid_state sv, sc;
+        memset(&sv, 0, sizeof sv);
+        sv.g.nodes = sv.nodes; sv.g.coords = sv.coords; sv.g.values = sv.values;
+        sv.g.next = sv.next; sv.g.coords2 = sv.coords2; sv.g.values2 = sv.values2;
+        sv.g.W = W; sv.g.H = H; sv.g.divx = divx; sv.g.divy = divy;
+        sv.g.count = 0; sv.g.count2 = 0; sv.g.cap = cap;
+        sv.cfg.cap2 = (int16_t)cap2; sv.cfg.mode = (uint8_t)gmode;
+        for (int k = 0; k < W * H; k++) {
+            sv.nodes[k].key = 0; sv.nodes[k].head = -1;
+            sv.nodes[k].val = (float)(1 + (int)(rnd() % 1000)) * 0.001f;
+        }
+        for (int k = 0; k < cap; k++) {
+            sv.next[k] = -1; sv.values[k] = 0.0f;
+            sv.coords[2 * k] = sv.coords[2 * k + 1] = 0;
+        }
+        for (int k = 0; k < cap2; k++) {
+            sv.values2[k] = 0.0f;
+            sv.coords2[2 * k] = sv.coords2[2 * k + 1] = 0;
+        }
+        sc = sv;
+        sc.g.nodes = sc.nodes; sc.g.coords = sc.coords; sc.g.values = sc.values;
+        sc.g.next = sc.next; sc.g.coords2 = sc.coords2; sc.g.values2 = sc.values2;
+
+        int rv = v(&sv.g, desc_v, mcfg_v, cfg);
+        int rc = cr_blob_detect_1bbf0(&sc.g, (const cr_image *)desc_c,
+                                      (const int32_t *)mcfg_c, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("nodes", (unsigned char *)sv.nodes, (unsigned char *)sc.nodes,
+                sizeof(cr_grid_node) * (size_t)(W * H), (u32)t);
+        cmp_buf("values", (unsigned char *)sv.values, (unsigned char *)sc.values,
+                sizeof(float) * (size_t)cap, (u32)t);
+        cmp_buf("next", (unsigned char *)sv.next, (unsigned char *)sc.next,
+                sizeof(int16_t) * (size_t)cap, (u32)t);
+        cmp_buf("coords", sv.coords, sc.coords, 2 * (size_t)cap, (u32)t);
+        cmp_buf("values2", (unsigned char *)sv.values2, (unsigned char *)sc.values2,
+                sizeof(float) * (size_t)cap2, (u32)t);
+        cmp_buf("coords2", sv.coords2, sc.coords2, 2 * (size_t)cap2, (u32)t);
+        if (sv.g.count != sc.g.count || sv.g.count2 != sc.g.count2)
+            mismatch("count", (u32)t, (u32)sv.g.count, (u32)sc.g.count);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_blob_detect_1bbf0\n");
+}
+
 /* 0x18003cb30 — replicate-extend the border of a packed bitmap. */
 static void test_bitmap_extend_border(void)
 {
@@ -11397,6 +11503,7 @@ int main(int argc, char **argv)
     test_blur_divnorm_stretch();
     test_matched_filter_45eb0();
     test_quality_gate_35cf0();
+    test_blob_detect_1bbf0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -507,6 +507,11 @@ typedef struct {
 int      cr_grid_insert(cr_grid *g, uint8_t x, uint8_t y, float v,
                         cr_grid_cfg *cfg);                               /* 0x18002f070 */
 
+/* scale-space Laplacian blob detector; cfg byte +8 = margin, +0x1c = sigma,
+ * maskcfg [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin */
+int      cr_blob_detect_1bbf0(cr_grid *grid, const cr_image *desc,
+                              const int32_t *maskcfg, const void *cfg); /* 0x18001bbf0 */
+
 /* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
 typedef struct {
     int32_t         a;      /* +0x00  row stride in bits       */
