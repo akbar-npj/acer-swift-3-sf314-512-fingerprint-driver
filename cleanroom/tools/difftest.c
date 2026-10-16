@@ -849,6 +849,103 @@ static void test_pixel_buf_setup(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_pixel_buf_setup\n");
 }
 
+/* ---- batch 66: image-set descriptor constructor (0x180013340) ----------- *
+ * Builds a defs table whose 22 slots point at random-class metadata buffers
+ * (metadata / debug / pixels / NULL), then runs the constructor on both the
+ * vendor and clean implementations.  The meta buffers are *shared* between the
+ * two calls (so dp pointers compare equal), and are snapshotted/restored
+ * around each call so both see the identical pristine input; the post-call
+ * meta state is also compared (it captures the pixel-buffer side effects).
+ * Output slots 0..6 and 0xe hold freshly-allocated blocks (compared by
+ * content); the remaining slots hold dp pointers into the shared meta table
+ * (compared by value). */
+static void test_obj_init_13340(void)
+{
+    typedef uint32_t (WINAPI *v_u_ppi)(const void *, void *, int);
+    v_u_ppi v = (v_u_ppi)fn_at(RVA(0x180013340));
+    v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+    begin("cr_obj_init_13340");
+    int bad = g_fail;
+
+    static u8 defs[0x10 + 22 * 8];
+    static u8 meta[22][0x40];
+    static u8 pristine[22][0x40], postv[22][0x40], postc[22][0x40];
+    static u8 ov[0x80], oc[0x80];
+
+    /* Block-valued output slots (0x38 bytes each; out[0xe] is 0x18). */
+    static const int blocks[] = { 0, 1, 2, 3, 4, 5, 6, 0xe };
+    const size_t nblocks = sizeof blocks / sizeof blocks[0];
+
+    for (int t = 0; t < 4000; t++) {
+        memset(defs, 0, sizeof defs);
+        for (int i = 0; i < 22; i++) {
+            int kind = (int)(rnd() % 4u);
+            if (kind == 0) continue;                 /* NULL slot */
+            memset(meta[i], 0, sizeof meta[i]);
+            if (kind == 1)      *(u32 *)meta[i] = 8u + 2u * (rnd() % 8u); /* metadata */
+            else if (kind == 2) *(u32 *)meta[i] = 9u + 2u * (rnd() % 8u); /* debug */
+            else                *(u32 *)meta[i] = 1u;                     /* pixels */
+            *(u32 *)(meta[i] + 4)    = 0x18u + (rnd() % 0x20u); /* capacity */
+            /* rows/cols are kept tiny (0..2) on purpose: cr_pixel_buf_setup
+             * memmoves rows*2*cols bytes into meta_dp+0x24, and our meta
+             * buffers are only 0x40 bytes, so a large geometry would run off
+             * the end of the slot.  Keeping it <= 8 keeps the copy in bounds. */
+            *(u32 *)(meta[i] + 0x0c) = rnd() % 3u;                /* rows */
+            *(u32 *)(meta[i] + 0x10) = rnd() % 3u;                /* cols */
+            *(u32 *)(meta[i] + 0x14) = rnd();
+            *(u32 *)(meta[i] + 0x18) = rnd();
+            *(void **)(defs + 0x10 + (size_t)i * 8) = meta[i];
+        }
+        int flag = (int)(rnd() % 2u);
+
+        memcpy(pristine, meta, sizeof meta);
+        memset(ov, 0xA5, sizeof ov); memset(oc, 0xA5, sizeof oc);
+
+        uint32_t rv = v(defs, ov, flag);
+        memcpy(postv, meta, sizeof meta);
+        memcpy(meta, pristine, sizeof meta);
+
+        uint32_t rc = cr_obj_init_13340(defs, oc, flag);
+        memcpy(postc, meta, sizeof meta);
+        memcpy(meta, pristine, sizeof meta);
+
+        if (rv != rc) mismatch("ret", (u32)t, rv, rc);
+
+        /* side effects on the shared meta table must be identical */
+        cmp_buf("meta", (const unsigned char *)postv,
+                (const unsigned char *)postc, sizeof postv, (u32)t);
+
+        for (int k = 0; k < 16; k++) {
+            void *pv = *(void **)(ov + (size_t)k * 8);
+            void *pc = *(void **)(oc + (size_t)k * 8);
+            u32 in = (u32)t * 16u + (u32)k;
+            if ((pv != NULL) != (pc != NULL)) {
+                mismatch("null", in, 0, 0);
+                continue;
+            }
+            if (!pv) continue;
+            int isblk = 0;
+            for (size_t j = 0; j < nblocks; j++)
+                if (blocks[j] == k) isblk = 1;
+            if (isblk) {
+                u32 len = (k == 0xe) ? 0x18u : 0x38u;
+                cmp_buf("blk", (const unsigned char *)pv,
+                        (const unsigned char *)pc, len, in);
+            } else if (pv != pc) {
+                mismatch("dp", in, (u32)(uintptr_t)pv, (u32)(uintptr_t)pc);
+            }
+        }
+
+        /* free the owned blocks (mirroring the vendor's ownership) */
+        for (size_t j = 0; j < nblocks; j++) {
+            int k = blocks[j];
+            vsfree((void **)(ov + (size_t)k * 8));
+            cr_sized_free((void **)(oc + (size_t)k * 8));
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_obj_init_13340\n");
+}
+
 /* ---- batch 65: object constructor (0x180020aa0) ------------------------ */
 static void test_obj_ctor_20aa0(void)
 {
@@ -10610,6 +10707,7 @@ int main(int argc, char **argv)
     test_bitmap_filter_fir();
     test_bitmap_filter_apply_s16();
     test_fft_weighted_apply_32af0();
+    test_obj_init_13340();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

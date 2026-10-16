@@ -551,6 +551,95 @@ fail:
     return edi;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x180013340 — image-set descriptor constructor. Fills the 128-byte
+ * (16-qword) descriptor at `out` from the definition table `defs`.
+ *   uint32_t fn(const void *defs, void *out, int flag)
+ *
+ * Returns 0x69 if `out` is NULL. Zeroes all 16 qwords, then walks the five
+ * "even debug" slots 0xc,0xe,0x10,0x12,0x14 (step 2 while != 0x16): for each
+ * non-empty slot it allocates a 0x38-byte block into out[i], dumps the slot
+ * into it (a dump failure returns 0x6a) and stores dp(slot+1) into out[i+7],
+ * then advances i.
+ *
+ * If `flag` and out[0] are non-zero, the pixel buffers for slots 8 and 10 are
+ * set up (each when defined-but-empty) using the i16 rows/cols in out[0]'s
+ * descriptor; a non-zero setup status is returned.
+ *
+ * Finally: if slot 8 is non-empty, alloc out[5] (0x38), dump slot 8 and set
+ * out[0xc] = dp(9); if slot 10 is non-empty, alloc out[6] (0x38), dump slot 10
+ * and set out[0xd] = dp(0xb). Always out[0xf] = dp(0); if slot 1 is non-empty,
+ * alloc out[0xe] (0x18) and fill its buffer descriptor. Returns 0x69 when
+ * out[0] ended up NULL, else 0.
+ * ------------------------------------------------------------------------ */
+uint32_t cr_obj_init_13340(const void *defs, void *out, int flag)
+{
+    if (out == NULL)
+        return 0x69;
+
+    uint8_t *o = (uint8_t *)out;
+    for (int k = 0; k < 16; k++)
+        ((uint64_t *)o)[k] = 0;
+
+    int i = 0;
+    for (uint32_t s = 0xc; s != 0x16; s += 2) {
+        if (cr_image_slot_empty(defs, s))
+            continue;
+        void **blk = (void **)(o + (size_t)i * 8);
+        int st = cr_malloc_aligned16(blk, 0x38);
+        if (st != 0)
+            return (uint32_t)st;
+        if ((int)cr_image_data_dump(defs, s, *blk) != 0)
+            return 0x6a;
+        *(void **)(o + (size_t)(i + 7) * 8) = cr_image_get_dp(defs, s + 1);
+        i++;
+    }
+
+    if (flag != 0 && *(void **)o != NULL) {
+        const void *d0 = *(void *const *)o;
+        const int16_t rows = *(const int16_t *)d0;
+        const int16_t cols = ((const int16_t *)d0)[1];
+        if (cr_image_slot_defined(defs, 8) && cr_image_slot_empty(defs, 8)) {
+            uint32_t r = cr_pixel_buf_setup(defs, 8, rows, cols);
+            if (r != 0)
+                return r;
+        }
+        if (cr_image_slot_defined(defs, 10) && cr_image_slot_empty(defs, 10)) {
+            uint32_t r = cr_pixel_buf_setup(defs, 10, rows, cols);
+            if (r != 0)
+                return r;
+        }
+    }
+
+    if (!cr_image_slot_empty(defs, 8)) {
+        int st = cr_malloc_aligned16((void **)(o + 5 * 8), 0x38);
+        if (st != 0)
+            return (uint32_t)st;
+        if ((int)cr_image_data_dump(defs, 8, *(void **)(o + 5 * 8)) != 0)
+            return 0x6a;
+        *(void **)(o + 0xc * 8) = cr_image_get_dp(defs, 9);
+    }
+    if (!cr_image_slot_empty(defs, 10)) {
+        int st = cr_malloc_aligned16((void **)(o + 6 * 8), 0x38);
+        if (st != 0)
+            return (uint32_t)st;
+        if ((int)cr_image_data_dump(defs, 10, *(void **)(o + 6 * 8)) != 0)
+            return 0x6a;
+        *(void **)(o + 0xd * 8) = cr_image_get_dp(defs, 0xb);
+    }
+
+    *(void **)(o + 0xf * 8) = cr_image_get_dp(defs, 0);
+
+    if (!cr_image_slot_empty(defs, 1)) {
+        int st = cr_malloc_aligned16((void **)(o + 0xe * 8), 0x18);
+        if (st != 0)
+            return (uint32_t)st;
+        cr_image_buf_desc(defs, *(void **)(o + 0xe * 8));
+    }
+
+    return *(void **)o == NULL ? 0x69u : 0u;
+}
+
 /* ======================================================================== *
  *  Batch 49 — higher-level destructors / accessors
  * ======================================================================== */

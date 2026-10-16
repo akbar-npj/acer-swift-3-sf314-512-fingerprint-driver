@@ -611,6 +611,7 @@ void     cr_free_obj_flags(void *obj);                       /* 0x18000f570 */
 int      cr_bitmap_alloc(uint32_t *desc, uint32_t w, uint32_t h);  /* 0x180029750 */
 int      cr_obj_init_17ca0(void *p1, void *p2, int mode);    /* 0x180017ca0 */
 int      cr_obj_init_12fe0(void *a1, void *a2, void *a3);    /* 0x180012fe0 */
+uint32_t cr_obj_init_13340(const void *defs, void *out, int flag); /* 0x180013340 */
 
 /* ---- batch 49: higher-level destructors / accessors ---------------------- */
 int      cr_clz_or32(uint32_t x);                            /* 0x180039390 */
