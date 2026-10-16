@@ -354,6 +354,124 @@ int cr_blur_divnorm_stretch(cr_image *img, const void *cfg)
     return 0;
 }
 
+/* ------------------------------------------------------------------------ *
+ * 0x180045eb0 — oriented 5x5 matched filter, max-pooled, into an int16 image.
+ *   int fn(int16_t *out, const uint8_t *const *rows, const void *cfg)
+ *
+ * cfg: int +0x0c (kernel-bank stride multiplier), int +0x10 (W), int +0x14 (H),
+ * int +0x18 (flag), ptr +0x20 (kernel bank: int16, 25/kernel), ptr +0x28
+ * (per-row bias: int16).  For each output row r (0..H-1) with bias =
+ * (int16)mbase[r] << 14 and kernel block kptr = kbase + r*kmul*25:
+ *   - chunk pass over byte offsets off = 0,4,..,4*u  (u = (W-2)>>1): a 5x5
+ *     convolution of rows[0..4] and rows[1..5] at 4 horizontal offsets, taking
+ *     out[2k] = scale(max(a0,a1,b0,b1)), out[2k+1] = scale(max(a2,a3,b2,b3));
+ *   - tail pass over columns j = 2u+2 .. W-1 (only 2 offsets each):
+ *     out[j] = scale(max(a0,a1,b0,b1));
+ * where scale(v) = (int16)(((uint32_t)v << 6) + bias) >> 15 (wrapping, SAR).
+ * If flag == 1 the whole output is clamped non-negative at the end.  Always
+ * returns 0.
+ * ------------------------------------------------------------------------ */
+static void mf_conv4(const uint8_t *const *rows, const int16_t *k, int off, int *o)
+{
+    int s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+    for (int r = 0; r < 5; r++) {
+        const uint8_t *row = rows[r] + off;
+        int c0 = row[0], c1 = row[1], c2 = row[2], c3 = row[3];
+        int c4 = row[4], c5 = row[5], c6 = row[6], c7 = row[7];
+        const int16_t *kk = k + r * 5;
+        int k0 = kk[0], k1 = kk[1], k2 = kk[2], k3 = kk[3], k4 = kk[4];
+        s0 += c0 * k0 + c1 * k1 + c2 * k2 + c3 * k3 + c4 * k4;
+        s1 += c1 * k0 + c2 * k1 + c3 * k2 + c4 * k3 + c5 * k4;
+        s2 += c2 * k0 + c3 * k1 + c4 * k2 + c5 * k3 + c6 * k4;
+        s3 += c3 * k0 + c4 * k1 + c5 * k2 + c6 * k3 + c7 * k4;
+    }
+    o[0] = s0; o[1] = s1; o[2] = s2; o[3] = s3;
+}
+
+static void mf_conv2(const uint8_t *const *rows, const int16_t *k, int off, int *o)
+{
+    int s0 = 0, s1 = 0;
+    for (int r = 0; r < 5; r++) {
+        const uint8_t *row = rows[r] + off;
+        int c0 = row[0], c1 = row[1], c2 = row[2], c3 = row[3], c4 = row[4], c5 = row[5];
+        const int16_t *kk = k + r * 5;
+        int k0 = kk[0], k1 = kk[1], k2 = kk[2], k3 = kk[3], k4 = kk[4];
+        s0 += c0 * k0 + c1 * k1 + c2 * k2 + c3 * k3 + c4 * k4;
+        s1 += c1 * k0 + c2 * k1 + c3 * k2 + c4 * k3 + c5 * k4;
+    }
+    o[0] = s0; o[1] = s1;
+}
+
+static int16_t mf_scale(int v, uint32_t bias)
+{
+    uint32_t t = ((uint32_t)v << 6) + bias;
+    return (int16_t)((int32_t)t >> 15);
+}
+
+int cr_matched_filter_45eb0(int16_t *out, const uint8_t *const *rows,
+                            const void *cfg)
+{
+    const uint8_t *cb = (const uint8_t *)cfg;
+    int W = *(const int32_t *)(cb + 0x10);
+    int H = *(const int32_t *)(cb + 0x14);
+    int kmul = *(const int32_t *)(cb + 0x0c);
+    const int16_t *kbase = *(const int16_t *const *)(cb + 0x20);
+    const int16_t *mbase = *(const int16_t *const *)(cb + 0x28);
+    int flag = *(const int32_t *)(cb + 0x18);
+
+    if (H > 0) {
+        int rowbase = 0;
+        const int16_t *kptr = kbase;
+        long kstep = (long)kmul * 25;                 /* shorts per row */
+        int r14end = 0, tailstart = 0;
+
+        if (W > 1) {                                  /* only meaningful for W >= 2 */
+            int u = (int)(((unsigned)W - 2u) >> 1);
+            r14end = 4 + u * 4;
+            tailstart = 2 * u + 2;
+        }
+
+        for (int r = 0; r < H; r++) {
+            uint32_t bias = (uint32_t)(int32_t)mbase[r] << 14;
+            int16_t *orow = out + rowbase;
+
+            if (W > 1) {
+                for (int off = 0; off != r14end; off += 4) {
+                    int A[4], B[4];
+                    mf_conv4(rows, kptr, off, A);
+                    mf_conv4(rows + 1, kptr, off, B);
+                    int o0 = A[0]; if (A[1] > o0) o0 = A[1];
+                    if (B[0] > o0) o0 = B[0];
+                    if (B[1] > o0) o0 = B[1];
+                    int o1 = A[2]; if (A[3] > o1) o1 = A[3];
+                    if (B[2] > o1) o1 = B[2];
+                    if (B[3] > o1) o1 = B[3];
+                    orow[off >> 1]       = mf_scale(o0, bias);
+                    orow[(off >> 1) + 1] = mf_scale(o1, bias);
+                }
+            }
+
+            int start = (W > 1) ? tailstart : 0;
+            for (int j = start; j < W; j++) {
+                int A[2], B[2];
+                mf_conv2(rows, kptr, 2 * j, A);
+                mf_conv2(rows + 1, kptr, 2 * j, B);
+                int m = A[0]; if (A[1] > m) m = A[1];
+                if (B[0] > m) m = B[0];
+                if (B[1] > m) m = B[1];
+                orow[j] = mf_scale(m, bias);
+            }
+
+            rowbase += W;
+            kptr += kstep;
+        }
+    }
+
+    if (flag == 1)
+        cr_s16_clamp_nonneg(out, out, W * H);
+    return 0;
+}
+
 /* 0x180044a20 — fixed 7-tap twin.  When W is 8-aligned it uses the guarded
  * row/reflect FIRs (returning the guard status); otherwise the fixed fir7_reflect
  * + vfir7_cols pair (always returning 0). */

@@ -605,6 +605,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x180013720` | `fpc_bio_bep_sw23_1901aeeef9` | `cr_blur_divnorm_stretch` | `int fn(cr_image *img, const void *cfg)` (two pointers → rcx/rdx). `cfg`: float +4 (blur sigma), float +8 (denominator factor), byte +0xc (selector; only 3 or 4 valid, else `0x69`). `W=img->w`, `H=img->h`, `N=W*H`. Allocates `A,B` (int16) and `C` (float) of W×H via `cr_image_alloc_s16` / `cr_image_alloc_f32`. For N > 0: `mean = (Σ sign-extended img pixels)/N` (`IDIV`); then `p = (uint16_t)img[i] - mean` (**unsigned** load), `img[i] = (int16_t)p`, `A[i] = (int16_t)((int16_t)p < 0 ? -p : p)`; `B = cr_blur_dispatch_1c6a0(&B, &A, sigma, (uint16_t)(int)(sigma*8+1), sel)`; `maxB = max(0, max_i B[i])`; `C[i] = (float)img[i] / max(cfg[2]*maxB, (float)B[i])` tracking `mx`/`mn`; `scale = (1.0f > mx-mn) ? 16320.0f : 16320.0f/(mx-mn)`; `img[i] = (int16_t)(int32_t)((C[i]-mn)*scale)`. For N <= 0 it only runs the blur once. `A/B/C` freed on every post-allocation path. Passed the difftest (315 ok). |
 
+### Batch 77 — oriented matched filter
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180045eb0` | `fpc_bio_bep_sw23_f24e438404` | `cr_matched_filter_45eb0` | `int fn(int16_t *out, const uint8_t *const *rows, const void *cfg)` (three pointers → rcx/rdx/r8, no float argument positions). `cfg`: int +0xc (kernel-bank stride multiplier `kmul`), int +0x10 (`W`), int +0x14 (`H`), int +0x18 (`flag`), ptr +0x20 (`kbase`, int16 bank, 25 shorts/kernel), ptr +0x28 (`mbase`, int16 per-row bias). For each output row `r` in `0..H-1` with `bias = (int)mbase[r] << 14` and kernel block `kptr = kbase + r*kmul*25`: a chunk pass over byte offsets `off = 0,4,…,4u` (`u = (W-2)>>1`) computes two 5×5 convolutions — `A` over `rows[0..4]`, `B` over `rows[1..5]` — at 4 horizontal offsets each, and stores `out[2k] = scale(max(A0,A1,B0,B1))`, `out[2k+1] = scale(max(A2,A3,B2,B3))`; a tail pass over columns `j = 2u+2 .. W-1` (2 offsets each) stores `out[j] = scale(max(A0,A1,B0,B1))`. `scale(v) = (int16_t)(((uint32_t)v << 6) + bias) >> 15` (32-bit wrapping, `SAR 0xf`). For `W < 2` only the tail pass runs (from `j = 0`). If `flag == 1` the whole `W*H` output is clamped non-negative (`cr_s16_clamp_nonneg`, `0x180012060`) at the end. Always returns 0. Passed the difftest (316 ok). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

@@ -171,6 +171,8 @@ int      cr_blur_diff_norm(cr_image *src, const void *obj);          /* 0x18001e
 int      cr_blur_diff_norm_u8(cr_image *dst, const cr_image *src,
                               const void *obj);                      /* 0x1800148c0 */
 int      cr_blur_divnorm_stretch(cr_image *img, const void *cfg);    /* 0x180013720 */
+int      cr_matched_filter_45eb0(int16_t *out, const uint8_t *const *rows,
+                                 const void *cfg);                   /* 0x180045eb0 */
 uint32_t cr_image_set(cr_image *img, void *data, int w, int h);      /* 0x18003b250 / 0x18003fbc0 / 0x180036460 */
 uint32_t cr_image_set_pitch(cr_image *img, void *data, int w, int h);/* 0x180034490 */void     cr_image_subview(cr_image *dst, const cr_image *src,
                           int dx, int dy, int w, int h);             /* 0x180010ef0 / 0x180017a80 */

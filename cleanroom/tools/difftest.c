@@ -4888,6 +4888,68 @@ static void test_blur_divnorm_stretch(void)
 }
 
 
+/* ---- batch 77: oriented matched filter (0x180045eb0) ------------------- */
+static void test_matched_filter_45eb0(void)
+{
+    /* FUN_180045eb0:
+     *   int fn(int16_t *out, const uint8_t *const *rows, const void *cfg)
+     * Three pointers -> rcx, rdx, r8 (plain MS x64 ABI).  5x5 oriented matched
+     * filter over six row pointers (rows[0..5]), max-pooled 4-wide per chunk,
+     * written as int16 into out (W*H).  cfg+0xc = kernel-bank stride multiplier,
+     * cfg+0x10 = W, cfg+0x14 = H, cfg+0x18 = clamp flag (1 -> non-negative),
+     * cfg+0x20 = kernel bank (int16, 25/kernel), cfg+0x28 = per-row bias (int16). */
+    typedef int (WINAPI *v_mf_t)(int16_t *out, const uint8_t *const *rows,
+                                 const void *cfg);
+    v_mf_t v = (v_mf_t)fn_at(RVA(0x180045eb0));
+    begin("cr_matched_filter_45eb0");
+    int bad = g_fail;
+
+    enum { MAXW = 40, MAXH = 8, ROWBYTES = 2 * MAXW + 8, MAXK = MAXH * 4 * 25 };
+    static uint8_t rowbuf[6][ROWBYTES];
+    static const uint8_t *rows[6];
+    static int16_t ov[MAXW * MAXH], oc[MAXW * MAXH];
+    static int16_t kbank[MAXK], mbias[MAXH];
+    static unsigned char cfg[0x30];
+
+    for (int t = 0; t < 3000; t++) {
+        int W = 1 + (int)(rnd() % MAXW);              /* 1..MAXW */
+        int H = 1 + (int)(rnd() % MAXH);              /* 1..MAXH */
+        int kmul = 1 + (int)(rnd() % 3);              /* 1..3 */
+        int flag = (int)(rnd() & 1u);
+        int N = W * H;
+        int nk = H * kmul * 25;
+        u32 tag = (u32)t;
+
+        for (int i = 0; i < 6; i++) {
+            for (int j = 0; j < ROWBYTES; j++)
+                rowbuf[i][j] = (uint8_t)rnd();
+            rows[i] = rowbuf[i];
+        }
+        for (int i = 0; i < nk; i++)
+            kbank[i] = (int16_t)((int)(rnd() % 2001) - 1000);
+        for (int i = 0; i < H; i++)
+            mbias[i] = (int16_t)((int)(rnd() % 2001) - 1000);
+        memset(ov, 0x5a, sizeof ov);
+        memset(oc, 0x5a, sizeof oc);
+
+        memset(cfg, 0, sizeof cfg);
+        memcpy(cfg + 0x0c, &kmul, 4);
+        memcpy(cfg + 0x10, &W, 4);
+        memcpy(cfg + 0x14, &H, 4);
+        memcpy(cfg + 0x18, &flag, 4);
+        const int16_t *kp = kbank; memcpy(cfg + 0x20, &kp, sizeof kp);
+        const int16_t *mp = mbias; memcpy(cfg + 0x28, &mp, sizeof mp);
+
+        int rv = v(ov, rows, cfg);
+        int rc = cr_matched_filter_45eb0(oc, rows, cfg);
+        if (rv != rc) { mismatch("ret", tag, (u32)rv, (u32)rc); continue; }
+        cmp_buf("dst", (unsigned char *)ov, (unsigned char *)oc,
+                (size_t)N * 2, tag);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_matched_filter_45eb0\n");
+}
+
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -11194,6 +11256,7 @@ int main(int argc, char **argv)
     test_blur_diff_norm();
     test_blur_diff_norm_u8();
     test_blur_divnorm_stretch();
+    test_matched_filter_45eb0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
