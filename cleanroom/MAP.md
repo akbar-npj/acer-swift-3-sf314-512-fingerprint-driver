@@ -655,6 +655,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x18002db20` | `fpc_bio_bep_sw23_78d706f81a` | `cr_feature_extract_step_2db20` | `int fn(void *state, const cr_image *fimg, void *handle, const cr_image *packed, const void *cfg)`. The float-source twin of `0x180026dc0`: same guard, gate and qualifier plumbing, but the *source* image `fimg` holds **float** pixels. A `W×H` u8 working image is allocated and filled inline with `clamp((int)(fimg[i] + 0.5f), 0, 255)`, then a `(W/4)×(H/4)` int16 scratch is allocated and fed to `cr_quality_gate_35cf0(scratch, &q, &flag, state, u8, handle, cfg)`. On gate failure the u8 image is freed and the status returned; `flag != 1` frees and returns 0. The packed image is expanded into a second `W×H` u8 image with `cr_mask_boxmax_fir_clear(&u8b, packed, 0xf, 1, 1, 1.5f)` (first frame: `cr_fill(0xff)` instead), folded via `cr_weighted_running_avg(*(state+0x18), state+0x58, u8, &u8b.data, q, cfg+0x24)`, `state->count` bumped when `< mode`, and `*(int8*)(state+0x08) < 1` runs `cr_feature_qualify`. Every error path frees the u8 working image (`cr_cleanup_ptr8_a`). Passed the difftest (325 ok). |
 
+### Batch 85 — directional 5x5 matched-filter bank
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18003de60` | `fpc_bio_bep_sw23_cb074cb39c` | `cr_dirbank_3de60` | `int fn(int16_t *out, const int16_t *const *rows, const void *cfg)`. Fixed-point (Q15) directional matched-filter bank. `cfg`: `+0x08` stride, `+0x0c` ncoef, `+0x10` w, `+0x14` h, `+0x18` normalise, `+0x20` coefA (`h*ncoef*25` shorts), `+0x28` coefB (`h` shorts). `rows` is an array of ≥6 int16 row pointers. Per output row `r` the bias `coefB[r]*0x4000` is added; a 5×5 correlation is slid over `ncoef` orientation blocks (each block a distinct 25-short kernel) and **two shifted responses are max-pooled** into two int16 channels (`>>15`, arithmetic). A trailing partial column (`(w-2)>>1` full pairs then the remainder) uses a reduced 5-tap edge kernel. If `cfg+0x18 == 1` the whole `w*h` plane is then clamped non-negative (`cr_s16_clamp_nonneg`). Returns 0. Passed the difftest (326 ok). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

@@ -550,6 +550,13 @@ int      cr_feature_extract_step_2db20(void *state, const cr_image *fimg,
                                        void *handle, const cr_image *packed,
                                        const void *cfg);               /* 0x18002db20 */
 
+/* Directional 5x5 matched-filter bank (int16 fixed point).  cfg: +0x08 stride,
+ * +0x0c ncoef, +0x10 w, +0x14 h, +0x18 normalise flag, +0x20 coefA, +0x28
+ * coefB.  Writes two int16 channels per position (>>15) and, when the flag is
+ * set, clamps the whole plane non-negative. */
+int      cr_dirbank_3de60(int16_t *out, const int16_t *const *rows,
+                          const void *cfg);                        /* 0x18003de60 */
+
 /* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
 typedef struct {
     int32_t         a;      /* +0x00  row stride in bits       */

@@ -153,7 +153,7 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **311** (87.6% of functions, 116,496 B = 68.7% of bytes) |
+| rewritten + parity-verified | **312** (87.9% of functions, 118,304 B = 69.8% of bytes) |
 
 Seventy-two batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
@@ -303,6 +303,12 @@ Seventy-two batches done so far:
     them into a u8 working image, runs the same quality gate, expands the
     packed image with `cr_mask_boxmax_fir_clear(..., 0xf, ...)`, folds it into
     the running average and qualifies (1 function).
+72. directional 5x5 matched-filter bank: the 1808-byte `0x18003de60` that slides
+    a 5×5 Q15 correlation over `ncoef` orientation blocks per output row,
+    max-pools two shifted responses into two int16 channels (`>>15`, with a
+    per-row `coefB[r]*0x4000` bias), uses a reduced 5-tap kernel for the trailing
+    partial column, and optionally clamps the whole plane non-negative
+    (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

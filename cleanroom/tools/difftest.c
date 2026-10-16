@@ -8303,6 +8303,73 @@ static void test_feature_extract_step_2db20(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_feature_extract_step_2db20\n");
 }
 
+/* ---- 0x18003de60 — directional 5x5 matched-filter bank ---------------- *
+ * int fn(int16_t *out, const int16_t *const *rows, const void *cfg):
+ *   cfg +0x08 stride, +0x0c ncoef, +0x10 w, +0x14 h, +0x18 normalise,
+ *       +0x20 coefA (h*ncoef*25 shorts), +0x28 coefB (h shorts).
+ * rows is an array of >=6 int16 row pointers; out receives w*h int16. */
+static void test_dirbank_3de60(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x18003de60));
+    begin("cr_dirbank_3de60");
+    int bad = g_fail;
+
+    enum { ROWN = 256, MAXH = 6, MAXNC = 4, MAXW = 16, MAXOUT = 256 };
+
+    static int16_t rowv[6][ROWN], rowc[6][ROWN];
+    static int16_t cAv[MAXH * MAXNC * 25], cAc[MAXH * MAXNC * 25];
+    static int16_t cBv[MAXH], cBc[MAXH];
+    static int16_t outv[MAXOUT], outc[MAXOUT];
+    static u8 cfgv[0x40], cfgc[0x40];
+
+    for (int t = 0; t < 6000; t++) {
+        int w  = (int)(rnd() % (MAXW + 1));       /* 0..16 */
+        int h  = (int)(rnd() % (MAXH + 1));       /* 0..6  */
+        int nc = (int)(rnd() % (MAXNC + 1));      /* 0..4  */
+        int stride = 1 + (int)(rnd() % 8);        /* 1..8  */
+        int norm = (int)(rnd() & 1u);
+
+        for (int i = 0; i < 6 * ROWN; i++) {
+            int16_t s = (int16_t)((int)(rnd() % 20001) - 10000);
+            rowv[i / ROWN][i % ROWN] = s; rowc[i / ROWN][i % ROWN] = s;
+        }
+        int cA_n = h * nc * 25;
+        for (int i = 0; i < cA_n; i++) {
+            int16_t s = (int16_t)((int)(rnd() % 20001) - 10000);
+            cAv[i] = s; cAc[i] = s;
+        }
+        for (int i = 0; i < h; i++) {
+            int16_t s = (int16_t)((int)(rnd() % 2001) - 1000);
+            cBv[i] = s; cBc[i] = s;
+        }
+        for (int i = 0; i < MAXOUT; i++) { outv[i] = 0x7fff; outc[i] = 0x7fff; }
+
+        const int16_t *rowsp_v[6], *rowsp_c[6];
+        for (int i = 0; i < 6; i++) { rowsp_v[i] = rowv[i]; rowsp_c[i] = rowc[i]; }
+
+        memset(cfgv, 0, sizeof cfgv);
+        *(int32_t *)(cfgv + 0x08) = stride;
+        *(int32_t *)(cfgv + 0x0c) = nc;
+        *(int32_t *)(cfgv + 0x10) = w;
+        *(int32_t *)(cfgv + 0x14) = h;
+        *(int32_t *)(cfgv + 0x18) = norm;
+        *(void   **)(cfgv + 0x20) = cAv;
+        *(void   **)(cfgv + 0x28) = cBv;
+        memcpy(cfgc, cfgv, sizeof cfgv);
+        *(void **)(cfgc + 0x20) = cAc;
+        *(void **)(cfgc + 0x28) = cBc;
+
+        int rv = v(outv, rowsp_v, cfgv);
+        int rc = cr_dirbank_3de60(outc, rowsp_c, cfgc);
+
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", (const unsigned char *)outv,
+                (const unsigned char *)outc, sizeof outv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_dirbank_3de60\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -12178,6 +12245,7 @@ int main(int argc, char **argv)
     test_grid_populate_dispatch_38020();
     test_feature_extract_step_26dc0();
     test_feature_extract_step_2db20();
+    test_dirbank_3de60();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

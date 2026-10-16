@@ -1434,3 +1434,184 @@ int cr_feature_extract_step_2db20(void *state, const cr_image *fimg,
     cr_cleanup_ptr8_a(&u8img);
     return rv;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18003de60 — directional 5x5 matched-filter bank (int16 fixed point).
+ *   int fn(int16_t *out, const int16_t *const *rows, const void *cfg):
+ *     cfg +0x08 stride, +0x0c ncoef, +0x10 w, +0x14 h, +0x18 normalise,
+ *         +0x20 coefA (h*ncoef*25 shorts), +0x28 coefB (h shorts).
+ *     For each of `h` output rows a 5x5 correlation is slid over `ncoef`
+ *     orientation blocks (each block is a 25-short kernel at a distinct row
+ *     offset); two shifted responses are max-pooled per position and written
+ *     as two int16 channels (>>15).  A trailing partial column uses a reduced
+ *     5-tap edge kernel.  If the normalise flag is 1 the whole plane is then
+ *     clamped non-negative.  Returns 0.
+ * ------------------------------------------------------------------------ */
+int cr_dirbank_3de60(int16_t *out, const int16_t *const *rows, const void *cfg)
+{
+    const uint8_t *c = (const uint8_t *)cfg;
+    int h  = *(const int *)(c + 0x14);
+    int nc = *(const int *)(c + 0x0c);
+    int w  = *(const int *)(c + 0x10);
+
+    if (h > 0) {
+        const int16_t *cbase = *(const int16_t *const *)(c + 0x20);
+        const int16_t *coefB = *(const int16_t *const *)(c + 0x28);
+        int      stride = *(const int *)(c + 0x08);
+        uint8_t *outb   = (uint8_t *)out;
+
+        int64_t        local_6c = 0;
+        const int16_t *local_b0 = cbase + nc * 25;
+        unsigned       uVar10   = (unsigned)((w - 2) >> 1);
+        int64_t        lVar5    = (int64_t)stride * 2;
+        const int16_t *const *plVar16 = rows + 1;
+
+        for (int r = 0; r < h; r++) {
+            int iVar6 = (int)coefB[r] * 0x4000;
+            int tail_start;
+
+            if (w < 2) {
+                tail_start = 0;
+            } else {
+                int64_t local_a0 = 0;
+                int64_t outrow   = local_6c * 2;      /* byte offset into outb */
+                do {
+                    int iVar18 = iVar6, iVar30 = iVar6;
+                    if (nc > 0) {
+                        int iVar27, iVar13, iVar7, iVar11;
+                        const int16_t *d8, *w1, *w2, *c0;
+                        const int16_t *const *p15;
+                        int64_t lVar31 = local_a0 * 2, lVar17;
+
+                        /* pass 1: coefficient rows[0..4] */
+                        iVar27 = 0; iVar13 = 0; iVar30 = 0; iVar18 = 0;
+                        d8 = cbase; w1 = cbase; lVar17 = lVar31; p15 = rows;
+                        do {
+                            do {
+                                int iVar19 = w1[0];
+                                const int16_t *p =
+                                    (const int16_t *)((const uint8_t *)p15[0] + lVar17);
+                                int iVar29 = p[2], iVar25 = p[3], iVar7b = p[4];
+                                int iVar11b = w1[1], iVar20 = w1[2];
+                                int iVar14 = p[5], iVar21 = w1[3], iVar12 = w1[4];
+                                p15++;
+                                iVar18 = iVar7b*iVar12 + iVar25*iVar21 + iVar29*iVar20
+                                       + p[1]*iVar11b + iVar18 + p[0]*iVar19;
+                                iVar30 = iVar30 + p[1]*iVar19 + iVar29*iVar11b
+                                       + iVar25*iVar20 + iVar7b*iVar21 + iVar14*iVar12;
+                                iVar27 = iVar27 + iVar29*iVar19 + iVar25*iVar11b
+                                       + iVar7b*iVar20 + iVar14*iVar21 + p[6]*iVar12;
+                                iVar13 = iVar12*p[7] + iVar21*p[6] + iVar11b*iVar7b
+                                       + iVar19*iVar25 + iVar13 + iVar20*iVar14;
+                                w1 += 5;
+                            } while (rows + 5 != p15);
+                            w1 = d8 + 25;
+                            lVar17 += lVar5;
+                            p15 = rows;
+                            d8 = w1;
+                        } while (local_b0 != w1);
+                        if (iVar30 <= iVar18) iVar30 = iVar18;
+                        if (iVar13 <= iVar27) iVar13 = iVar27;
+
+                        /* pass 2: coefficient rows[1..5] */
+                        iVar27 = 0; iVar7 = 0; iVar11 = 0; iVar18 = 0;
+                        c0 = cbase; w2 = cbase; p15 = plVar16;
+                        do {
+                            do {
+                                int iVar21 = w2[0];
+                                const int16_t *q =
+                                    (const int16_t *)((const uint8_t *)p15[0] + lVar31);
+                                int iVar28 = q[2], iVar26 = q[3], iVar12 = q[4];
+                                int iVar14 = w2[1], iVar25 = w2[2], iVar20 = q[5];
+                                int iVar29 = w2[3], iVar19 = w2[4];
+                                p15++;
+                                iVar18 = iVar12*iVar19 + iVar26*iVar29 + iVar28*iVar25
+                                       + q[1]*iVar14 + iVar18 + q[0]*iVar21;
+                                iVar11 = iVar11 + q[1]*iVar21 + iVar28*iVar14
+                                       + iVar26*iVar25 + iVar12*iVar29 + iVar20*iVar19;
+                                iVar7 = iVar7 + iVar28*iVar21 + iVar26*iVar14
+                                       + iVar12*iVar25 + iVar20*iVar29 + q[6]*iVar19;
+                                iVar27 = iVar19*q[7] + iVar29*q[6] + iVar14*iVar12
+                                       + iVar21*iVar26 + iVar27 + iVar25*iVar20;
+                                w2 += 5;
+                            } while (rows + 6 != p15);
+                            w2 = c0 + 25;
+                            lVar31 += lVar5;
+                            p15 = plVar16;
+                            c0 = w2;
+                        } while (local_b0 != w2);
+
+                        if (iVar18 <= iVar30) iVar18 = iVar30;
+                        if (iVar18 < iVar11)  iVar18 = iVar11;
+                        if (iVar27 < iVar13)  iVar27 = iVar13;
+                        if (iVar27 < iVar7)   iVar27 = iVar7;
+                        iVar18 = iVar18 + iVar6;
+                        iVar30 = iVar27 + iVar6;
+                    }
+                    *(int16_t *)(outb + outrow + local_a0) =
+                        (int16_t)(iVar18 >> 0xf);
+                    *(int16_t *)(outb + outrow + local_a0 + 2) =
+                        (int16_t)(iVar30 >> 0xf);
+                    local_a0 += 4;
+                } while ((int64_t)uVar10 * 4 + 4 != local_a0);
+                tail_start = (int)(uVar10 * 2 + 2);
+            }
+
+            /* trailing column(s): reduced 5-tap edge kernel */
+            for (int j = tail_start; j < w; j++) {
+                int iVar18 = iVar6;
+                if (nc > 0) {
+                    int iVar30 = 0, iVar13;
+                    const int16_t *w1, *w2, *c0;
+                    const int16_t *const *p15;
+                    int64_t lVar31 = (int64_t)(j * 2) * 2, lVar17;
+
+                    iVar18 = 0;
+                    w1 = cbase; p15 = rows; lVar17 = lVar31; c0 = cbase;
+                    do {
+                        do {
+                            const int16_t *const *p15n = p15 + 1;
+                            const int16_t *q =
+                                (const int16_t *)((const uint8_t *)p15[0] + lVar17);
+                            iVar30 = q[3]*w1[3] + q[1]*w1[1] + iVar30
+                                   + q[0]*w1[0] + q[2]*w1[2] + q[4]*w1[4];
+                            iVar18 = w1[3]*q[4] + w1[2]*q[3] + w1[1]*q[2]
+                                   + iVar18 + w1[0]*q[1] + w1[4]*q[5];
+                            w1 += 5; p15 = p15n;
+                        } while (rows + 5 != p15);
+                        w1 = c0 + 25; lVar17 += lVar5; p15 = rows; c0 = w1;
+                    } while (local_b0 != w1);
+                    if (iVar18 <= iVar30) iVar18 = iVar30;
+
+                    iVar13 = 0; iVar30 = 0;
+                    c0 = cbase; p15 = plVar16; w2 = cbase;
+                    do {
+                        do {
+                            const int16_t *const *p15n = p15 + 1;
+                            const int16_t *q =
+                                (const int16_t *)((const uint8_t *)p15[0] + lVar31);
+                            iVar13 = q[3]*w2[3] + q[1]*w2[1] + iVar13
+                                   + q[0]*w2[0] + q[2]*w2[2] + q[4]*w2[4];
+                            iVar30 = w2[3]*q[4] + w2[2]*q[3] + w2[1]*q[2]
+                                   + iVar30 + w2[0]*q[1] + w2[4]*q[5];
+                            w2 += 5; p15 = p15n;
+                        } while (rows + 6 != p15);
+                        w2 = c0 + 25; lVar31 += lVar5; p15 = plVar16; c0 = w2;
+                    } while (local_b0 != w2);
+                    if (iVar30 < iVar18) iVar30 = iVar18;
+                    if (iVar30 < iVar13) iVar30 = iVar13;
+                    iVar18 = iVar30 + iVar6;
+                }
+                *(int16_t *)(outb + local_6c * 2 + (int64_t)j * 2) =
+                    (int16_t)(iVar18 >> 0xf);
+            }
+
+            local_6c += w;
+            local_b0 += nc * 25;
+            cbase    += nc * 25;
+        }
+    }
+    if (*(const int *)(c + 0x18) == 1)
+        cr_s16_clamp_nonneg(out, out, w * h);
+    return 0;
+}
