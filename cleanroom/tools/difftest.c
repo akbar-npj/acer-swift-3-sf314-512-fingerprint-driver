@@ -4950,6 +4950,145 @@ static void test_matched_filter_45eb0(void)
 }
 
 
+/* ---- batch 78: frame quality gate (0x180035cf0) ------------------------ */
+static void qg_build_store(u8 *s, const int32_t *keys, const int32_t *vals, int n)
+{
+    memset(s, 0, 0x100);
+    *(u32 *)(s + 0) = 8;
+    for (int i = 0; i < n; i++) {
+        *(int32_t *)(s + 0xc + 12 * i + 0) = keys[i];
+        *(int32_t *)(s + 0xc + 12 * i + 4) = 4;
+        *(int32_t *)(s + 0xc + 12 * i + 8) = vals[i];
+    }
+    *(u32 *)(s + 4) = 0xc + 12 * n;   /* capacity */
+    *(u32 *)(s + 8) = 12 * n;         /* used     */
+}
+
+static void test_quality_gate_35cf0(void)
+{
+    /* FUN_180035cf0:
+     *   int fn(cr_image *img, float *out_q, uint8_t *out_flag, void *state,
+     *          void *src, void *handle, const void *cfg)
+     * rcx/rdx/r8/r9 = img/out_q/out_flag/state; src/handle/cfg are on the stack.
+     * Reads four metadata keys (0xda/0xdd/0xd2/0xd6), computes a frame quality,
+     * updates the running averages, optionally runs an NCC diff + Pearson
+     * correlation, shifts a 19-byte history and sets *out_flag. */
+    typedef int (WINAPI *v_qg_t)(cr_image *img, float *out_q, uint8_t *out_flag,
+                                 void *state, void *src, void *handle,
+                                 const void *cfg);
+    v_qg_t v = (v_qg_t)fn_at(RVA(0x180035cf0));
+    begin("cr_quality_gate_35cf0");
+    int bad = g_fail;
+
+    enum { MAXW = 13, MAXH = 11, SRCW = MAXW * 4, SRCH = MAXH * 4,
+           MAXN = MAXW * MAXH, MAXSN = SRCW * SRCH, SLEN = 0x60 };
+
+    static int16_t img_v[MAXN], img_c[MAXN];
+    static int16_t prev_v[MAXN], prev_c[MAXN];
+    static int16_t srcb[MAXSN];
+    static u8 hist_v[0x20], hist_c[0x20];
+    static u8 st_v[SLEN], st_c[SLEN];
+    static u8 imgd_v[0x20], imgd_c[0x20], srcd[0x20];
+    static u8 cfg[0x40], hv[0x100], hc[0x100];
+    static const int32_t keys[4] = { 0xda, 0xdd, 0xd2, 0xd6 };
+
+    for (int t = 0; t < 8000; t++) {
+        int W = 2 + (int)(rnd() % (MAXW - 1));    /* 2..MAXW */
+        int H = 2 + (int)(rnd() % (MAXH - 1));    /* 2..MAXH */
+        int N = W * H;
+        int SW = W * 4, SH = H * 4, SN = SW * SH;
+
+        for (int i = 0; i < N; i++) {
+            int16_t x = (int16_t)((int)(rnd() % 4001) - 2000);
+            img_v[i] = x; img_c[i] = x;
+        }
+        for (int i = 0; i < SN; i++)
+            srcb[i] = (int16_t)((int)(rnd() % 4001) - 2000);
+        for (int i = 0; i < N; i++) {
+            int16_t x = (int16_t)rnd();
+            prev_v[i] = x; prev_c[i] = x;
+        }
+        for (int i = 0; i < 0x20; i++) {
+            u8 x = (u8)rnd();
+            hist_v[i] = x; hist_c[i] = x;
+        }
+
+        mk_image(imgd_v, img_v, W, W, H, 0, 0);
+        mk_image(imgd_c, img_c, W, W, H, 0, 0);
+        mk_image(srcd, srcb, SW, SW, SH, 0, 0);
+
+        int count;
+        switch (rnd() % 6u) {
+        case 0:  count = 0; break;
+        case 1:  count = 1; break;
+        case 2:  count = 2; break;
+        case 3:  count = 0xff; break;
+        case 4:  count = 0x100 + (int)(rnd() % 32u); break;
+        default: count = (int)(rnd() % 0x120u); break;
+        }
+        int counter = (int)(rnd() % 31u);
+        if ((t & 127) == 0) counter = 0x7fffffff;
+        float avg_q = (float)((int)(rnd() % 4001) - 2000) * 0.001f;
+        float avg_s = (float)((int)(rnd() % 4001) - 2000) * 0.001f;
+
+        memset(st_v, 0, sizeof st_v);
+        memset(st_c, 0, sizeof st_c);
+        *(u8 **)(st_v + 0x00) = hist_v;
+        *(int16_t **)(st_v + 0x10) = prev_v;
+        *(u8 **)(st_c + 0x00) = hist_c;
+        *(int16_t **)(st_c + 0x10) = prev_c;
+        for (int i = 0; i < 2; i++) {
+            u8 *s = i ? st_c : st_v;
+            *(int32_t *)(s + 0x40) = count;
+            *(int32_t *)(s + 0x44) = counter;
+            *(float *)(s + 0x48) = avg_q;
+            *(float *)(s + 0x4c) = avg_s;
+        }
+
+        memset(cfg, 0, sizeof cfg);
+        *(int32_t *)(cfg + 0x08) = (int)(rnd() % 400u);       /* level */
+        *(float   *)(cfg + 0x0c) = (float)((int)(rnd() % 4001) - 2000) * 0.001f;
+        *(int32_t *)(cfg + 0x10) = (int)(rnd() % 4u);         /* margin x */
+        *(int32_t *)(cfg + 0x14) = (int)(rnd() % 4u);         /* margin y */
+        *(int8_t  *)(cfg + 0x18) = (int8_t)(rnd() % 2u);      /* diff flag */
+        *(float   *)(cfg + 0x1c) = (float)((int)(rnd() % 4001) - 2000) * 0.001f;
+        *(float   *)(cfg + 0x20) = (float)((int)(rnd() % 4001) - 2000) * 0.001f;
+        *(int8_t  *)(cfg + 0x2c) = (int8_t)(rnd() % 6u);      /* mode 0..5 */
+        float scale = (float)((int)(rnd() % 4001) - 2000) * 0.001f;
+        if (scale == 0.0f) scale = 1.0f;                      /* avoid 0*inf NaN */
+        *(float   *)(cfg + 0x30) = scale;
+
+        int32_t vals[4];
+        vals[0] = (int)(rnd() % 500u);            /* 0xda: level */
+        vals[1] = (int)(rnd() % 4000u);           /* 0xdd: t */
+        vals[2] = (int)(rnd() % 4000u);           /* 0xd2: a */
+        vals[3] = (int)(rnd() % 4000u);           /* 0xd6: b */
+        int nk = 4;
+        if ((t & 15) == 0) nk = (int)(rnd() % 5u);   /* 0..4 keys present */
+        int use_handle = !((t & 255) == 0);
+        qg_build_store(hv, keys, vals, nk);
+        memcpy(hc, hv, sizeof hv);
+
+        float qv = 123.0f, qc = 123.0f;
+        u8 fv = 0x5a, fc = 0x5a;
+
+        int rv = v((cr_image *)imgd_v, &qv, &fv, st_v, srcd,
+                   use_handle ? hv : NULL, cfg);
+        int rc = cr_quality_gate_35cf0((cr_image *)imgd_c, &qc, &fc, st_c, srcd,
+                                       use_handle ? hc : NULL, cfg);
+
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (fv != fc) mismatch("flag", (u32)t, fv, fc);
+        if (cr_f2u(qv) != cr_f2u(qc)) mismatch("q", (u32)t, cr_f2u(qv), cr_f2u(qc));
+        cmp_buf("img", (u8 *)img_v, (u8 *)img_c, (size_t)N * 2, (u32)t);
+        cmp_buf("prev", (u8 *)prev_v, (u8 *)prev_c, (size_t)N * 2, (u32)t);
+        cmp_buf("hist", hist_v, hist_c, 0x14, (u32)t);
+        cmp_buf("st", st_v + 0x44, st_c + 0x44, 12, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_quality_gate_35cf0\n");
+}
+
+
 /* ---- batch 68: object constructor (0x180012fe0) ------------------------ */
 static void test_obj_init_12fe0(void)
 {
@@ -11257,6 +11396,7 @@ int main(int argc, char **argv)
     test_blur_diff_norm_u8();
     test_blur_divnorm_stretch();
     test_matched_filter_45eb0();
+    test_quality_gate_35cf0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

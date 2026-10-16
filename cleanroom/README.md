@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **302** (85.1% of functions, 108,528 B = 64.0% of bytes) |
+| rewritten + parity-verified | **303** (85.4% of functions, 109,760 B = 64.8% of bytes) |
 
-Sixty-four batches done so far:
+Sixty-five batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -264,6 +264,10 @@ Sixty-four batches done so far:
     filter over six row pointers (rows[0..4] and rows[1..5]), max-pools four
     horizontal offsets per chunk, scales by `<<6` with a per-row `<<14` bias and a
     `SAR 0xf`, and optionally clamps the int16 output non-negative (1 function).
+65. frame quality gate: the 1232-byte `0x180035cf0` that reads four TLV metadata
+    keys, computes a frame quality and running average, downsamples + (optionally)
+    NCC-diffs the image, runs a Pearson correlation against the previous frame,
+    shifts a 19-byte history and sets a pass flag (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

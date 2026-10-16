@@ -472,6 +472,216 @@ int cr_matched_filter_45eb0(int16_t *out, const uint8_t *const *rows,
     return 0;
 }
 
+/* 0x180035cf0 — frame quality gate / match decision.
+ *
+ * int fn(cr_image *img, float *out_q, uint8_t *out_flag, void *state,
+ *        void *src, void *handle, const void *cfg)
+ *
+ * MS x64 ABI: rcx/rdx/r8/r9 = img/out_q/out_flag/state; src/handle/cfg are the
+ * 5th/6th/7th args on the stack.  `handle` is a TLV metadata store read through
+ * cr_meta_get_u32.  `state`: +0x00 ptr to a >=0x14-byte history, +0x10 previous
+ * image data (int16), +0x40 frame count, +0x44 frame counter, +0x48 running
+ * quality average, +0x4c running score average.  `cfg`: +0x08 max level,
+ * +0x0c min quality, +0x10 margin x, +0x14 margin y, +0x18 diff flag (signed),
+ * +0x1c ratio, +0x20 flag threshold, +0x2c mode (0/2/3), +0x30 scale.
+ * Returns 0 / 0x3eb / 0x3ec or the first failing status; sets *out_flag to 1
+ * when the frame passes the running-score gate.
+ */
+int cr_quality_gate_35cf0(cr_image *img, float *out_q, uint8_t *out_flag,
+                          void *state, void *src, void *handle, const void *cfg)
+{
+    const uint8_t *c = (const uint8_t *)cfg;
+    uint8_t *st = (uint8_t *)state;
+    int32_t local_90;                 /* rsp+0x60 */
+    int32_t local_84;                 /* rsp+0x6c: correlation valid flag */
+    float   local_8c;                 /* rsp+0x64: correlation coefficient */
+    float   fv13;
+    float   q;
+
+    if (handle == NULL)
+        return 0x3ec;
+
+    *out_flag = 0;
+    local_8c = 1.0f;
+
+    {
+        int32_t ctr = *(int32_t *)(st + 0x44);
+        if (ctr != 0x7fffffff)
+            *(int32_t *)(st + 0x44) = ctr + 1;
+    }
+
+    if (*(const int8_t *)(c + 0x2c) == 0) {
+        local_90 = 200;
+        fv13 = 10.0f;
+    } else {
+        if (cr_meta_get_u32(handle, 0xda, (uint32_t *)&local_90) != 0)
+            return 0x3eb;
+        if (*(const int8_t *)(c + 0x2c) == 2) {
+            int32_t t;
+            if (cr_meta_get_u32(handle, 0xdd, (uint32_t *)&t) != 0)
+                return 0x3eb;
+            fv13 = (float)t * 0.0009765625f;
+            if (fv13 < 1.0f)
+                return 0x3ec;
+            local_90 = 0xff - local_90;
+        } else if (*(const int8_t *)(c + 0x2c) == 3) {
+            int32_t t;
+            if (cr_meta_get_u32(handle, 0xdd, (uint32_t *)&t) != 0)
+                return 0x3eb;
+            fv13 = (float)t * 0.0009765625f;
+            if (fv13 < 1.0f)
+                return 0x3ec;
+        } else {
+            fv13 = 10.0f;
+        }
+    }
+
+    {
+        int32_t a, b;
+        float fa, fb;
+        if (cr_meta_get_u32(handle, 0xd2, (uint32_t *)&a) != 0)
+            return 0x3eb;
+        if (cr_meta_get_u32(handle, 0xd6, (uint32_t *)&b) != 0)
+            return 0x3eb;
+
+        fa = (float)a * 0.0009765625f;
+        if (1.0f > fa)
+            return 0x3ec;
+        fb = 0.0009765625f * (float)b;
+        if (1.0f > fb)
+            return 0x3ec;
+
+        if (*(const int32_t *)(c + 0x08) >= local_90)
+            return 0;
+
+        q = *(const float *)(c + 0x30) *
+            (1.0f / ((float)local_90 * fa * fb * fv13));
+        *out_q = q;
+        if (q > 2.0078433f)
+            return 0;
+    }
+
+    {
+        int32_t count = *(const int32_t *)(st + 0x40);
+        float avg_q = *(const float *)(st + 0x48);
+        float ratio = *(const float *)(c + 0x1c);
+        int do_gate = 1;
+
+        if (count > 0xff) {
+            avg_q = (q + avg_q * 255.0f) * 0.00390625f;
+            *(float *)(st + 0x48) = avg_q;
+            q = avg_q * ratio;
+        } else {
+            float fc = (float)count;
+            float na = (q + avg_q * fc) / (fc + 1.0f);
+            *(float *)(st + 0x48) = na;
+            if (count <= 1)
+                do_gate = 0;
+            else
+                q = na * ratio;
+        }
+        if (do_gate && *out_q > q)
+            return 0;
+    }
+
+    {
+        int32_t hh, ww;
+        int r = cr_downsample_mean(img, (const cr_image *)src, 4);
+        if (r != 0)
+            return r;
+
+        hh = *(const int32_t *)((const uint8_t *)img + 0x14);
+        ww = *(const int32_t *)((const uint8_t *)img + 0x10);
+
+        if (*(const int8_t *)(c + 0x18) > 0) {
+            uint64_t desc[4] __attribute__((aligned(16)));
+            int s;
+            if ((s = cr_image_alloc_s16((int *)desc, ww, hh)) != 0)
+                return s;
+            if ((s = cr_ncc_apply_f8b0(desc, (const uint64_t *)img, 5)) != 0) {
+                cr_cleanup_ptr8_clear(desc);
+                return s;
+            }
+            {
+                int n = hh * ww;
+                if (n > 0) {
+                    int16_t *idp = *(int16_t **)((uint8_t *)img + 8);
+                    int16_t *rdp = *(int16_t **)((uint8_t *)desc + 8);
+                    for (int i = 0; i < n; i++) {
+                        uint16_t v = (uint16_t)idp[i];
+                        if ((int16_t)v <= 0xf9)
+                            idp[i] = (int16_t)(uint16_t)(v - (uint16_t)rdp[i]);
+                    }
+                }
+            }
+            cr_cleanup_ptr8_clear(desc);
+            hh = *(const int32_t *)((const uint8_t *)img + 0x14);
+            ww = *(const int32_t *)((const uint8_t *)img + 0x10);
+        }
+
+        local_84 = 0;
+        cr_corr_coeff(&local_8c, &local_84,
+                      *(const int16_t **)((uint8_t *)img + 8),
+                      *(const int16_t **)(st + 0x10),
+                      ww, hh, 0xfa,
+                      *(const int32_t *)(c + 0x10),
+                      *(const int32_t *)(c + 0x14));
+
+        {
+            int pass = 1;
+            uint8_t *hist;
+            int sum = 0;
+
+            if (*(const int32_t *)(st + 0x40) != 0) {
+                pass = 0;
+                if (*(const float *)(c + 0x0c) > local_8c)
+                    pass = (local_84 == 1);
+            }
+
+            hist = *(uint8_t **)st;
+            for (int i = 0x12; i >= 0; i--) {
+                hist[i + 1] = hist[i];
+                sum += hist[i + 1];
+            }
+            if (pass) {
+                hist[0] = 1;
+                int n = *(const int32_t *)((const uint8_t *)img + 0x10) *
+                        *(const int32_t *)((const uint8_t *)img + 0x14);
+                if (n > 0) {
+                    int16_t *sd = *(int16_t **)((uint8_t *)img + 8);
+                    int16_t *dd = *(int16_t **)(st + 0x10);
+                    for (int i = 0; i < n; i++)
+                        dd[i] = sd[i];
+                }
+            } else {
+                hist[0] = 0;
+            }
+            sum += hist[0];
+
+            {
+                int32_t counter = *(const int32_t *)(st + 0x44);
+                float div1, div2, avg_s;
+                if (counter > 0x14) {
+                    div2 = 21.0f;
+                    div1 = 20.0f;
+                } else {
+                    div1 = (float)counter;
+                    div2 = div1 + 1.0f;
+                }
+                avg_s = ((float)sum / div1 +
+                         div1 * *(const float *)(st + 0x4c)) / div2;
+                *(float *)(st + 0x4c) = avg_s;
+                if (pass) {
+                    if (avg_s > *(const float *)(c + 0x20))
+                        *out_flag = 1;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
 /* 0x180044a20 — fixed 7-tap twin.  When W is 8-aligned it uses the guarded
  * row/reflect FIRs (returning the guard status); otherwise the fixed fir7_reflect
  * + vfir7_cols pair (always returning 0). */
