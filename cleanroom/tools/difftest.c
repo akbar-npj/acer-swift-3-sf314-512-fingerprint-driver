@@ -1966,6 +1966,134 @@ static void test_harris_local_max_grid(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_harris_local_max_grid\n");
 }
 
+/* ---- batch 69b: Harris response -> masked local min/max grid (0x18000f000) -
+ * The min/max twin of the test above: same inputs, same grid comparison, but
+ * the routine also accepts strict local minima (value = |response|). */
+static void test_harris_local_minmax_grid(void)
+{
+    typedef int (WINAPI *v_i_pppp)(void *, const void *, const void *,
+                                   const void *);
+    v_i_pppp v = (v_i_pppp)fn_at(RVA(0x18000f000));
+    begin("cr_harris_local_minmax_grid");
+    int bad = g_fail;
+
+    static uint8_t  sbuf[4096];
+    static uint32_t mbits[4096];
+    static u8 sv[0x20], sc[0x20], smv[0x20], smc[0x20];
+
+    for (int t = 0; t < 3000; t++) {
+        int w = 8 + (int)(rnd() % 24u);            /* 8..31 */
+        int h = (8 + (int)(rnd() % 24u)) & ~1;     /* even, 8..30 */
+        int offx = (int)(rnd() % 6u);
+        int offy = (int)(rnd() % 6u);
+        int stride_bits = (2 + (int)(rnd() % 3u)) * 32;   /* 64..128 bits */
+        /* border >= 1 for the same reason as cr_harris_local_max_grid: with
+         * c == 0 the vendor scans the whole image and reads one pixel past it
+         * on every side, which our malloc'd buffer cannot match. */
+        int border = 1 + (int)(rnd() % 3u);        /* 1..3 */
+        float coef  = (float)(rnd() % 100u) / 1000.0f;
+        float sigma = 0.72f + (float)(rnd() % 150u) / 100.0f;
+        int W = 1 + (int)(rnd() % 6u);
+        int H = 1 + (int)(rnd() % 6u);
+        int cap = 1 + (int)(rnd() % 8u);
+        int cap2 = (int)(rnd() % 17u);
+        int divx = 1 + (int)(rnd() % 512u);
+        int divy = 1 + (int)(rnd() % 512u);
+        int mode = ((int)(rnd() % 4) == 0) ? 2
+                 : ((int)(rnd() % 8) == 0) ? 7 : 5;
+
+        for (int i = 0; i < w * h; i++) sbuf[i] = (uint8_t)rnd();
+        for (int i = 0; i < 4096; i++) mbits[i] = rnd();
+
+        mk_img2(sv, (int16_t *)sbuf, w, h);
+        mk_img2(sc, (int16_t *)sbuf, w, h);
+        mk_img2(smv, (int16_t *)mbits, 0, 0);
+        *(int *)(smv + 0x00) = stride_bits;
+        *(int *)(smv + 0x18) = offx;
+        *(int *)(smv + 0x1c) = offy;
+        memcpy(smc, smv, 0x20);
+
+        struct hmax_state gv, gc;
+        memset(&gv, 0, sizeof gv);
+        gv.g.nodes = gv.nodes; gv.g.coords = gv.coords; gv.g.values = gv.values;
+        gv.g.next = gv.next; gv.g.coords2 = gv.coords2; gv.g.values2 = gv.values2;
+        gv.g.W = W; gv.g.H = H; gv.g.divx = divx; gv.g.divy = divy;
+        gv.g.count = 0; gv.g.count2 = 0; gv.g.cap = cap;
+        gv.cfg.border = (int8_t)border;
+        gv.cfg.cap2 = (int16_t)cap2;
+        gv.cfg.coef = coef;
+        gv.cfg.sigma = sigma;
+        gv.cfg.mode = (uint8_t)mode;
+        for (int k = 0; k < W * H; k++) {
+            gv.nodes[k].key = 0; gv.nodes[k].head = -1;
+            gv.nodes[k].val = (float)(1 + (int)(rnd() % 1000)) * 0.001f;
+        }
+        for (int k = 0; k < cap; k++) {
+            gv.next[k] = -1; gv.values[k] = 0.0f;
+            gv.coords[2 * k] = gv.coords[2 * k + 1] = 0;
+        }
+        for (int k = 0; k < cap2; k++) {
+            gv.values2[k] = 0.0f;
+            gv.coords2[2 * k] = gv.coords2[2 * k + 1] = 0;
+        }
+        gc = gv;
+        gc.g.nodes = gc.nodes; gc.g.coords = gc.coords; gc.g.values = gc.values;
+        gc.g.next = gc.next; gc.g.coords2 = gc.coords2; gc.g.values2 = gc.values2;
+
+        int rv = v(&gv.g, sv, smv, &gv.cfg);
+        int rc = cr_harris_local_minmax_grid(&gc.g, (const cr_image *)sc,
+                                             (const cr_image *)smc, &gc.cfg);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+
+        size_t nn = sizeof(cr_grid_node) * (size_t)(W * H);
+        if (memcmp(gv.nodes, gc.nodes, nn))
+            cmp_buf("nodes", (unsigned char *)gv.nodes,
+                    (unsigned char *)gc.nodes, nn, (u32)t);
+        if (memcmp(gv.values, gc.values, sizeof(float) * (size_t)cap))
+            cmp_buf("values", (unsigned char *)gv.values,
+                    (unsigned char *)gc.values, sizeof(float) * (size_t)cap,
+                    (u32)t);
+        if (memcmp(gv.next, gc.next, sizeof(int16_t) * (size_t)cap))
+            cmp_buf("next", (unsigned char *)gv.next,
+                    (unsigned char *)gc.next, sizeof(int16_t) * (size_t)cap,
+                    (u32)t);
+        if (memcmp(gv.coords, gc.coords, 2 * (size_t)cap))
+            cmp_buf("coords", gv.coords, gc.coords, 2 * (size_t)cap, (u32)t);
+        if (memcmp(gv.values2, gc.values2, sizeof(float) * (size_t)cap2))
+            cmp_buf("values2", (unsigned char *)gv.values2,
+                    (unsigned char *)gc.values2, sizeof(float) * (size_t)cap2,
+                    (u32)t);
+        if (memcmp(gv.coords2, gc.coords2, 2 * (size_t)cap2))
+            cmp_buf("coords2", gv.coords2, gc.coords2, 2 * (size_t)cap2, (u32)t);
+        if (gv.g.count != gc.g.count || gv.g.count2 != gc.g.count2)
+            mismatch("count", (u64)t, (u32)gv.g.count, (u32)gc.g.count);
+    }
+
+    /* negative source width trips the allocator guard in both impls */
+    {
+        struct hmax_state gv, gc;
+        memset(&gv, 0, sizeof gv);
+        gv.g.nodes = gv.nodes; gv.g.coords = gv.coords; gv.g.values = gv.values;
+        gv.g.next = gv.next; gv.g.coords2 = gv.coords2; gv.g.values2 = gv.values2;
+        gv.g.W = 1; gv.g.H = 1; gv.g.divx = 1; gv.g.divy = 1;
+        gv.g.cap = 1; gv.nodes[0].key = 0; gv.nodes[0].head = -1;
+        gc = gv;
+        gc.g.nodes = gc.nodes; gc.g.coords = gc.coords; gc.g.values = gc.values;
+        gc.g.next = gc.next; gc.g.coords2 = gc.coords2; gc.g.values2 = gc.values2;
+        u8 a[0x20], b[0x20];
+        mk_img2(a, (int16_t *)sbuf, -4, 8);
+        mk_img2(b, (int16_t *)sbuf, -4, 8);
+        mk_img2(smv, (int16_t *)mbits, 0, 0);
+        *(int *)(smv + 0x00) = 32;
+        int rv = v(&gv.g, a, smv, &gv.cfg);
+        int rc = cr_harris_local_minmax_grid(&gc.g, (const cr_image *)b,
+                                             (const cr_image *)smv, &gc.cfg);
+        if (rv != rc) mismatch("ret-neg", 0, (u32)rv, (u32)rc);
+    }
+
+    if (g_fail == bad) end(); else printf("  FAIL cr_harris_local_minmax_grid\n");
+}
+
 /* ---- batch 68: global bio-context getter --------------------------------- */
 static void test_bio_init(void)
 {
@@ -10708,6 +10836,7 @@ int main(int argc, char **argv)
     test_bitmap_filter_apply_s16();
     test_fft_weighted_apply_32af0();
     test_obj_init_13340();
+    test_harris_local_minmax_grid();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
