@@ -3461,6 +3461,52 @@ static void test_bitmap_filter_apply_s16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bitmap_filter_apply_s16\n");
 }
 
+/* 0x180032af0 — weighted 2-D FFT filter of an int16 image. */
+static void test_fft_weighted_apply_32af0(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, const void *);
+    fn_t v = (fn_t)fn_at(RVA(0x180032af0));
+    begin("cr_fft_weighted_apply_32af0");
+    int bad = g_fail;
+
+    enum { MAXWH = 24, NP = MAXWH * MAXWH, NW = 32 * 32 };
+    static int16_t dv[NP], dc[NP];
+    static float wts[NW];
+    static u8 cfgv[16], cfgc[16];
+    static cr_image ov, oc;
+
+    for (int t = 0; t < 3000; t++) {
+        int wa = 1 + (int)(rnd() % MAXWH);
+        /* The pipeline's cr_fft2d_prep_1e920 reads `img.data` with stride
+         * desc[4] and width desc[5]=hb; when the padded width W exceeds 3*hb it
+         * reads past the hb*wa-float source buffer (harmless in the Windows
+         * pool, unmatchable against our malloc'd buffer).  With hb >= 6,
+         * W = round_up_pow2(max(hb,9)) <= 3*hb, so every read stays in bounds. */
+        int hb = 6 + (int)(rnd() % (MAXWH - 5));
+
+        for (int i = 0; i < NP; i++) {
+            int16_t val = (int16_t)((int)(rnd() % 65536) - 32768);
+            dv[i] = val; dc[i] = val;
+        }
+        for (int i = 0; i < NW; i++)
+            wts[i] = (float)((int)(rnd() % 2000) - 1000) * 0.001f;
+        for (int i = 0; i < 16; i++) cfgv[i] = (u8)rnd();
+        cfgv[4] = (u8)(rnd() % 3u);   /* 0/1: run the pipeline; 2: early 0x1 */
+        for (int i = 0; i < 16; i++) cfgc[i] = cfgv[i];
+
+        memset(&ov, 0, sizeof ov); memset(&oc, 0, sizeof oc);
+        ov.a = wa; ov.b = hb; ov.data = dv; ov.w = wa; ov.h = hb;
+        oc = ov; oc.data = dc;
+
+        int rv = v(&ov, wts, cfgv);
+        int rc = cr_fft_weighted_apply_32af0((int *)&oc, wts, cfgc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("pix", (const unsigned char *)dv, (const unsigned char *)dc,
+                (u32)(wa * hb * 2), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_fft_weighted_apply_32af0\n");
+}
+
 /* ---- batch 70: grid-bucketed keypoint sampler (0x1800466f0) ------------- */
 /* Buckets `npts` keypoint records into a rows x cols grid, shuffles the cell
  * order, then emits up to `maxout` head payloads (record+4) into `pts[out].f0`.
@@ -10563,6 +10609,7 @@ int main(int argc, char **argv)
      * expose latent divide-by-zero paths.  Keep new tests at the tail. */
     test_bitmap_filter_fir();
     test_bitmap_filter_apply_s16();
+    test_fft_weighted_apply_32af0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

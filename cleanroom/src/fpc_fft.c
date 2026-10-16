@@ -539,3 +539,84 @@ int cr_fft2d_prep_1e920(float *param_1, uint32_t param_2, uint32_t param_3,
     }
     return iVar3;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180032af0 — weighted 2-D FFT filter of an int16 image.
+ *   int fn(int *desc, const float *weights, const void *cfg)
+ *
+ * `desc` is a cr_image descriptor holding an int16 buffer (`desc[4]`/`desc[5]`
+ * are its width/height, `desc->data` the pixels); `weights` is a float array
+ * of `W*H` entries; `cfg`'s byte at +4 selects the minimum-dimension table
+ * entry used by cr_round_dims_pow2.
+ *
+ * Rounds the padded dimensions `W,H = cr_round_dims_pow2(cfg, desc[5],
+ * desc[4])`, converts the image to float, forward-transforms it into a W x H
+ * spectrum, multiplies that element-wise by `weights`, inverse-transforms it
+ * back, and stores the result as int16 into `desc` (all scalings by 2^6).
+ * Returns 0 or the first failing callee's status; every scratch buffer is
+ * freed on the way out.
+ * ------------------------------------------------------------------------ */
+int cr_fft_weighted_apply_32af0(int *desc, const float *weights, const void *cfg)
+{
+    uint32_t W = 0, H = 0;
+    int st = (int)cr_round_dims_pow2(&W, &H, (uint32_t)desc[5],
+                                     (uint32_t)desc[4], cfg);
+    if (st != 0)
+        return st;
+
+    const size_t sz = (size_t)((long long)(int)(W * H) << 2);
+
+    float *p70 = NULL;
+    st = cr_malloc_aligned16((void **)&p70, sz);
+    if (st != 0)
+        return st;
+
+    float *p68 = NULL;
+    st = cr_malloc_aligned16((void **)&p68, sz);
+    if (st != 0) {
+        cr_sized_free((void **)&p70);
+        return st;
+    }
+
+    cr_image img;
+    st = cr_image_alloc_f32(&img, desc[4], desc[5]);
+    if (st != 0) {
+        cr_sized_free((void **)&p70);
+        cr_sized_free((void **)&p68);
+        return st;
+    }
+
+    cr_i16_to_f32_scaled(&img, (const cr_image *)desc, 6);
+
+    int r2 = cr_fft2d_prep_1e920(p70, W, H, (const float *)img.data,
+                                 desc[5], desc[4]);
+    if (r2 == 0) {
+        if ((int)W > 0) {
+            for (int i = 0; i < (int)W; i++) {
+                if ((int)H > 0) {
+                    for (int j = 0; j < (int)H; j++)
+                        p68[i * (int)H + j] =
+                            p70[i * (int)H + j] * weights[i * (int)H + j];
+                }
+            }
+        }
+        cr_sized_free((void **)&p70);
+
+        int r3 = cr_fft2d_real_bwd((float *)img.data, desc[5], desc[4],
+                                   p68, W, H);
+        if (r3 == 0) {
+            cr_f32_to_i16_scaled((cr_image *)desc, &img, 6);
+            cr_cleanup_ptr8_clear_b(&img);
+            cr_sized_free((void **)&p68);
+            return 0;
+        }
+        st = r3;
+    } else {
+        cr_sized_free((void **)&p70);
+        st = r2;
+    }
+
+    cr_sized_free((void **)&p68);
+    cr_cleanup_ptr8_clear_b(&img);
+    return st;
+}

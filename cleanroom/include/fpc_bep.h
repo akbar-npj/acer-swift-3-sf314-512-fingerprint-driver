@@ -917,5 +917,9 @@ int      cr_bitmap_filter_fir(cr_image *out, const cr_image *src, int n,
  * each pixel toward 64 by the mask byte.  dst = {.., data@8, w@0x10, h@0x14}. */
 int      cr_bitmap_filter_apply_s16(void *dst, const cr_image *src,
                                     const void *cfg);           /* 0x18003f360 */
+/* Weighted 2-D FFT filter of an int16 image: pad to W x H powers of two, fwd
+ * FFT, multiply by `weights` (W*H floats), inverse FFT, store back as int16. */
+int      cr_fft_weighted_apply_32af0(int *desc, const float *weights,
+                                     const void *cfg);          /* 0x180032af0 */
 
 #endif /* FPC_BEP_H */
