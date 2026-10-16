@@ -3930,6 +3930,55 @@ static void test_sep_gauss_blur_s16(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_sep_gauss_blur_s16\n");
 }
 
+/* ---- batch 69c: separable Gaussian blur, reflect borders (0x180013a30) --- */
+static void test_sep_gauss_blur_reflect(void)
+{
+    typedef int (WINAPI *fn_t)(void *, const void *, float, int);
+    fn_t v = (fn_t)fn_at(RVA(0x180013a30));
+    begin("cr_sep_gauss_blur_s16_reflect");
+    int bad = g_fail;
+
+    enum { MAXD = 40, NP = MAXD * MAXD };
+    static int16_t sv[NP], sc[NP], dv[NP], dc[NP];
+    static cr_image sdv, sdc, ddv, ddc;
+
+    for (int t = 0; t < 6000; t++) {
+        /* klen is kept odd: the reflect scratch is sized w-1+klen, so an even
+         * klen writes one sample past it (in the vendor as well as here). */
+        int klen = 1 + 2 * (int)(rnd() % 7);                 /* odd 1..13 */
+        int W = klen + (int)(rnd() % (MAXD - klen + 1));
+        int H = klen + (int)(rnd() % (MAXD - klen + 1));
+        float sigma = 0.5f + (float)(rnd() % 400) / 100.0f;
+
+        for (int i = 0; i < W * H; i++) {
+            int16_t x = (int16_t)rnd();
+            sv[i] = x; sc[i] = x; dv[i] = 0x7f; dc[i] = 0x7f;
+        }
+        memset(&sdv, 0, sizeof sdv); memset(&sdc, 0, sizeof sdc);
+        sdv.a = W; sdv.b = H; sdv.data = sv; sdv.w = W; sdv.h = H;
+        sdc.a = W; sdc.b = H; sdc.data = sc; sdc.w = W; sdc.h = H;
+        memset(&ddv, 0, sizeof ddv); memset(&ddc, 0, sizeof ddc);
+        ddv.a = W; ddv.b = H; ddv.data = dv; ddv.w = W; ddv.h = H;
+        ddc.a = W; ddc.b = H; ddc.data = dc; ddc.w = W; ddc.h = H;
+
+        /* exercise the guards (never an even klen — see above) */
+        switch (t & 15) {
+        case 1: ddv.a = W + 1; ddc.a = W + 1; break;    /* dst a != w */
+        case 2: sdv.offx = 1;  sdc.offx = 1;  break;    /* src offx != 0 */
+        case 3: sdv.b = H + 1; sdc.b = H + 1; break;    /* src b != h */
+        default: break;
+        }
+
+        int rv = v(&ddv, &sdv, sigma, klen);
+        int rc = cr_sep_gauss_blur_s16_reflect(&ddc, &sdc, sigma, klen);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv == 0)
+            cmp_buf("dst", (unsigned char *)dv, (unsigned char *)dc,
+                    (size_t)W * H * 2, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_sep_gauss_blur_s16_reflect\n");
+}
+
 /* ---- batch 72: filter chain -> linear layers -> 2-way softmax ---------- */
 static void test_linear_softmax2(void)
 {
@@ -10837,6 +10886,7 @@ int main(int argc, char **argv)
     test_fft_weighted_apply_32af0();
     test_obj_init_13340();
     test_harris_local_minmax_grid();
+    test_sep_gauss_blur_reflect();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

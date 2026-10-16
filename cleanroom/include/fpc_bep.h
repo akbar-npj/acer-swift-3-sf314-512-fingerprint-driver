@@ -869,6 +869,8 @@ int      cr_fir_norm_rows_s16(int16_t *out, const int16_t *in,
                               const int16_t *kern, int klen, int W, int H); /* 0x18001e400 */
 int      cr_sep_gauss_blur_s16(cr_image *dst, const cr_image *src,
                                float sigma, unsigned klen);       /* 0x1800278f0 */
+int      cr_sep_gauss_blur_s16_reflect(cr_image *dst, const cr_image *src,
+                                       float sigma, int klen);    /* 0x180013a30 */
 
 /* ---- batch 70: grid-bucketed keypoint sampler ---------------------------- *
  * An 8-byte keypoint record: a 4-byte payload at +0 (f0) and two int16 coords

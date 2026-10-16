@@ -2643,6 +2643,102 @@ int cr_sep_gauss_blur_s16(cr_image *dst, const cr_image *src, float sigma,
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180013a30 — separable Q15 Gaussian blur (int16) with reflect-101 borders.
+ *   int fn(cr_image *dst, const cr_image *src, float sigma, int klen)
+ *
+ * Both descriptors must be full views — the (a,b) pair equals the (w,h) pair
+ * and (offx,offy) is zero — otherwise returns 0x69.  Builds a klen-tap Q15
+ * kernel with cr_gaussian_window_q15, then runs a horizontal pass into dst and
+ * a vertical pass in place.  Each pass extends the row/column with `half =
+ * klen>>1` mirrored samples on both sides (reflect-101: the edge sample is
+ * repeated), convolves with the kernel, and rounds `(2*sum + 0x8000) >> 16`
+ * (32-bit wrapping accumulation).  `klen` is assumed odd; an even klen
+ * under-sizes the reflect scratch by one sample on each pass.  Returns 0x69 on
+ * the guard, or an allocator status.
+ * ------------------------------------------------------------------------ */
+int cr_sep_gauss_blur_s16_reflect(cr_image *dst, const cr_image *src,
+                                  float sigma, int klen)
+{
+    if (!(dst->a == dst->w && dst->b == dst->h && dst->offx == 0 && dst->offy == 0 &&
+          src->a == src->w && src->b == src->h && src->offx == 0 && src->offy == 0))
+        return 0x69;
+
+    const int w = src->w, h = src->h;
+    const int half = klen >> 1;
+    int16_t *d = (int16_t *)dst->data;
+    const int16_t *s = (const int16_t *)src->data;
+
+    int16_t *kern = NULL;
+    int st = cr_malloc_aligned16((void **)&kern, (size_t)((int64_t)klen << 1));
+    if (st != 0)
+        return st;
+    cr_gaussian_window_q15(kern, sigma, klen);
+
+    int16_t *buf = NULL;
+    st = cr_malloc_aligned16((void **)&buf, (size_t)((int64_t)(w - 1 + klen) << 1));
+    if (st != 0) {
+        cr_sized_free((void **)&kern);
+        return st;
+    }
+    if (h > 0) {
+        for (int row = 0; row < h; row++) {
+            const int16_t *sr = s + (size_t)row * w;
+            for (int j = 0; j < half; j++)
+                buf[j] = sr[half - 1 - j];
+            for (int j = 0; j < w; j++)
+                buf[half + j] = sr[j];
+            for (int j = 0; j < half; j++)
+                buf[half + w + j] = sr[w - 1 - j];
+            if (w > 0) {
+                int16_t *dr = d + (size_t)row * w;
+                for (int x = 0; x < w; x++) {
+                    uint32_t acc = 0;
+                    if (klen > 0) {
+                        for (int k = 0; k < klen; k++)
+                            acc += (uint32_t)((int32_t)kern[k] *
+                                              (int32_t)buf[x + k]);
+                        acc = acc * 2u + 0x8000u;
+                    }
+                    dr[x] = (int16_t)(acc >> 16);
+                }
+            }
+        }
+    }
+    cr_sized_free((void **)&buf);
+
+    st = cr_malloc_aligned16((void **)&buf, (size_t)((int64_t)(h - 1 + klen) << 1));
+    if (st != 0) {
+        cr_sized_free((void **)&kern);
+        return st;
+    }
+    if (w > 0) {
+        for (int col = 0; col < w; col++) {
+            for (int j = 0; j < half; j++)
+                buf[j] = d[(size_t)(half - 1 - j) * w + col];
+            for (int j = 0; j < h; j++)
+                buf[half + j] = d[(size_t)j * w + col];
+            for (int j = 0; j < half; j++)
+                buf[half + h + j] = d[(size_t)(h - 1 - j) * w + col];
+            if (h > 0) {
+                for (int y = 0; y < h; y++) {
+                    uint32_t acc = 0;
+                    if (klen > 0) {
+                        for (int k = 0; k < klen; k++)
+                            acc += (uint32_t)((int32_t)kern[k] *
+                                              (int32_t)buf[y + k]);
+                        acc = acc * 2u + 0x8000u;
+                    }
+                    d[(size_t)y * w + col] = (int16_t)(acc >> 16);
+                }
+            }
+        }
+    }
+    cr_sized_free((void **)&buf);
+    cr_sized_free((void **)&kern);
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x18002ee10 — filter chain -> stacked linear layers -> 2-way softmax.
  *   int fn(float *out, const int *desc, const int *in_desc, int off, int row)
  *
