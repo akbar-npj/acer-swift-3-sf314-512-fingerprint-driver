@@ -9051,6 +9051,108 @@ static void test_mask_inpaint_317a0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_mask_inpaint_317a0\n");
 }
 
+/* 0x18002f2e0 — sort + dispatch + copy-back wrapper for point selection. */
+static void test_pick_points_2f2e0(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, int *, const void *, const void *,
+                              int, int, const void *, unsigned, const void *);
+    v_t v = (v_t)fn_at(RVA(0x18002f2e0));
+    begin("cr_pick_points_2f2e0");
+    int bad = g_fail;
+
+    enum { MAXP = 48, MAXW = 512 };
+    static uint8_t xyv[2 * MAXP], xyc[2 * MAXP];
+    static float vlv[MAXP], vlc[MAXP];
+    static uint8_t oxv[2 * MAXP], oxc[2 * MAXP];
+    static float ovv[MAXP], ovc[MAXP];
+    static int dims[6];
+    static uint32_t mwords[MAXW];
+    static uint8_t cfg[0x40], iv[0x20], ic[0x20];
+
+    for (int t = 0; t < 3000; t++) {
+        int npts = 1 + (int)(rnd() % MAXP);
+        int margin = (int)(rnd() % 3u);
+        int W = 2 * margin + 1 + (int)(rnd() % 48u);
+        int H = 2 * margin + 1 + (int)(rnd() % 48u);
+        int NX = 1 + (int)(rnd() % 5u);
+        int NY = 1 + (int)(rnd() % 5u);
+        int weight = (int)(rnd() % 2000u);
+        int maxpts = npts + (int)(rnd() % 8u);
+        int want = (int)(rnd() % (unsigned)(npts + 3));
+        uint32_t seed = rnd();
+
+        for (int i = 0; i < 2 * npts; i++) {
+            uint8_t b;
+            unsigned k = (unsigned)(rnd() % 4u);
+            if (k == 0)      b = (uint8_t)i;
+            else if (k == 1) b = 0;
+            else             b = (uint8_t)rnd();
+            xyv[i] = xyc[i] = b;
+        }
+        for (int i = 0; i < npts; i++) {
+            unsigned k = (unsigned)(rnd() % 8u);
+            float f;
+            if (k == 0)      f = 0.0f;
+            else if (k == 1) f = -0.0f;
+            else if (k == 2) f = (float)(int)(rnd() % 5u);      /* ties */
+            else if (k == 3) { uint32_t u = 0x7fc00000u; memcpy(&f, &u, 4); } /* NaN */
+            else if (k == 4) { uint32_t u = 0x7f800000u; memcpy(&f, &u, 4); } /* +inf */
+            else if (k == 5) { uint32_t u = 0xff800000u; memcpy(&f, &u, 4); } /* -inf */
+            else { uint32_t u = (uint32_t)rnd(); memcpy(&f, &u, 4); }
+            vlv[i] = vlc[i] = f;
+        }
+        for (int i = 0; i < 2 * MAXP; i++) oxv[i] = oxc[i] = 0xa5;
+        for (int i = 0; i < MAXP; i++) {
+            uint32_t u = 0xdeadbeefu; memcpy(&ovv[i], &u, 4); memcpy(&ovc[i], &u, 4);
+        }
+        for (int i = 0; i < MAXW; i++) mwords[i] = rnd();
+
+        memset(dims, 0, sizeof dims);
+        dims[4] = W;
+        dims[5] = H;
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0x24] = 0;                      /* cr_keypoint_grid_sample */
+        *(int8_t *)(cfg + 0x08) = (int8_t)margin;
+        *(int16_t *)(cfg + 0x10) = (int16_t)maxpts;
+        *(int *)(cfg + 0x14) = weight;
+        cfg[0x25] = (uint8_t)NX;
+        cfg[0x26] = (uint8_t)NY;
+        mk_image(iv, mwords, 32, W, H, 0, 0);
+        mk_image(ic, mwords, 32, W, H, 0, 0);
+
+        int nv = 0x12345678, nc = 0x12345678;
+        int rv = v(oxv, ovv, &nv, xyv, vlv, npts, want, dims, seed, cfg);
+        int rc = cr_pick_points_2f2e0(oxc, ovc, &nc, xyc, vlc, npts, want,
+                                      dims, seed, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (nv != nc) mismatch("cnt", (u32)t, (u32)nv, (u32)nc);
+        cmp_buf("xy", oxv, oxc, sizeof oxv, (u32)t);
+        cmp_buf("val", (const unsigned char *)ovv,
+                (const unsigned char *)ovc, sizeof ovv, (u32)t);
+    }
+
+    /* npts == 0: returns 0 and leaves the outputs alone. */
+    for (int t = 0; t < 4; t++) {
+        memset(cfg, 0, sizeof cfg);
+        cfg[0x24] = (uint8_t)t;
+        *(int16_t *)(cfg + 0x10) = 8;
+        for (int i = 0; i < 2 * MAXP; i++) oxv[i] = oxc[i] = 0xa5;
+        for (int i = 0; i < MAXP; i++) {
+            uint32_t u = 0xdeadbeefu; memcpy(&ovv[i], &u, 4); memcpy(&ovc[i], &u, 4);
+        }
+        int nv = 0x12345678, nc = 0x12345678;
+        int rv = v(oxv, ovv, &nv, xyv, vlv, 0, 3, dims, 1u, cfg);
+        int rc = cr_pick_points_2f2e0(oxc, ovc, &nc, xyc, vlc, 0, 3,
+                                      dims, 1u, cfg);
+        if (rv != rc) { mismatch("z-ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (nv != nc) mismatch("z-cnt", (u32)t, (u32)nv, (u32)nc);
+        cmp_buf("z-xy", oxv, oxc, sizeof oxv, (u32)t);
+    }
+
+    if (g_fail == bad) end(); else printf("  FAIL cr_pick_points_2f2e0\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -12934,6 +13036,7 @@ int main(int argc, char **argv)
     test_norm_2bd60();
     test_pick_dispatch_16b90();
     test_mask_inpaint_317a0();
+    test_pick_points_2f2e0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

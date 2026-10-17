@@ -2789,3 +2789,75 @@ check_flags:
 
     return 0;
 }
+
+/* 0x18002f2e0 — point-selection wrapper around cr_pick_dispatch_16b90.
+ *
+ * int cr_pick_points_2f2e0(uint8_t *out_xy, float *out_val, int *out_n,
+ *                          const uint8_t *xy_tab, const float *val_tab,
+ *                          int npts, int want, const void *src,
+ *                          uint32_t seed, const void *cfg);
+ *
+ * Builds `npts` 8-byte records {int32 index; float value} from the value
+ * table, sorts them by value descending (cr_sort_records key_type 1, dir 1),
+ * then replaces the value word with the two coordinate bytes
+ * {int32 index; int16 x; int16 y} read from xy_tab[index*2].  The scratch
+ * array holds (int16)cfg[0x10] records.  The dispatcher then selects up to
+ * min(npts, want) records; on success the selected records are copied back to
+ * out_xy (2 bytes each) and out_val (the original float at index).  npts == 0
+ * returns 0 without allocating.  A negative npts skips the record fill (the
+ * vendor does the same) and is otherwise treated like a normal count.
+ */
+int cr_pick_points_2f2e0(uint8_t *out_xy, float *out_val, int *out_n,
+                         const uint8_t *xy_tab, const float *val_tab,
+                         int npts, int want, const void *src,
+                         uint32_t seed, const void *cfg)
+{
+    if (npts == 0)
+        return 0;
+
+    void *buf = NULL;
+    int16_t maxrec = *(const int16_t *)(cfg + 0x10);
+    int rc = cr_malloc_aligned16(&buf, (size_t)((int64_t)maxrec * 8));
+    if (rc != 0)
+        return rc;
+
+    cr_pt8 *rec = (cr_pt8 *)buf;
+
+    if (npts > 0) {
+        for (int i = 0; i < npts; i++) {
+            rec[i].w[0] = i;
+            rec[i].w[1] = *(const int32_t *)(val_tab + i);
+        }
+        rc = cr_sort_records(rec, npts, 1, 1);
+        if (rc != 0)
+            goto done;
+
+        for (int i = 0; i < npts; i++) {
+            int idx = rec[i].w[0];
+            rec[i].s.f4 = (int16_t)xy_tab[(size_t)idx * 2];
+            rec[i].s.f6 = (int16_t)xy_tab[(size_t)idx * 2 + 1];
+        }
+    } else {
+        rc = cr_sort_records(rec, npts, 1, 1);
+        if (rc != 0)
+            goto done;
+    }
+
+    int want_eff = (npts > want) ? want : npts;
+    rc = cr_pick_dispatch_16b90(rec, out_n, npts, want_eff, src, seed, cfg);
+    if (rc != 0)
+        goto done;
+
+    if (*out_n > 0) {
+        for (int i = 1; i <= *out_n; i++) {
+            int idx = rec[i - 1].w[0];
+            out_xy[2 * i - 2] = xy_tab[(size_t)idx * 2];
+            out_xy[2 * i - 1] = xy_tab[(size_t)idx * 2 + 1];
+            out_val[i - 1] = val_tab[idx];
+        }
+    }
+
+done:
+    cr_sized_free(&buf);
+    return rc;
+}

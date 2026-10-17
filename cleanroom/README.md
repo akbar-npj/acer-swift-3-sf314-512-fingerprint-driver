@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **319** (89.9% of functions, 127,904 B = 75.5% of bytes) |
+| rewritten + parity-verified | **320** (90.1% of functions, 128,368 B = 75.7% of bytes) |
 
-Seventy-six batches so far:
+Seventy-seven batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -338,6 +338,11 @@ Seventy-six batches so far:
     give-up check; mode 7 is a pair of transposed gap interpolators (scan rows
     / fill columns, then scan columns / fill rows) with 10-bit fixed-point
     steps and signed per-axis run caps (1 function).
+77. point-selection wrapper: `cr_pick_points_2f2e0` (464 B) in
+    `src/fpc_comp.c` builds `{index, value}` records, sorts them by value
+    descending, swaps the value for the two coordinate bytes, forwards to
+    `cr_pick_dispatch_16b90` with `want = min(npts, want)` and copies the
+    selected records back out as coordinates and original values (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

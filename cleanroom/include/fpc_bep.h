@@ -1035,5 +1035,14 @@ int      cr_pick_dispatch_16b90(void *pts, int *out_n, int npts, int want,
 int      cr_mask_inpaint_317a0(uint8_t *flag, const cr_image *img,
                                const cr_index_list *list,
                                const uint8_t *cfg);               /* 0x1800317a0 */
+/* Builds {index, float value} records from val_tab, sorts them by value
+ * descending, swaps the value word for the two bytes at xy_tab[index*2], runs
+ * cr_pick_dispatch_16b90 with want = min(npts, want) and copies the selected
+ * records back to out_xy / out_val.  The scratch array holds
+ * (int16)cfg[0x10] records; npts == 0 returns 0. */
+int      cr_pick_points_2f2e0(uint8_t *out_xy, float *out_val, int *out_n,
+                              const uint8_t *xy_tab, const float *val_tab,
+                              int npts, int want, const void *src,
+                              uint32_t seed, const void *cfg);   /* 0x18002f2e0 */
 
 #endif /* FPC_BEP_H */
