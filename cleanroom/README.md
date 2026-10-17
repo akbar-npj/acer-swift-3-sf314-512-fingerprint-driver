@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **326** (91.8% of functions, 133,936 B = 79.0% of bytes) |
+| rewritten + parity-verified | **329** (92.7% of functions, 139,808 B = 82.5% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Eighty-one batches so far:
+Eighty-two batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -373,6 +373,22 @@ Eighty-one batches so far:
     thresholds it into the mask and returns the mean of the non-`-1` scores;
     `cr_mscale_run_16d00` (240 B) allocates the map, fills it with `-1.0f` and
     dispatches to it (2 functions).
+82. masked illumination flattening + its dispatcher + block-variance gate:
+    `cr_masked_contrast_norm_2a620` (1760 B) builds a 64x-scaled int16 copy of
+    the source, subtracts a 7-tap Gaussian plane, repeats the same for the u16
+    mask, fits a single scale over the interior (`mask == 0xff`, 10-px border)
+    from the covariance of the two residuals, blends the flattened source back
+    with the mask-weighted mean and keeps the result only when the sharpness
+    metric does not drop below 80% of the input;
+    `cr_mask_norm_32580` (320 B) dispatches on `cfg[0x44]` (0 = no-op, 1 =
+    optional feature-extract step, 2 = flatten, else 0x69);
+    `cr_block_variance_run_42150` (3792 B) reduces each row to block means
+    (first/last block trimmed by 3, saturation flag when any pixel >= 255),
+    computes the masked-variance ratio of the 3-tap-blurred means, then
+    subtracts the block residual, differentiates at the block boundaries
+    (1/4/3-tap by ratio), median-filters five rows, integrates along the
+    columns and smooths with a 7-tap FIR, optionally preceded by a box median
+    of width `cfg[8]` (3 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

@@ -3405,3 +3405,573 @@ fail:
     return (int32_t)r;
 }
 
+/* 0x18002a620 — masked illumination flattening with a sharpness accept gate.
+ *
+ *   int cr_masked_contrast_norm_2a620(cr_image *src, void *params,
+ *                                     cr_image *mask);
+ *
+ * `src` is a full-view f32 image (w/h at +0x10/+0x14, data at +8); `params`
+ * supplies the u16 mask at +0x58 and a flag byte at +0x8; `mask` is a u8
+ * image whose 0xff bytes mark the *valid* (unmasked) pixels.
+ *
+ * Pipeline (0x18002a620..0x18002ac2e):
+ *   1. Four descriptors i1..i4 (i1/i2 int16, i3/i4 f32) plus one 4-block pool
+ *      (n*2, n*2, n*4, n*4 bytes).
+ *   2. n > 0: src*64 -> i1 (int16 truncation); i2 = gauss7(i1, sigma 0.7);
+ *      i4 = i1 - i2 (image residual); i1 = u16 mask; i2 = gauss7(i1, 0.7);
+ *      i3 = i1 - i2 (mask residual).  When flag < 1 the mask residual is
+ *      rounded back into i1 (so the "mask" used below becomes the residual).
+ *      n <= 0: just the two gauss calls.
+ *   3. Interior 10..W-11 x 10..H-11 pixels with mask8 == 0xff accumulate
+ *      count / sum / sum-of-squares of the mask residual; every other pixel
+ *      zeroes both residuals.
+ *   4. scale = (cov / (count*sumsq - sum^2)) / 64, where
+ *      cov = sum_i (maskres_i*count - sum) * imres_i; a zero denominator
+ *      falls back to 1/64.
+ *   5. in_metric = masked sharpness of src; out_i = clamp((src_i -
+ *      (mask16_i - mean(mask16))*scale)*mask8_i + (255-mask8_i)*max(src)) / 255
+ *      into i4; out_metric = masked sharpness of i4.  Only when
+ *      (int)(out_metric*0.8f) <= in_metric is i4 copied back into src.
+ * Returns 0 on success, or the first failing callee status.
+ */
+int cr_masked_contrast_norm_2a620(cr_image *src, void *params, cr_image *mask)
+{
+    static const float C64  = 64.0f;        /* 0x18008bc04 */
+    static const float C255 = 255.0f;       /* 0x18008bc00 */
+    static const float C70  = 0.7f;         /* 0x18008bc40 */
+    static const float C1_64 = 0.015625f;   /* 0x18008bc10 */
+    static const float C80  = 0.8f;         /* 0x18008bc44 */
+
+    int W = src->w;
+    int H = src->h;
+    float *sdata = (float *)src->data;
+    int16_t *mask_u16 = *(int16_t **)((uint8_t *)params + 0x58);
+    int8_t flag = *(int8_t *)((uint8_t *)params + 0x8);
+    uint8_t *mask8 = (uint8_t *)mask->data;
+    int n = H * W;
+
+    cr_image i1, i2, i3, i4;
+    int r = cr_image_set(&i1, NULL, W, H);
+    if (r != 0) return r;
+    r = cr_image_set(&i2, NULL, W, H);
+    if (r != 0) return r;
+    r = cr_image_set(&i3, NULL, W, H);
+    if (r != 0) return r;
+    r = cr_image_set(&i4, NULL, W, H);
+    if (r != 0) return r;
+
+    void *pool[4];
+    uint32_t pr = cr_pool_alloc4(pool, &i1.data, (uint32_t)(n * 2),
+                                 &i2.data, (uint32_t)(n * 2),
+                                 &i3.data, (uint32_t)(n * 4),
+                                 &i4.data, (uint32_t)(n * 4));
+    if (pr != 0)
+        return (int)pr;
+
+    int16_t *m16 = (int16_t *)i1.data;
+    int16_t *g16 = (int16_t *)i2.data;
+    float   *mres = (float *)i3.data;
+    float   *ires = (float *)i4.data;
+
+    if (n > 0) {
+        for (int i = 0; i < n; i++)
+            m16[i] = (int16_t)(int32_t)(sdata[i] * C64);
+
+        r = cr_gauss_fir7_apply(&i2, &i1, 0.0f, 0.0f, C70);
+        if (r != 0) goto done;
+
+        for (int i = 0; i < n; i++)
+            ires[i] = (float)m16[i] - (float)g16[i];
+
+        for (int i = 0; i < n; i++)
+            m16[i] = mask_u16[i];
+
+        r = cr_gauss_fir7_apply(&i2, &i1, 0.0f, 0.0f, C70);
+        if (r != 0) goto done;
+
+        for (int i = 0; i < n; i++)
+            mres[i] = (float)m16[i] - (float)g16[i];
+
+        if (flag < 1) {
+            for (int i = 0; i < n; i++)
+                m16[i] = (int16_t)(int32_t)mres[i];
+        }
+    } else {
+        r = cr_gauss_fir7_apply(&i2, &i1, 0.0f, 0.0f, C70);
+        if (r != 0) goto done;
+        r = cr_gauss_fir7_apply(&i2, &i1, 0.0f, 0.0f, C70);
+        if (r != 0) goto done;
+    }
+
+    {
+        float scale = C1_64;
+        if (H > 0) {
+            int   count = 0;
+            float sum = 0.0f, sumsq = 0.0f;
+
+            for (int y = 0; y < H; y++) {
+                int row = y * W;
+                for (int x = 0; x < W; x++) {
+                    if ((int8_t)mask8[row + x] == -1 && y > 9 && y < H - 10
+                        && x > 9 && x < W - 10) {
+                        float v = mres[row + x];
+                        count++;
+                        sum += v;
+                        sumsq += v * v;
+                    } else {
+                        mres[row + x] = 0.0f;
+                        ires[row + x] = 0.0f;
+                    }
+                }
+            }
+
+            float cnt = (float)count;
+            float cov = 0.0f;
+            if (n > 0) {
+                for (int i = 0; i < n; i++)
+                    cov += (mres[i] * cnt - sum) * ires[i];
+            }
+            float den = sumsq * cnt - sum * sum;
+            if (den == 0.0f)
+                scale = C1_64;
+            else
+                scale = (cov / den) * C1_64;
+        }
+
+        int in_metric = 0;
+        r = cr_masked_sharpness_f32(&in_metric,
+                                    (const float *const *)&src->data,
+                                    W, H, (void *const *)&mask->data);
+        if (r != 0) goto done;
+
+        if (n > 0) {
+            float sum_mask = 0.0f, max_src = 0.0f;
+            for (int i = 0; i < n; i++) {
+                sum_mask += (float)m16[i];
+                if (sdata[i] > max_src)
+                    max_src = sdata[i];
+            }
+            float mean_mask = sum_mask / (float)n;
+
+            for (int i = 0; i < n; i++) {
+                unsigned mk = mask8[i];
+                float v = ((sdata[i] - ((float)m16[i] - mean_mask) * scale)
+                           * (float)mk + (float)(int)(0xff - mk) * max_src)
+                          / C255;
+                if (v > 0.0f) {
+                    if (v >= C255)
+                        v = C255;
+                } else {
+                    v = 0.0f;
+                }
+                ires[i] = v;
+            }
+        }
+
+        int out_metric = 0;
+        r = cr_masked_sharpness_f32(&out_metric,
+                                    (const float *const *)&i4.data,
+                                    i4.w, i4.h, (void *const *)&mask->data);
+        if (r == 0 && (int32_t)((float)out_metric * C80) <= in_metric) {
+            int cr2 = (int)cr_image_copy_u32(src, &i4);
+            if (cr2 != 0) {
+                cr_sized_free_if((void **)pool);
+                return cr2;
+            }
+            r = cr2;
+        }
+    }
+
+done:
+    cr_sized_free_if((void **)pool);
+    return r;
+}
+
+/* 0x180032580 — mask-build + illumination-flatten dispatcher.
+ *
+ *   int cr_mask_norm_32580(cr_image *src, void *ctx, void *a3,
+ *                          const cr_image *packed, const void *a5,
+ *                          int idx, const uint8_t *cfg, int flag);
+ *
+ *   mode = cfg[0x44]
+ *   mode 0 -> return 0
+ *   mode 1 -> copy_image_fields(a3, ctx); mask = bitmap_build_masked(packed,cfg);
+ *             if (flag == 0 && *(int*)(a5+4) < 1) {
+ *                 h = *(void**)(a3 + 0x38 + idx*8);
+ *                 if (!h) { r = 0x3ec; goto out; }
+ *                 r = feature_extract_step_2db20(ctx, src, h, packed, cfg+0x44);
+ *                 if (r) goto out;
+ *             }
+ *   mode 2 -> copy_image_fields(a3, ctx); mask = bitmap_build_masked(packed,cfg);
+ *   else   -> return 0x69
+ *   r = masked_contrast_norm_2a620(src, ctx, &mask);
+ * out: cleanup_ptr8_a(&mask); return r;
+ *
+ * `ctx+0x58` is the u16 mask buffer filled by copy_image_fields; `a3+0x28`
+ * holds the int16 image descriptor that feeds it and `a3+0x38+idx*8` the
+ * optional feature-extract handle.
+ */
+int cr_mask_norm_32580(cr_image *src, void *ctx, void *a3,
+                       const cr_image *packed, const void *a5,
+                       int idx, const uint8_t *cfg, int flag)
+{
+    int8_t mode = *(const int8_t *)(cfg + 0x44);
+    cr_image mask = { 0 };
+    int r;
+
+    if (mode == 1) {
+        r = cr_copy_image_fields(a3, ctx);
+        if (r != 0)
+            goto out;
+        r = cr_bitmap_build_masked(&mask, packed, cfg);
+        if (r != 0)
+            goto out;
+        if (flag == 0 && *(const int32_t *)((const uint8_t *)a5 + 4) < 1) {
+            void *h = *(void **)((uint8_t *)a3 + 0x38 + (long)idx * 8);
+            if (h == NULL) {
+                r = 0x3ec;
+                goto out;
+            }
+            r = cr_feature_extract_step_2db20(ctx, src, h, packed, cfg + 0x44);
+            if (r != 0)
+                goto out;
+        }
+    } else if (mode == 2) {
+        r = cr_copy_image_fields(a3, ctx);
+        if (r != 0)
+            goto out;
+        r = cr_bitmap_build_masked(&mask, packed, cfg);
+        if (r != 0)
+            goto out;
+    } else {
+        return (mode == 0) ? 0 : 0x69;
+    }
+
+    r = cr_masked_contrast_norm_2a620(src, ctx, &mask);
+
+out:
+    cr_cleanup_ptr8_a(&mask);
+    return r;
+}
+
+/* 0x180042150 — block-downsample variance-ratio gate + adaptive smoothing.
+ *
+ *   int cr_block_variance_run_42150(cr_image *img, const uint8_t *cfg,
+ *                                   int block_w, float *result);
+ *
+ * w must be an exact multiple of block_w and strictly greater than it, so
+ * ncols = w/block_w >= 2.  Each row is reduced to ncols block means (the first
+ * block skips its first 3 pixels, the last its last 3; the divisor is
+ * block_w-3 for those two blocks and block_w otherwise) together with a
+ * saturation flag that is 1 when any pixel of the block is >= 255.0f.  The
+ * block means are box-blurred horizontally (3-tap) and the ratio
+ *
+ *     ratio = masked_variance(means - blurred) / masked_variance(blurred)
+ *
+ * is written to *result (0 when the denominator is not positive).  The mask
+ * byte 0 means "count this sample", and the mask image is ncols wide.
+ *
+ * When cfg[0] != 0 and ratio reaches cfg+4 (threshold), the block residual is
+ * subtracted from the source, differentiated at the block boundaries (1-tap
+ * when ratio < 0.5, 4-tap when >= 0.5 and >= 0.07, 3-tap below 0.07), median
+ * filtered across five rows, integrated along the columns with a running sum
+ * and added back.  Pixels that were saturated are forced to 255.0f.
+ *
+ * Finally the image is smoothed and written back to img:
+ *   cfg[8] <= 2: clamp to [0,255], then a 7-tap FIR with sigma = cfg+0xc.
+ *   cfg[8] >  2: quantise to bytes, box-median of width cfg[8] (must be odd),
+ *                copy back, then the same FIR.
+ * A non-positive sigma stops after the clamping/median step.
+ */
+int cr_block_variance_run_42150(cr_image *img, const uint8_t *cfg,
+                                int block_w, float *result)
+{
+    cr_image im[9] = { { 0 } };
+    float *p0, *p1, *p2, *p3, *p4, *p5;
+    uint8_t *u6, *u7, *u8;
+    float *imgd;
+    const float *src;
+    int w, h, ncols, bw3, total, i, r, c, x, j, k, pass;
+    int rc = 0;
+    float ratio = 0.0f, thr, sigma;
+
+    if (!img)
+        return 0x69;
+    w = img->w;
+    h = img->h;
+    if (block_w < 1)
+        return 0x69;
+    if (w % block_w != 0)
+        return 0x69;
+    if (w <= block_w)
+        return 0x69;
+    ncols = w / block_w;
+
+    rc = cr_image_alloc_f32(&im[0], w, h);
+    if (rc != 0) goto cleanup;
+    rc = cr_image_alloc_f32(&im[1], ncols - 1, h);
+    if (rc != 0) goto cleanup;
+    rc = cr_image_alloc_f32(&im[2], ncols - 1, h);
+    if (rc != 0) goto cleanup;
+    rc = cr_image_alloc_f32(&im[3], ncols, h);
+    if (rc != 0) goto cleanup;
+    rc = cr_image_alloc_f32(&im[4], ncols, h);
+    if (rc != 0) goto cleanup;
+    rc = cr_image_alloc_f32(&im[5], ncols, h);
+    if (rc != 0) goto cleanup;
+    rc = cr_image_alloc_u8((int *)&im[6], w, h);
+    if (rc != 0) goto cleanup;
+    rc = cr_image_alloc_u8((int *)&im[7], w, h);
+    if (rc != 0) goto cleanup;
+    rc = cr_image_alloc_u8((int *)&im[8], ncols, h);
+    if (rc != 0) goto cleanup;
+
+    p0 = (float *)im[0].data;
+    p1 = (float *)im[1].data;
+    p2 = (float *)im[2].data;
+    p3 = (float *)im[3].data;
+    p4 = (float *)im[4].data;
+    p5 = (float *)im[5].data;
+    u6 = (uint8_t *)im[6].data;
+    u7 = (uint8_t *)im[7].data;
+    u8 = (uint8_t *)im[8].data;
+    imgd = (float *)img->data;
+    src = (const float *)img->data;
+
+    /* pass 1: per-block mean and saturation flag. */
+    bw3 = block_w - 3;
+    for (r = 0; r < h; r++) {
+        int rowbase = r * w;
+        int obase = r * ncols;
+        for (c = 0; c < ncols; c++) {
+            int start = (c == 0) ? 3 : 0;
+            int end = (c == ncols - 1) ? bw3 : block_w;
+            int div = (c == 0 || c == ncols - 1) ? bw3 : block_w;
+            float sum = 0.0f;
+
+            for (x = start; x < end; x++)
+                sum += src[rowbase + c * block_w + x];
+            p3[obase + c] = sum / (float)div;
+
+            u8[obase + c] = 0;
+            for (x = 0; x < block_w; x++)
+                if (src[rowbase + c * block_w + x] >= 255.0f)
+                    u8[obase + c] = 1;
+        }
+    }
+
+    cr_box_blur_h_f32(&p4, p3, ncols, h, 3);
+    total = h * ncols;
+    for (i = 0; i < total; i++)
+        p5[i] = p3[i] - p4[i];
+
+    {
+        float den = cr_masked_variance(p4, ncols, h,
+                                       (const uint8_t *const *)&u8);
+        if (0.0f < den)
+            ratio = cr_masked_variance(p5, ncols, h,
+                                       (const uint8_t *const *)&u8) / den;
+    }
+    *result = ratio;
+
+    if (cfg[0] == 0)
+        goto cleanup;
+
+    total = h * w;
+    thr = *(const float *)(cfg + 4);
+
+    if (!(thr <= ratio && ratio != thr)) {
+        if (total < 1)
+            goto mode_dispatch;
+        for (i = 0; i < total; i++)
+            p0[i] = src[i];
+        goto quantize;
+    }
+
+    /* ratio >= threshold: refine the residual and smooth adaptively. */
+    if (0.03f <= ratio) {
+        int win = (0.05f <= ratio) ? 15 : 5;
+        cr_box_blur_h_f32(&p4, p3, ncols, h, win);
+        for (i = 0; i < h * ncols; i++)
+            p5[i] = p3[i] - p4[i];
+    }
+
+    if (h < 1)
+        goto mode_dispatch;
+
+    for (r = 0; r < h; r++) {
+        int rowbase = r * w;
+        int obase = r * ncols;
+        for (c = 0; c < ncols; c++)
+            for (x = 0; x < block_w; x++)
+                p0[rowbase + c * block_w + x] =
+                    src[rowbase + c * block_w + x] - p5[obase + c];
+    }
+
+    if (0.07f <= ratio) {
+        if (ratio < 0.5f) {
+            for (r = 0; r < h; r++) {
+                int rowbase = r * w;
+                int obase = r * (ncols - 1);
+                for (j = 0; j < ncols - 1; j++) {
+                    int b = rowbase + (j + 1) * block_w;
+                    p1[obase + j] = p0[b] - p0[b - 1];
+                }
+            }
+        } else {
+            for (r = 0; r < h; r++) {
+                int rowbase = r * w;
+                int obase = r * (ncols - 1);
+                for (j = 0; j < ncols - 1; j++) {
+                    int b = rowbase + (j + 1) * block_w;
+                    p1[obase + j] =
+                        ((p0[b + 1] + p0[b]) - p0[b - 1] - p0[b - 2]) * 0.5f;
+                }
+            }
+        }
+    } else {
+        for (r = 0; r < h; r++) {
+            int rowbase = r * w;
+            int obase = r * (ncols - 1);
+            for (j = 0; j < ncols - 1; j++) {
+                int b = rowbase + (j + 1) * block_w;
+                p1[obase + j] =
+                    (((p0[b] * 3.0f - p0[b - 1] * 3.0f) + p0[b - 2])
+                     - p0[b + 1]) * 0.5f;
+            }
+        }
+    }
+
+    /* five-row median of the derivative (descending 4-pass bubble sort). */
+    for (j = 0; j < ncols - 1; j++) {
+        int obase = j;
+        for (r = 0; r < h; r++) {
+            float t[5];
+            for (k = 0; k < 5; k++) {
+                int rr = r + k;
+                int ri;
+                if (rr < 2) rr = 2;
+                ri = rr - 2;
+                if (h < rr) ri = h - 1;
+                t[k] = p1[ri * (ncols - 1) + obase];
+            }
+            for (pass = 0; pass < 4; pass++)
+                for (k = 0; k < 4; k++)
+                    if (t[k] < t[k + 1]) {
+                        float tmp = t[k];
+                        t[k] = t[k + 1];
+                        t[k + 1] = tmp;
+                    }
+            p2[r * (ncols - 1) + obase] = t[2];
+        }
+    }
+
+    /* integrate the median along the columns and add it to the residual. */
+    for (r = 0; r < h; r++) {
+        int obase = r * (ncols - 1);
+        int c2 = (ncols - 2) / 2;
+        int c3 = (ncols - 3) / 2;
+        float f;
+
+        if ((ncols & 1) == 0) {
+            f = p2[obase + c2] * -0.5f;
+            if (c2 > -1)
+                for (k = 0; k <= c2; k++)
+                    f += p2[obase + k];
+        } else if (c3 < 0) {
+            f = 0.0f;
+        } else {
+            f = 0.0f;
+            for (k = 0; k <= c3; k++)
+                f += p2[obase + k];
+        }
+        for (c = 0; c < ncols; c++) {
+            int base = r * w + c * block_w;
+            for (x = 0; x < block_w; x++)
+                p0[base + x] += f;
+            if (c + 1 == ncols)
+                break;
+            f -= p2[obase + c];
+        }
+    }
+
+    for (i = 0; i < total; i++)
+        if (src[i] >= 255.0f)
+            p0[i] = 255.0f;
+
+quantize:
+    if (cfg[8] > 2) {
+        for (i = 0; i < total; i++) {
+            float f = p0[i] + 0.5f;
+            uint8_t v = 0;
+            if (0.0f < f) {
+                v = 0xff;
+                if (f < 255.0f)
+                    v = (uint8_t)(int)f;
+            }
+            u7[i] = v;
+        }
+        goto boxmedian;
+    }
+
+    for (i = 0; i < total; i++) {
+        float f = p0[i];
+        if (0.0f < f) {
+            if (255.0f <= f)
+                f = 255.0f;
+        } else {
+            f = 0.0f;
+        }
+        imgd[i] = f;
+    }
+    if (*(const float *)(cfg + 0xc) <= 0.0f)
+        goto cleanup;
+    goto fir7;
+
+mode_dispatch:
+    if (cfg[8] < 3) {
+        sigma = *(const float *)(cfg + 0xc);
+        if (sigma <= 0.0f)
+            goto cleanup;
+        rc = cr_fir7_image_u8(&im[6], &im[7], sigma);
+        goto cleanup;
+    }
+
+boxmedian:
+    {
+        uint16_t n = (uint16_t)cfg[8];
+        if (n < 2) {
+            rc = 0x69;
+            goto cleanup;
+        }
+        if ((n & 1) == 0) {
+            rc = 0x69;
+            goto cleanup;
+        }
+        rc = (int)cr_box_median_u8(&im[6], &im[7], n);
+        if (rc != 0)
+            goto cleanup;
+    }
+    for (i = 0; i < total; i++)
+        imgd[i] = (float)u6[i];
+    sigma = *(const float *)(cfg + 0xc);
+    if (sigma <= 0.0f)
+        goto cleanup;
+    if (total > 0)
+        goto fir7;
+    rc = cr_fir7_image_u8(&im[6], &im[7], sigma);
+    goto cleanup;
+
+fir7:
+    for (i = 0; i < total; i++)
+        u7[i] = (uint8_t)(int8_t)(int)imgd[i];
+    rc = cr_fir7_image_u8(&im[6], &im[7], *(const float *)(cfg + 0xc));
+    if (rc != 0)
+        goto cleanup;
+    for (i = 0; i < total; i++)
+        imgd[i] = (float)u6[i];
+
+cleanup:
+    cr_free_9slot_clear6(im);
+    return rc;
+}

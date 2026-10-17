@@ -1094,4 +1094,27 @@ typedef struct {
 int      cr_feat_pack_0e850(cr_image *src, cr_feat_obj *obj,
                             const uint8_t *cfg);                 /* 0x18000e850 */
 
+/* 0x18002a620 — masked illumination flattening.  `src` is a full-view f32
+ * image (normalised in place when the sharpness gate accepts); `params` holds
+ * the u16 mask at +0x58 and a flag byte at +0x8; `mask` is a u8 image whose
+ * 0xff bytes mark valid pixels.  See src/fpc_comp.c for the pipeline. */
+int      cr_masked_contrast_norm_2a620(cr_image *src, void *params,
+                                       cr_image *mask);         /* 0x18002a620 */
+
+/* 0x180032580 — mask-build + illumination-flatten dispatcher (mode byte at
+ * cfg+0x44: 0 = no-op, 1 = optional feature-extract step, 2 = flatten only,
+ * else 0x69).  See src/fpc_comp.c. */
+int      cr_mask_norm_32580(cr_image *src, void *ctx, void *a3,
+                            const cr_image *packed, const void *a5,
+                            int idx, const uint8_t *cfg,
+                            int flag);                        /* 0x180032580 */
+
+/* 0x180042150 — block-downsample variance-ratio gate + adaptive smoothing.
+ * `cfg`: +0x0 enable byte, +0x4 float threshold, +0x8 mode byte (<=2: FIR
+ * only; >2: box median of that odd width then FIR), +0xc float sigma.  The
+ * block means are ncols = w/block_w wide; see src/fpc_comp.c for the full
+ * pipeline.  `img` is modified in place. */
+int      cr_block_variance_run_42150(cr_image *img, const uint8_t *cfg,
+                                     int block_w, float *result); /* 0x180042150 */
+
 #endif /* FPC_BEP_H */

@@ -13142,6 +13142,234 @@ static void test_mscale_run_16d00(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_mscale_run_16d00\n");
 }
 
+/* ---- 0x18002a620: masked illumination flattening ------------------------- */
+static void test_masked_contrast_norm_2a620(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *);
+    v_t v = (v_t)fn_at(RVA(0x18002a620));
+    begin("cr_masked_contrast_norm_2a620");
+    int bad = g_fail;
+
+    enum { MW = 44, MH = 44 };
+    static float   sv[MW * MH], sc[MW * MH];
+    static int16_t mv[MW * MH], mc[MW * MH];
+    static uint8_t bv[MW * MH], bc[MW * MH];
+    static uint8_t pv[0x60], pc[0x60];
+    static uint8_t iv[0x20], ic[0x20], kv[0x20], kc[0x20];
+
+    for (int t = 0; t < 2500; t++) {
+        int W = 12 + (int)(rnd() % 33u);
+        int H = 12 + (int)(rnd() % 33u);
+        int n = W * H;
+        int8_t flag = (int8_t)((int)(rnd() % 3u) - 1);
+
+        for (int i = 0; i < n; i++) {
+            unsigned k = (unsigned)(rnd() % 8u);
+            float f;
+            if (k == 0)      f = 0.0f;
+            else if (k == 1) f = 255.0f;
+            else if (k == 2) f = (float)(int)(rnd() % 300u) - 20.0f;
+            else             f = (float)(rnd() % 2560u) / 10.0f;
+            sv[i] = f; sc[i] = f;
+            int16_t m = (int16_t)((int)(rnd() % 2001u) - 1000);
+            mv[i] = m; mc[i] = m;
+            uint8_t b = (rnd() % 3u) ? 0xff : (uint8_t)rnd();
+            bv[i] = b; bc[i] = b;
+        }
+
+        memset(pv, 0, sizeof pv); memset(pc, 0, sizeof pc);
+        *(int8_t *)(pv + 0x08) = flag; *(int8_t *)(pc + 0x08) = flag;
+        *(void **)(pv + 0x58) = mv;    *(void **)(pc + 0x58) = mc;
+
+        memset(iv, 0, 0x20); memset(ic, 0, 0x20);
+        *(int *)(iv + 0x00) = W; *(int *)(iv + 0x04) = H;
+        *(void **)(iv + 0x08) = sv;
+        *(int *)(iv + 0x10) = W; *(int *)(iv + 0x14) = H;
+        *(int *)(ic + 0x00) = W; *(int *)(ic + 0x04) = H;
+        *(void **)(ic + 0x08) = sc;
+        *(int *)(ic + 0x10) = W; *(int *)(ic + 0x14) = H;
+        memset(kv, 0, 0x20); memset(kc, 0, 0x20);
+        *(int *)(kv + 0x00) = W; *(int *)(kv + 0x04) = H;
+        *(void **)(kv + 0x08) = bv;
+        *(int *)(kv + 0x10) = W; *(int *)(kv + 0x14) = H;
+        *(int *)(kc + 0x00) = W; *(int *)(kc + 0x04) = H;
+        *(void **)(kc + 0x08) = bc;
+        *(int *)(kc + 0x10) = W; *(int *)(kc + 0x14) = H;
+
+        int rv = v(iv, pv, kv);
+        int rc = cr_masked_contrast_norm_2a620((cr_image *)ic, pc,
+                                               (cr_image *)kc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("src", (const u8 *)sv, (const u8 *)sc, (size_t)n * 4, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_contrast_norm_2a620\n");
+}
+
+/* ---- 0x180032580: mask-build + flatten dispatcher ------------------------ */
+static void test_mask_norm_32580(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *, void *, const void *,
+                              int, const void *, int);
+    v_t v = (v_t)fn_at(RVA(0x180032580));
+    begin("cr_mask_norm_32580");
+    int bad = g_fail;
+
+    enum { MW = 40, MH = 40 };
+    static float   sv[MW * MH], sc[MW * MH];
+    static uint8_t pv[MW * MH], pc[MW * MH];
+    static int16_t mdv[MW * MH], mdc[MW * MH];
+    static uint8_t ctxv[0x80], ctxc[0x80];
+    static uint8_t a3v[0x60], a3c[0x60];
+    static uint8_t a5v[0x10], a5c[0x10];
+    static uint8_t cfgv[0x80], cfgc[0x80];
+    static uint8_t iv[0x20], ic[0x20], kv[0x20], kc[0x20], jv[0x20], jc[0x20];
+    static uint8_t dv[0x20], dc[0x20];
+
+    for (int t = 0; t < 2500; t++) {
+        int W = 16 + (int)(rnd() % 25u);
+        int H = 16 + (int)(rnd() % 25u);
+        int n = W * H;
+        int mode;
+        switch (t % 6) {
+        case 0:  mode = 0; break;
+        case 1:  mode = 2; break;
+        case 2:  mode = 3 + (int)(rnd() % 3u); break;
+        case 3:  mode = 1; break;
+        case 4:  mode = 1; break;
+        default: mode = 1; break;
+        }
+        int flag = (int)(rnd() % 2u);
+        int a5val = (int)(rnd() % 3u) - 1;
+        int hnull = (int)(rnd() % 2u);
+        /* never let mode 1 reach feature_extract_step_2db20 with a dummy
+         * handle: either the handle is NULL (0x3ec) or the inner gate is shut */
+        if (mode == 1 && !hnull) {
+            if ((t & 1) == 0) flag = 1;
+            else              a5val = 1;
+        }
+
+        for (int i = 0; i < n; i++) {
+            float f = (float)(rnd() % 2560u) / 10.0f;
+            sv[i] = f; sc[i] = f;
+            uint8_t b = (uint8_t)rnd();
+            pv[i] = b; pc[i] = b;
+            int16_t m = (int16_t)((int)(rnd() % 2001u) - 1000);
+            mdv[i] = m; mdc[i] = m;
+        }
+
+        memset(ctxv, 0, sizeof ctxv); memset(ctxc, 0, sizeof ctxc);
+        *(void **)(ctxv + 0x58) = mdv; *(void **)(ctxc + 0x58) = mdc;
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+        memset(iv, 0, 0x20); memset(ic, 0, 0x20);
+        *(int *)(iv + 0x00) = W; *(int *)(iv + 0x04) = H;
+        *(void **)(iv + 0x08) = mdv;
+        *(int *)(iv + 0x10) = W; *(int *)(iv + 0x14) = H;
+        *(int *)(ic + 0x00) = W; *(int *)(ic + 0x04) = H;
+        *(void **)(ic + 0x08) = mdc;
+        *(int *)(ic + 0x10) = W; *(int *)(ic + 0x14) = H;
+        *(void **)(a3v + 0x28) = iv; *(void **)(a3c + 0x28) = ic;
+        if (!hnull) {
+            *(void **)(a3v + 0x38 + (long)(t % 3) * 8) = a3v;
+            *(void **)(a3c + 0x38 + (long)(t % 3) * 8) = a3c;
+        }
+
+        memset(a5v, 0, sizeof a5v); memset(a5c, 0, sizeof a5c);
+        *(int *)(a5v + 4) = a5val; *(int *)(a5c + 4) = a5val;
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[0x44] = (uint8_t)mode; cfgc[0x44] = (uint8_t)mode;
+        float sig = (float)(rnd() % 50u) / 10.0f + 0.1f;
+        *(float *)(cfgv + 0x48) = sig; *(float *)(cfgc + 0x48) = sig;
+
+        memset(kv, 0, 0x20); memset(kc, 0, 0x20);
+        *(int *)(kv + 0x00) = W; *(int *)(kv + 0x04) = H;
+        *(void **)(kv + 0x08) = pv;
+        *(int *)(kv + 0x10) = W; *(int *)(kv + 0x14) = H;
+        *(int *)(kc + 0x00) = W; *(int *)(kc + 0x04) = H;
+        *(void **)(kc + 0x08) = pc;
+        *(int *)(kc + 0x10) = W; *(int *)(kc + 0x14) = H;
+
+        int idx = t % 3;
+        int rv = v(iv, ctxv, a3v, kv, a5v, idx, cfgv, flag);
+        int rc = cr_mask_norm_32580((cr_image *)ic, ctxc, a3c,
+                                    (const cr_image *)kc, a5c, idx, cfgc, flag);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("src", (const u8 *)sv, (const u8 *)sc, (size_t)n * 4, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_mask_norm_32580\n");
+}
+
+/* ---- 0x180042150: block variance ratio + adaptive smoothing ------------ */
+static void test_block_variance_run_42150(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, int, float *);
+    v_t v = (v_t)fn_at(RVA(0x180042150));
+    begin("cr_block_variance_run_42150");
+    int bad = g_fail;
+
+    enum { MAXW = 48, MAXH = 40 };
+    static float iv[MAXW * MAXH], ic[MAXW * MAXH];
+    static uint8_t cfgv[0x40], cfgc[0x40];
+
+    for (int t = 0; t < 3000; t++) {
+        int bw = 2 + (int)(rnd() % 5u);          /* block_w = 2..6 */
+        int nblk = 2 + (int)(rnd() % 4u);        /* ncols   = 2..5 */
+        int W = bw * nblk;
+        int H = 2 + (int)(rnd() % 24u);
+        int n = W * H;
+        int flavour = (int)(rnd() % 3u);
+
+        for (int i = 0; i < n; i++) {
+            float f;
+            if (flavour == 0) {
+                f = (float)((i % W) * 4 + (i / W));
+                f += (float)(rnd() % 3u) * 0.5f;
+            } else if (flavour == 1) {
+                f = (float)(rnd() % 2560u) / 10.0f;
+            } else {
+                f = (rnd() % 5u == 0) ? 255.0f : (float)(rnd() % 256u);
+            }
+            iv[i] = f; ic[i] = f;
+        }
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        uint8_t en = (uint8_t)((rnd() % 4u) ? 1 : 0);
+        cfgv[0] = cfgc[0] = en;
+        float thr = (float)(rnd() % 12u) / 100.0f;
+        *(float *)(cfgv + 4) = thr; *(float *)(cfgc + 4) = thr;
+
+        int mode;
+        switch (t % 8) {
+        case 0:  mode = 0; break;
+        case 1:  mode = 1; break;
+        case 2:  mode = 2; break;
+        case 3:  mode = 3; break;
+        case 4:  mode = 5; break;
+        case 5:  mode = 7; break;
+        case 6:  mode = 4; break;                 /* even -> 0x69 */
+        default: mode = 3 + 2 * (int)(rnd() % 3u); break;
+        }
+        cfgv[8] = cfgc[8] = (uint8_t)mode;
+        float sig = (float)(rnd() % 40u) / 10.0f - 0.5f;
+        *(float *)(cfgv + 0xc) = sig; *(float *)(cfgc + 0xc) = sig;
+
+        cr_image a, b;
+        memset(&a, 0, sizeof a); memset(&b, 0, sizeof b);
+        a.a = a.w = W; a.b = a.h = H; a.data = iv;
+        b.a = b.w = W; b.b = b.h = H; b.data = ic;
+
+        float rv = -12345.0f, rcv = -12345.0f;
+        int r1 = v(&a, cfgv, bw, &rv);
+        int r2 = cr_block_variance_run_42150(&b, cfgc, bw, &rcv);
+        if (r1 != r2) mismatch("ret", (u32)t, (u32)r1, (u32)r2);
+        if (memcmp(&rv, &rcv, 4) != 0)
+            mismatch("result", (u32)t, *(const u32 *)&rv, *(const u32 *)&rcv);
+        cmp_buf("img", (const u8 *)iv, (const u8 *)ic, (u32)(n * 4), (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_block_variance_run_42150\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -13557,6 +13785,9 @@ int main(int argc, char **argv)
     test_stage_run_273a0();
     test_mscale_score_2e060();
     test_mscale_run_16d00();
+    test_masked_contrast_norm_2a620();
+    test_mask_norm_32580();
+    test_block_variance_run_42150();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
