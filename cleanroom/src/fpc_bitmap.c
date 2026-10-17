@@ -763,8 +763,12 @@ int cr_bitmap_unpack_boxmax_fir(cr_image *out, const cr_image *src,
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
                 int idx = (src->offy + y) * src->a + (src->offx + x);
+                /* Vendor (0x18001f660) shifts by (offx+x)&31 within word
+                 * idx>>5, NOT by idx&31.  These differ when a is not a
+                 * multiple of 32; the standalone boxmax test masked this by
+                 * using a 32-aligned stride.  Replicate the vendor exactly. */
                 o[(long long)y * w + x] =
-                    (uint8_t)((bm[idx >> 5] >> (idx & 31)) & 1);
+                    (uint8_t)((bm[idx >> 5] >> ((src->offx + x) & 31)) & 1);
             }
         }
     }

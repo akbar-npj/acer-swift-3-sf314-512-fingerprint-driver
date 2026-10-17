@@ -1052,6 +1052,23 @@ int      cr_pick_points_2f2e0(uint8_t *out_xy, float *out_val, int *out_n,
 /* cfg[0x24] == 2 gate + field forwarding to cr_pick_points_2f2e0. */
 int      cr_pick_points_dispatch_2b680(void *a, const void *src,
                                        const uint8_t *cfg);      /* 0x18002b680 */
+/* 0x18002e060 — multi-scale feature/descriptor score-map builder.
+ * Allocates two gauss-derivative planes, scores every `scale x scale` mask
+ * block by structure-tensor coherence, clears blocks below the threshold and
+ * returns the mean of the non-`-1` scores in *out.  Returns the last callee
+ * status (0 on success) or 0x69 from the geometry guards.
+ *   scale_desc: +0xc float sigma, +0x10 int scale, +0x14 float threshold.
+ *   bitmap:     +0x00 int stride, +0x08 uint32* bits, +0x18 int off_col,
+ *              +0x1c int off_row. */
+int      cr_mscale_score_2e060(uint16_t *out, cr_image *score_out,
+                               const void *bitmap, const cr_image *src,
+                               const void *scale_desc);        /* 0x18002e060 */
+/* 0x180016d00 — integer-factor downscale driver: allocates a w2 x h2 f32 map,
+ * fills it with -1.0f and runs cr_mscale_score_2e060 over it.  The vendor
+ * derives the map size as (n*(w/n)==h ? w/n : w/n+2) x (n*(h/n)==w ? h/n : h/n+2)
+ * — the two quotients are cross-compared. */
+int      cr_mscale_run_16d00(uint16_t *out, void *bitmap, const cr_image *src,
+                             const void *scale_desc);          /* 0x180016d00 */
 /* Pyramid / max-pool stage driver + per-block projection + softmax. */
 int      cr_stage_run_273a0(float *out, const int *chain,
                             const cr_image *img,

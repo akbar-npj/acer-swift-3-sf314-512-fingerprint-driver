@@ -12993,6 +12993,155 @@ static void test_tree_batch60(void)
     }
 }
 
+
+/* ---- 0x18002e060: multi-scale score-map builder -------------------------- */
+static void test_mscale_score_2e060(void)
+{
+    typedef int (WINAPI *v_t)(uint16_t *, void *, const void *, const void *,
+                              const void *);
+    v_t v = (v_t)fn_at(RVA(0x18002e060));
+    begin("cr_mscale_score_2e060");
+    int bad = g_fail;
+
+    enum { MW = 48, MH = 48, SLACK = 16 };
+    static int16_t srv[(MH + SLACK) * (MW + SLACK)];
+    static int16_t src[(MH + SLACK) * (MW + SLACK)];
+    static float   sov[(MH + 8) * (MW + 8)];
+    static float   soc[(MH + 8) * (MW + 8)];
+    static uint32_t bmv[4096], bmc[4096];
+    static uint8_t iv[0x20], ic[0x20], ov[0x20], oc[0x20];
+    static uint8_t kv[0x20], kc[0x20], dv[0x20], dc[0x20];
+
+    for (int t = 0; t < 3000; t++) {
+        int W = 16 + (int)(rnd() % 25u);
+        int H = 16 + (int)(rnd() % 25u);
+        int scale = 1 + (int)(rnd() % 5u);
+        if ((t % 19) == 0)
+            scale = W + (int)(rnd() % 3u);           /* guard path */
+        int w2 = (W + scale - 1) / scale + (int)(rnd() % 2u);
+        int h2 = (H + scale - 1) / scale + (int)(rnd() % 2u);
+        int offc = 8 + (int)(rnd() % 8u);
+        int offr = 8 + (int)(rnd() % 8u);
+        int stride = W + 16;
+
+        for (int i = 0; i < (MH + SLACK) * (MW + SLACK); i++) {
+            int16_t x = (int16_t)((int)(rnd() % 4001) - 2000);
+            srv[i] = x; src[i] = x;
+        }
+        for (int i = 0; i < 4096; i++) {
+            uint32_t x = (rnd() & 1u) ? (uint32_t)rnd()
+                                      : ((uint32_t)rnd() | 0xffff0000u);
+            bmv[i] = x;
+        }
+        memcpy(bmc, bmv, sizeof bmv);
+
+        float sigma = (float)(rnd() % 200u) / 100.0f + 0.05f;
+        float thr;
+        if ((int)(rnd() % 4u) == 0)
+            thr = -1.0f - (float)(rnd() % 100u) / 10.0f;
+        else
+            thr = (float)(int)(rnd() % 4000u) / 10.0f - 60.0f;
+
+        mk_img2(iv, srv, W, H);
+        mk_img2(ic, src, W, H);
+        memset(ov, 0, 0x20); memset(oc, 0, 0x20);
+        *(int *)(ov + 0x00) = w2; *(int *)(ov + 0x04) = h2;
+        *(void **)(ov + 0x08) = sov;
+        *(int *)(ov + 0x10) = w2; *(int *)(ov + 0x14) = h2;
+        *(int *)(oc + 0x00) = w2; *(int *)(oc + 0x04) = h2;
+        *(void **)(oc + 0x08) = soc;
+        *(int *)(oc + 0x10) = w2; *(int *)(oc + 0x14) = h2;
+        for (int i = 0; i < (MH + 8) * (MW + 8); i++) {
+            sov[i] = -1.0f; soc[i] = -1.0f;
+        }
+
+        memset(kv, 0, 0x20); memset(kc, 0, 0x20);
+        *(int *)(kv + 0x00) = stride; *(int *)(kc + 0x00) = stride;
+        *(void **)(kv + 0x08) = bmv;  *(void **)(kc + 0x08) = bmc;
+        *(int *)(kv + 0x18) = offc;   *(int *)(kc + 0x18) = offc;
+        *(int *)(kv + 0x1c) = offr;   *(int *)(kc + 0x1c) = offr;
+        memset(dv, 0, 0x20); memset(dc, 0, 0x20);
+        *(float *)(dv + 0x0c) = sigma; *(float *)(dc + 0x0c) = sigma;
+        *(int *)(dv + 0x10) = scale;   *(int *)(dc + 0x10) = scale;
+        *(float *)(dv + 0x14) = thr;   *(float *)(dc + 0x14) = thr;
+
+        uint16_t ouv = 0, ouc = 0;
+        int rv = v(&ouv, ov, kv, iv, dv);
+        int rc = cr_mscale_score_2e060(&ouc, (cr_image *)oc, kc,
+                                       (const cr_image *)ic, dc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ouv != ouc) mismatch("out", (u32)t, ouv, ouc);
+        cmp_buf("score", (const u8 *)sov, (const u8 *)soc,
+                (size_t)w2 * h2 * 4, (u32)t);
+        cmp_buf("bits", (const u8 *)bmv, (const u8 *)bmc, sizeof bmv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_mscale_score_2e060\n");
+}
+
+/* ---- 0x180016d00: integer-factor downscale driver ------------------------ */
+static void test_mscale_run_16d00(void)
+{
+    typedef int (WINAPI *v_t)(uint16_t *, void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x180016d00));
+    begin("cr_mscale_run_16d00");
+    int bad = g_fail;
+
+    enum { MW = 48, MH = 48, SLACK = 16 };
+    static int16_t srv[(MH + SLACK) * (MW + SLACK)];
+    static int16_t src[(MH + SLACK) * (MW + SLACK)];
+    static uint32_t bmv[4096], bmc[4096];
+    static uint8_t iv[0x20], ic[0x20], kv[0x20], kc[0x20];
+    static uint8_t dv[0x20], dc[0x20];
+
+    for (int t = 0; t < 3000; t++) {
+        int W = 16 + (int)(rnd() % 25u);
+        int H = 16 + (int)(rnd() % 25u);
+        int n = 1 + (int)(rnd() % 6u);
+        if ((t % 23) == 0)
+            n = W + (int)(rnd() % 3u);               /* guard path */
+        int offc = 8 + (int)(rnd() % 8u);
+        int offr = 8 + (int)(rnd() % 8u);
+        int stride = W + 16;
+
+        for (int i = 0; i < (MH + SLACK) * (MW + SLACK); i++) {
+            int16_t x = (int16_t)((int)(rnd() % 4001) - 2000);
+            srv[i] = x; src[i] = x;
+        }
+        for (int i = 0; i < 4096; i++) {
+            uint32_t x = (rnd() & 1u) ? (uint32_t)rnd()
+                                      : ((uint32_t)rnd() | 0xffff0000u);
+            bmv[i] = x;
+        }
+        memcpy(bmc, bmv, sizeof bmv);
+
+        float sigma = (float)(rnd() % 200u) / 100.0f + 0.05f;
+        float thr = ((int)(rnd() % 4u) == 0)
+                        ? (-1.0f - (float)(rnd() % 100u) / 10.0f)
+                        : ((float)(int)(rnd() % 4000u) / 10.0f - 60.0f);
+
+        mk_img2(iv, srv, W, H);
+        mk_img2(ic, src, W, H);
+
+        memset(kv, 0, 0x20); memset(kc, 0, 0x20);
+        *(int *)(kv + 0x00) = stride; *(int *)(kc + 0x00) = stride;
+        *(void **)(kv + 0x08) = bmv;  *(void **)(kc + 0x08) = bmc;
+        *(int *)(kv + 0x18) = offc;   *(int *)(kc + 0x18) = offc;
+        *(int *)(kv + 0x1c) = offr;   *(int *)(kc + 0x1c) = offr;
+        memset(dv, 0, 0x20); memset(dc, 0, 0x20);
+        *(float *)(dv + 0x0c) = sigma; *(float *)(dc + 0x0c) = sigma;
+        *(int *)(dv + 0x10) = n;       *(int *)(dc + 0x10) = n;
+        *(float *)(dv + 0x14) = thr;   *(float *)(dc + 0x14) = thr;
+
+        uint16_t ouv = 0, ouc = 0;
+        int rv = v(&ouv, kv, iv, dv);
+        int rc = cr_mscale_run_16d00(&ouc, kc, (const cr_image *)ic, dc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ouv != ouc) mismatch("out", (u32)t, ouv, ouc);
+        cmp_buf("bits", (const u8 *)bmv, (const u8 *)bmc, sizeof bmv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_mscale_run_16d00\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -13406,6 +13555,8 @@ int main(int argc, char **argv)
     test_maxpool_stream_21000();
     test_pick_points_dispatch_2b680();
     test_stage_run_273a0();
+    test_mscale_score_2e060();
+    test_mscale_run_16d00();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

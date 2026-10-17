@@ -2891,6 +2891,232 @@ int cr_pick_points_dispatch_2b680(void *a, const void *src, const uint8_t *cfg)
                                 cfg);
 }
 
+
+/* 0x18002e060 — multi-scale feature/descriptor score-map builder.
+ *
+ *   int cr_mscale_score_2e060(uint16_t *out, cr_image *score_out,
+ *                             const void *bitmap, const cr_image *src,
+ *                             const void *scale_desc);
+ *
+ * Verbatim from 0x18002e060..0x18002e693 (raw asm + Ghidra).  `score_out` is
+ * a w2 x h2 f32 map that the caller has pre-filled with -1.0f; only the
+ * centred region is rewritten.  The vendor derives the region origin as
+ *   fx = (w2*scale != W) ? (float)(W - (w2*scale - 2*scale)) * 0.5f : 0
+ *   x0 = lroundf(fx)
+ * (likewise y0 from h2/H) — note w2, not W — and then starts writing at
+ * score index (y0 != 0)*w2 + (x0 != 0), i.e. it skips row/column 0 whenever
+ * a margin exists instead of dividing the origin by `scale`.
+ *
+ *   *out        : 0xffff on entry, then (short)(int) of the mean of every
+ *                 score pixel != -1.0f.  NaN is *not* filtered.
+ *   scale_desc  : +0x0c float sigma, +0x10 int scale, +0x14 float threshold.
+ *   bitmap      : +0x00 int stride, +0x08 uint32 *bits, +0x18 int off_col,
+ *                 +0x1c int off_row.  Bit index (off_row+y)*stride+off_col+x,
+ *                 but the shift is (off_col+x)&31 (the row base is dropped),
+ *                 exactly as in cr_bitmap_unpack_boxmax_fir.
+ * Returns 0x69 from the geometry guards, otherwise the status of the last
+ * callee (0 on success).
+ */
+int cr_mscale_score_2e060(uint16_t *out, cr_image *score_out,
+                          const void *bitmap, const cr_image *src,
+                          const void *scale_desc)
+{
+    const uint8_t *sd = (const uint8_t *)scale_desc;
+    const uint8_t *bm = (const uint8_t *)bitmap;
+
+    int W = src->w;
+    int H = src->h;
+    int scale = *(const int32_t *)(sd + 0x10);
+
+    *out = 0xffff;
+    if (!(scale < W && scale < H && 0 < scale))
+        return 0x69;
+
+    int w2 = score_out->w;
+    int ws = w2 * scale;
+    if (W > ws)
+        return 0x69;
+    int h2 = score_out->h;
+    int hs = h2 * scale;
+    if (H > hs)
+        return 0x69;
+
+    float sigma = *(const float *)(sd + 0x0c);
+    float thr   = *(const float *)(sd + 0x14);
+
+    cr_image img1, img2;
+    int r = (int)cr_image_set(&img1, NULL, W, H);
+    if (r != 0)
+        return r;
+    r = (int)cr_image_set(&img2, NULL, W, H);
+    if (r != 0)
+        return r;
+
+    void *pool[2];
+    uint32_t sz = (uint32_t)(W * H * 2);
+    uint32_t pr = cr_pool_alloc2((void **)pool, &img1.data, sz,
+                                 &img2.data, sz);
+    if (pr != 0)
+        return (int)pr;
+
+    r = cr_gauss_deriv_3img(&img1, &img2, (void *)src, sigma);
+    if (r == 0) {
+        static const float C590 = 0.5f;     /* 0x18008c590 */
+        static const float C5c0 = -1.0f;    /* 0x18008c5c0 */
+        static const float C5c4 = 4.0f;     /* 0x18008c5c4 */
+        static const float C5c8 = 100.0f;   /* 0x18008c5c8 */
+
+        /* centring origin: 0.5 * (target - (scaled - 2*scale)), rounded.  The
+         * vendor uses w2/h2 here, not the source dimensions. */
+        float fx = (ws != W) ? (float)(W - (ws + scale * -2)) * C590 : 0.0f;
+        int   ty = 0;
+        if (hs != H)
+            ty = H - (hs + scale * -2);
+        int x0 = cr_lroundf(fx);
+        int y0 = cr_lroundf((float)ty * C590);
+
+        int16_t *i1 = (int16_t *)img1.data;
+        int16_t *i2 = (int16_t *)img2.data;
+        int      iw = img1.w;
+        float   *so = (float *)score_out->data;
+
+        int stride  = *(const int32_t *)(bm + 0x00);
+        const uint32_t *bits = *(uint32_t *const *)(bm + 0x08);
+        int off_col = *(const int32_t *)(bm + 0x18);
+        int off_row = *(const int32_t *)(bm + 0x1c);
+
+        int Hlim = H - y0;
+        int Wlim = W - x0;
+
+        if (y0 < Hlim) {
+            int srow = (y0 != 0) * w2;
+            int bi = y0;
+            do {
+                int bi_end = bi + scale;
+                if (x0 < Wlim) {
+                    int sidx = srow + (x0 != 0);
+                    int bj = x0;
+                    do {
+                        int bj_end = bj + scale;
+                        int   cnt = 0;
+                        float sa2 = 0.0f, sb2 = 0.0f, sab = 0.0f;
+
+                        int row = bi;
+                        int rowidx = bi * iw;
+                        do {
+                            if (bj < bj_end) {
+                                int base = (off_row + row) * stride;
+                                int bit  = off_col + bj + base;
+                                int k    = 0;
+                                do {
+                                    if ((bits[bit >> 5] >>
+                                         ((bit - base) & 0x1f)) & 1u) {
+                                        int a = i1[rowidx + bj + k];
+                                        int b = i2[rowidx + bj + k];
+                                        cnt++;
+                                        sa2 += (float)(a * a);
+                                        sb2 += (float)(b * b);
+                                        sab += (float)(a * b);
+                                    }
+                                    bit++;
+                                    k++;
+                                } while (bit != bj_end + off_col + base);
+                            }
+                            row++;
+                            rowidx += iw;
+                        } while (row != bi_end);
+
+                        float score = C5c0;
+                        if (scale * scale == cnt) {
+                            float N = (float)(scale * scale);
+                            float d = sa2 / N - sb2 / N;
+                            float root = cr_sqrtf((sab / N) * (sab / N) * C5c4
+                                                  + d * d);
+                            float S = sb2 / N + sa2 / N;
+                            float den = (root + S) * C590;
+                            if (den <= 0.0f) {
+                                score = C5c0;
+                            } else {
+                                score = (1.0f - ((S - root) * C590) / den)
+                                        * C5c8;
+                            }
+                        }
+
+                        so[sidx] = score;
+                        if (score <= thr && thr != score && 0.0f <= thr) {
+                            so[sidx] = C5c0;
+                            cr_bitmap_clear_rect((cr_image *)bitmap,
+                                                 bi, bi_end, bj, bj_end);
+                        }
+                        sidx++;
+                        bj = bj_end;
+                    } while (bj < Wlim);
+                }
+                srow += w2;
+                bi = bi_end;
+            } while (bi < Hlim);
+        }
+
+        /* mean over every score pixel != -1.0f (NaN is not filtered) */
+        int   n = w2 * h2;
+        float sum = 0.0f;
+        int   cnt = 0;
+        for (int i = 0; i < n; i++) {
+            if (so[i] != C5c0) {
+                sum += so[i];
+                cnt++;
+            }
+        }
+        *out = (uint16_t)(int32_t)(sum / (float)cnt);
+    }
+
+    cr_sized_free_if((void **)pool);
+    return r;
+}
+
+/* 0x180016d00 — integer-factor downscale driver for cr_mscale_score_2e060.
+ *
+ *   int cr_mscale_run_16d00(uint16_t *out, void *bitmap, const cr_image *src,
+ *                           const void *scale_desc);
+ *
+ *   n = *(int *)(scale_desc + 0x10);
+ *   X = src->h;  Y = src->w;
+ *   if (!(n < X && n < Y && n > 0)) return 0x69;
+ *   qY = Y / n;  qX = X / n;
+ *   h_arg = (n*qX == Y) ? qX : qX + 2;    // the vendor really does compare
+ *   w_arg = (n*qY == X) ? qY : qY + 2;    // qX against Y and qY against X
+ *   cr_image_alloc_f32(&tmp, w_arg, h_arg);
+ *   cr_rect_fill_f32(&tmp, -1.0f);
+ *   r = cr_mscale_score_2e060(out, &tmp, bitmap, src, scale_desc);
+ *   cr_cleanup_ptr8_clear_b(&tmp);
+ *   return r;
+ */
+int cr_mscale_run_16d00(uint16_t *out, void *bitmap, const cr_image *src,
+                        const void *scale_desc)
+{
+    int n = *(const int32_t *)((const uint8_t *)scale_desc + 0x10);
+    int X = src->h;
+    int Y = src->w;
+
+    if (!(n < X && n < Y && 0 < n))
+        return 0x69;
+
+    int qY = Y / n;
+    int qX = X / n;
+    int h_arg = (n * qX == Y) ? qX : qX + 2;
+    int w_arg = (n * qY == X) ? qY : qY + 2;
+
+    cr_image tmp;
+    int r = cr_image_alloc_f32(&tmp, w_arg, h_arg);
+    if (r != 0)
+        return r;
+
+    cr_rect_fill_f32(&tmp, -1.0f);
+    r = cr_mscale_score_2e060(out, &tmp, bitmap, src, scale_desc);
+    cr_cleanup_ptr8_clear_b(&tmp);
+    return r;
+}
+
 /* 0x1800273a0 — stage-run driver with a per-block projection pass.
  *
  * int cr_stage_run_273a0(float *out, const int *chain, const cr_image *img,
@@ -3178,3 +3404,4 @@ fail:
     cr_free_pair8(sp);
     return (int32_t)r;
 }
+

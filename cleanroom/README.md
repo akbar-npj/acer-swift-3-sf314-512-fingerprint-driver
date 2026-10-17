@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **324** (91.3% of functions, 132,096 B = 77.9% of bytes) |
+| rewritten + parity-verified | **326** (91.8% of functions, 133,936 B = 79.0% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Eighty batches so far:
+Eighty-one batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -366,6 +366,13 @@ Eighty batches so far:
     per-block projection rows (`(sum + bias*0x4000) >> 15`, optional clamp,
     copy back to the buffer head) and finishes with `cr_softmax2` on the first
     two shorts (2 functions).
+81. multi-scale score map + its downscale driver: `cr_mscale_score_2e060`
+    (1600 B) builds the per-block structure-tensor coherence map from the two
+    Gaussian-derivative planes (centring origin `0.5*(W-(w2*scale-2*scale))`,
+    score index origin `(y0!=0)*w2 + (x0!=0)`, mask shift `(off_col+x)&31`),
+    thresholds it into the mask and returns the mean of the non-`-1` scores;
+    `cr_mscale_run_16d00` (240 B) allocates the map, fills it with `-1.0f` and
+    dispatches to it (2 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
