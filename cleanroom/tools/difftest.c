@@ -9153,6 +9153,82 @@ static void test_pick_points_2f2e0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_pick_points_2f2e0\n");
 }
 
+/* 0x18000e850 — per-keypoint descriptor packer (guard / empty paths). */
+static void test_feat_pack_0e850(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x18000e850));
+    begin("cr_feat_pack_0e850");
+    int bad = g_fail;
+
+    static uint8_t iv[0x20], ic[0x20];
+    static uint8_t sv[64 * 64], sc[64 * 64];
+    static uint8_t ov[0x40], oc[0x40];
+    static uint8_t cfg[0x20];
+
+    for (int t = 0; t < 4000; t++) {
+        int sel_a = (int)(rnd() % 15u);     /* cfg[0xb], signed byte */
+        int sel_b = (int)(rnd() % 9u);      /* cfg[0xe] */
+        int flag  = (int)(rnd() % 2u);      /* cfg[0xc] */
+        int sel_c = (int)(rnd() % 9u);      /* cfg[0xd] */
+        /* A positive count would call cr_signpack_dot, which returns 0x69 in
+         * the clean-room because the descriptor's table pointer is NULL (the
+         * vendor's points into .rdata).  A negative count turns into a
+         * multi-gigabyte request that the zeroing allocator OOMs on.  Only
+         * the empty-list success path is comparable. */
+        int cnt   = 0;
+
+        for (int i = 0; i < 64 * 64; i++)
+            sv[i] = sc[i] = (uint8_t)rnd();
+
+        memset(ov, 0, sizeof ov);
+        memset(oc, 0, sizeof oc);
+        *(int32_t *)(ov + 0x20) = cnt;
+        *(int32_t *)(oc + 0x20) = cnt;
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0xb] = (uint8_t)sel_a;
+        cfg[0xc] = (uint8_t)flag;
+        cfg[0xd] = (uint8_t)sel_c;
+        cfg[0xe] = (uint8_t)sel_b;
+
+        mk_image(iv, sv, 32, 32, 32, 0, 0);
+        mk_image(ic, sc, 32, 32, 32, 0, 0);
+
+        int rv = v(iv, ov, cfg);
+        int rc = cr_feat_pack_0e850((cr_image *)ic, (cr_feat_obj *)oc, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        /* the bin-table pointer itself is a heap address: compare only that
+         * both sides produced one (the vendor's is a different allocation). */
+        cmp_buf("obj", ov, oc, 0x38, (u32)t);
+        int pv = *(void **)(ov + 0x38) != NULL;
+        int pc = *(void **)(oc + 0x38) != NULL;
+        if (pv != pc) mismatch("bins", (u32)t, (u32)pv, (u32)pc);
+        cmp_buf("src", sv, sc, sizeof sv, (u32)t);
+    }
+
+    /* the full selector cross-product (guard paths only). */
+    for (int a = 0; a < 16; a++) {
+        for (int b = 0; b < 8; b++) {
+            memset(ov, 0, sizeof ov);
+            memset(oc, 0, sizeof oc);
+            memset(cfg, 0, sizeof cfg);
+            cfg[0xb] = (uint8_t)a;
+            cfg[0xe] = (uint8_t)b;
+            cfg[0xc] = 1;
+            int rv = v(iv, ov, cfg);
+            int rc = cr_feat_pack_0e850((cr_image *)ic, (cr_feat_obj *)oc, cfg);
+            if (rv != rc) { mismatch("x-ret", (u32)(a * 8 + b), (u32)rv, (u32)rc); continue; }
+            cmp_buf("x-obj", ov, oc, 0x38, (u32)(a * 8 + b));
+            int pv = *(void **)(ov + 0x38) != NULL;
+            int pc = *(void **)(oc + 0x38) != NULL;
+            if (pv != pc) mismatch("x-bins", (u32)(a * 8 + b), (u32)pv, (u32)pc);
+        }
+    }
+
+    if (g_fail == bad) end(); else printf("  FAIL cr_feat_pack_0e850\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -13037,6 +13113,7 @@ int main(int argc, char **argv)
     test_pick_dispatch_16b90();
     test_mask_inpaint_317a0();
     test_pick_points_2f2e0();
+    test_feat_pack_0e850();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -1044,5 +1044,25 @@ int      cr_pick_points_2f2e0(uint8_t *out_xy, float *out_val, int *out_n,
                               const uint8_t *xy_tab, const float *val_tab,
                               int npts, int want, const void *src,
                               uint32_t seed, const void *cfg);   /* 0x18002f2e0 */
+/* Output object of cr_feat_pack_0e850 (8 qwords). */
+typedef struct {
+    uint8_t  *xy;      /* +0x00  2 bytes per point */
+    uint8_t  *f8;      /* +0x08 */
+    uint8_t  *mask;    /* +0x10  1 byte per point  */
+    void     *p18;     /* +0x18 */
+    int32_t   count;   /* +0x20 */
+    uint8_t  *rows;    /* +0x28  feature rows      */
+    uint8_t   b30;     /* +0x30 */
+    uint8_t   b31;     /* +0x31 */
+    uint8_t   _pad[2];
+    int32_t   nbins;   /* +0x34 */
+    uint16_t *bins;    /* +0x38  nbins+1 entries   */
+} cr_feat_obj;
+/* Per-keypoint descriptor packer: warps each point's N x N patch, sign-packs
+ * it into obj->rows and (when the triple descriptor has a coefficient table)
+ * scores and sorts the points, permuting the parallel arrays and filling the
+ * bin table.  See the implementation comment for the selector/table caveats. */
+int      cr_feat_pack_0e850(cr_image *src, cr_feat_obj *obj,
+                            const uint8_t *cfg);                 /* 0x18000e850 */
 
 #endif /* FPC_BEP_H */

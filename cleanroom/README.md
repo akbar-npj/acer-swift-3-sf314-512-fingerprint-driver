@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **320** (90.1% of functions, 128,368 B = 75.7% of bytes) |
+| rewritten + parity-verified | **321** (90.4% of functions, 129,472 B = 76.4% of bytes) |
 
-Seventy-seven batches so far:
+Seventy-eight batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -343,6 +343,12 @@ Seventy-seven batches so far:
     descending, swaps the value for the two coordinate bytes, forwards to
     `cr_pick_dispatch_16b90` with `want = min(npts, want)` and copies the
     selected records back out as coordinates and original values (1 function).
+78. feature packing: `cr_feat_pack_0e850` (1104 B) in `src/fpc_comp.c` resolves
+    the warp/signpack and triple descriptors, fills the feature object's
+    selector/bin fields, warps and sign-packs every keypoint into its row
+    block, optionally orientation-picks and scores it, then sorts the score
+    records, permutes the parallel arrays and builds the threshold->index bin
+    table (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

@@ -2861,3 +2861,179 @@ done:
     cr_sized_free(&buf);
     return rc;
 }
+
+/* 0x18000e850 — per-keypoint descriptor packer.
+ *
+ * int cr_feat_pack_0e850(cr_image *src, cr_feat_obj *obj, const uint8_t *cfg);
+ *
+ * cfg[0xb] selects the warp/signpack descriptor (cr_desc_get_tag_byte_ptr:
+ * only 2 and 4 succeed, both giving M=25, N=16 and a table pointer), cfg[0xe]
+ * selects the triple descriptor (cr_desc_get_triple: 0 succeeds empty, 1..4
+ * return 1, 5 succeeds with the 16-sample table, >=6 gives 0x69).  With a
+ * non-zero cfg[0xe] the two N fields must agree.  obj+0x30 = cfg[0xc],
+ * obj+0x31 = the descriptor byte, obj+0x34 = the triple's second int; when it
+ * is positive obj+0x38 gets (n+1) u16 slots.  A byte above 0xc in cfg[0xb]
+ * returns 0x69.
+ *
+ * The scratch pair is { N*N bytes, NULL }; the pair array is count 8-byte
+ * {index, score} records.  For every keypoint the source is warped into the
+ * N x N scratch, sign-packed into obj->rows + b8*i, optionally orientation
+ * picked (skipped when cfg[0xc] != 0, because the vendor's coefficient
+ * pointer comes from a table the clean-room leaves NULL), and scored into the
+ * pair array when the triple has a coefficient table.  The pair array is then
+ * sorted ascending by score and the four parallel arrays are permuted; the
+ * final (nbins+1)-entry u16 table records, for each threshold, the first
+ * sorted index whose score exceeds it.
+ *
+ * NOTE: the clean-room descriptor getters leave the vendor's read-only table
+ * pointers NULL, so cr_signpack_dot returns 0x69 as soon as a point is
+ * processed.  Only the guard paths and the count <= 0 success path can be
+ * compared; the loop body is transcribed from the disassembly but is not
+ * exercised by the difftest.
+ */
+typedef struct {                 /* warp/signpack descriptor (local_60) */
+    int32_t  m;                  /* +0x00 */
+    int32_t  n;                  /* +0x04 */
+    uint8_t  b8;                 /* +0x08 */
+    uint8_t  _pad[7];
+    void    *tab;                /* +0x10 */
+    void    *tab2;               /* +0x18 */
+} cr_ws_desc;
+
+typedef struct {                 /* triple descriptor (local_80) */
+    int32_t        a;            /* +0x00 */
+    int32_t        b;            /* +0x04 */
+    const int16_t *coef;         /* +0x08 */
+    const int32_t *thr;          /* +0x10 */
+} cr_triple_desc;
+
+int cr_feat_pack_0e850(cr_image *src, cr_feat_obj *obj, const uint8_t *cfg)
+{
+    cr_ws_desc ws;
+    uint64_t r = cr_desc_get_tag_byte_ptr(&ws, (char)cfg[0xb]);
+    if ((int32_t)r != 0)
+        return (int32_t)r;
+
+    cr_triple_desc td;
+    r = cr_desc_get_triple(&td, cfg[0xe]);
+    if ((int32_t)r != 0)
+        return (int32_t)r;
+
+    if (cfg[0xe] != 0 && ws.n != td.a)
+        return 0x69;
+
+    obj->b30 = cfg[0xc];
+    obj->b31 = ws.b8;
+    obj->nbins = td.b;
+    if (td.b > 0) {
+        r = cr_malloc_aligned16((void **)&obj->bins,
+                                (size_t)(td.b + 1) * 2);
+        if ((int32_t)r != 0)
+            return (int32_t)r;
+    }
+
+    if (cfg[0xb] > 0xc)
+        return 0x69;
+
+    void *sp[2] = { NULL, NULL };
+    r = cr_malloc_aligned16(&sp[0], (size_t)(ws.n * ws.n));
+    if ((int32_t)r != 0)
+        return (int32_t)r;
+
+    int32_t *pairs = NULL;
+    r = cr_malloc_aligned16((void **)&pairs,
+                            (size_t)((uint64_t)(uint32_t)obj->count << 3));
+    if ((int32_t)r != 0) {
+        cr_free_pair8(sp);
+        return (int32_t)r;
+    }
+
+    void *coef2 = NULL;
+    if (cfg[0xc] == 0) {
+        r = cr_desc_get_ptr2_69(&coef2, (char)cfg[0xd]);
+        if ((int32_t)r != 0) {
+            cr_sized_free((void **)&pairs);
+            cr_free_pair8(sp);
+            return (int32_t)r;
+        }
+    }
+
+    int32_t count = obj->count;
+    int32_t orient = 0;
+    for (int32_t i = 0; i < count; i++) {
+        uint8_t *row = obj->rows + (size_t)(ws.b8 * (int8_t)i);
+        r = (uint64_t)cr_warp_rotate_u8(sp[0], src,
+                                        obj->xy[(size_t)i * 2],
+                                        obj->xy[(size_t)i * 2 + 1],
+                                        obj->mask[i], (const int *)&ws);
+        if ((int32_t)r != 0)
+            goto fail;
+        r = (uint64_t)cr_signpack_dot(row, (const void *const *)sp,
+                                      (const uint8_t *)&ws);
+        if ((int32_t)r != 0)
+            goto fail;
+        if (cfg[0xc] == 0)
+            cr_orient_pick(row, obj->mask + i, &orient,
+                           (const uint8_t *const *)sp,
+                           (const int16_t *)coef2, ws.b8, ws.n);
+        if (td.coef != NULL) {
+            pairs[(size_t)i * 2] = i;
+            cr_norm_corr_score(&pairs[(size_t)i * 2 + 1],
+                               (void *const *)sp, td.coef, ws.n, orient);
+        }
+    }
+
+    if (td.coef != NULL) {
+        r = (uint64_t)cr_sort_records(pairs, count, 0, 0);
+        if ((int32_t)r != 0)
+            goto fail;
+        cr_permute_rows(obj->xy, pairs, count, 2);
+        r = (uint64_t)cr_permute_rows(obj->f8, pairs, count, 4);
+        if ((int32_t)r != 0)
+            goto fail;
+        r = (uint64_t)cr_permute_rows(obj->mask, pairs, count, 1);
+        if ((int32_t)r != 0)
+            goto fail;
+        r = (uint64_t)cr_permute_rows(obj->rows, pairs, count, obj->b31);
+        if ((int32_t)r != 0)
+            goto fail;
+
+        uint16_t *bins = obj->bins;
+        int32_t nbins = obj->nbins;
+        int32_t n = obj->count;
+        if (nbins > 1) {
+            int32_t pos = 0;
+            for (int32_t k = 0; k < nbins - 1; k++) {
+                if (pos < n) {
+                    int32_t thr = td.thr[k];
+                    if (pairs[(size_t)pos * 2 + 1] <= thr) {
+                        int32_t j = pos + 1;
+                        int found = 0;
+                        while (j != n) {
+                            pos = j;
+                            j++;
+                            if (pairs[(size_t)(j - 1) * 2 + 1] > thr) {
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (!found)
+                            pos = n;
+                    }
+                }
+                bins[k + 1] = (uint16_t)pos;
+            }
+        }
+        bins[0] = 0;
+        bins[nbins] = (uint16_t)n;
+    }
+
+    cr_sized_free((void **)&pairs);
+    cr_free_pair8(sp);
+    return 0;
+
+fail:
+    cr_sized_free((void **)&pairs);
+    cr_free_pair8(sp);
+    return (int32_t)r;
+}
