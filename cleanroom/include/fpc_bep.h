@@ -1002,5 +1002,23 @@ int      cr_fft_weighted_apply_32af0(int *desc, const float *weights,
  * byte per pixel (0xff = valid). */
 int      cr_template_remove_25960(cr_image *img, const cr_image *mask,
                                   int sel);                     /* 0x180025960 */
+/* Bucket `npts` 8-byte point records {int32 v; int16 x; int16 y;} into a
+ * cfg[0x25] x cfg[0x26] grid, score each cell by its bitmap coverage, then walk
+ * the cells in a seeded shuffle order emitting up to `want` points.  Writes the
+ * emitted count to *out_n. */
+int      cr_grid_pick_37460(void *pts, int *out_n, int npts, int want,
+                            const cr_image *bits, uint32_t seed,
+                            const void *cfg);                   /* 0x180037460 */
+/* Mask-driven inpaint / classify pipeline.  `list` is a 16-byte record: a u16
+ * count at +0 and the u16 index array pointer at +8.  cfg[0] selects the mode
+ * (1..5 point-list inpaint/classify, 7 row/column gap interpolation); cfg[1]
+ * enables the u16 limit at cfg+2; cfg+4 is the mode-7 threshold and cfg[0xc] /
+ * cfg[0xd] the maximum row / column gaps. */
+int      cr_mask_pipeline_25050(cr_image *img, const void *list,
+                                const uint8_t *cfg, cr_image *mask); /* 0x180025050 */
+/* i16 image normalisation: optional top/bottom row-mean correction (cfg[0x0a])
+ * followed by a per-column gain / offset / table map selected by cfg[9]. */
+int      cr_norm_2bd60(cr_image *img, const cr_image *mask,
+                       const uint8_t *cfg);                       /* 0x18002bd60 */
 
 #endif /* FPC_BEP_H */

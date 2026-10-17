@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **314** (88.5% of functions, 120,368 B = 71.0% of bytes) |
+| rewritten + parity-verified | **317** (89.3% of functions, 125,664 B = 74.1% of bytes) |
 
-Seventy-four batches so far:
+Seventy-five batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -322,6 +322,14 @@ Seventy-four batches so far:
     `mask == 0xff` samples (`0.9*cov/var`, clamped at 0), subtracts
     `(buf - mean)*gain` from the image and blends the residual back toward
     `max(src)` by the mask (1 function).
+75. point-grid picker, mask pipeline and i16 normaliser: three more
+    `src/fpc_comp.c` routines. `cr_grid_pick_37460` (1488 B) buckets 8-byte
+    point records into a `gw×gh` grid, scores each cell from a 1-bit bitmap and
+    emits a seeded-shuffle selection; `cr_mask_pipeline_25050` (1632 B) is the
+    `cfg[0]`-dispatched inpaint/classify chain plus a two-pass row/column gap
+    interpolator; `cr_norm_2bd60` (2176 B) does top/bottom row-mean correction
+    followed by a per-column gain, offset or one of six fixed table maps
+    (3 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

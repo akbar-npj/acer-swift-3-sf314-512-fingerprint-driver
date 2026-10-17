@@ -8541,6 +8541,312 @@ static void test_template_remove_25960(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_template_remove_25960\n");
 }
 
+/* ---- 0x180037460 — grid-bucketed point picker --------------------------- */
+static void test_grid_pick_37460(void)
+{
+    typedef int (WINAPI *v_t)(void *, int *, int, int, const void *, unsigned, const void *);
+    v_t v = (v_t)fn_at(RVA(0x180037460));
+    begin("cr_grid_pick_37460");
+    int bad = g_fail;
+
+    enum { NPTS = 64, MAXW = 4096 };
+    static uint8_t pv[NPTS * 8], pc[NPTS * 8];
+    static uint32_t bmp[MAXW];
+    static uint8_t iv[0x20], ic[0x20];
+    static uint8_t cfg[0x40];
+
+    for (int t = 0; t < 3000; t++) {
+        int imgw = 8 + (int)(rnd() % 40u);
+        int imgh = 8 + (int)(rnd() % 40u);
+        int gw = 1 + (int)(rnd() % 4u);
+        int gh = 1 + (int)(rnd() % 4u);
+        int border = (int)(rnd() % 4u);
+        int npts = 1 + (int)(rnd() % (NPTS - 1));
+        int nslot = npts + (int)(rnd() % 3u);
+        /* Phase 3 spins forever unless the per-cell quotas can satisfy `want`,
+         * so the random sweep only exercises phases 1-2 (want = 0). */
+        int want = 0;
+        int stride = imgw + 32 + (int)(rnd() % 2u) * 32;
+        int offx = (int)(rnd() % 8u);
+        int offy = (int)(rnd() % 4u);
+        unsigned seed = (unsigned)rnd();
+
+        int words = (stride * (imgh + offy) + 32 + 64) / 32;
+        if (words > MAXW) words = MAXW;
+        for (int i = 0; i < words; i++) bmp[i] = (uint32_t)rnd();
+
+        for (int i = 0; i < NPTS; i++) {
+            int32_t val = (int32_t)rnd();
+            int16_t ax = (int16_t)((int)(rnd() % (unsigned)(imgw + 16)) - 8);
+            int16_t ay = (int16_t)((int)(rnd() % (unsigned)(imgh + 16)) - 8);
+            memcpy(pv + i * 8, &val, 4);
+            memcpy(pv + i * 8 + 4, &ax, 2);
+            memcpy(pv + i * 8 + 6, &ay, 2);
+        }
+        memcpy(pc, pv, sizeof pv);
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0x08] = (uint8_t)border;
+        *(int16_t *)(cfg + 0x10) = (int16_t)nslot;
+        cfg[0x25] = (uint8_t)gw;
+        cfg[0x26] = (uint8_t)gh;
+
+        mk_image(iv, bmp, stride, imgw, imgh, offx, offy);
+        mk_image(ic, bmp, stride, imgw, imgh, offx, offy);
+
+        int nv = -12345, nc = -12345;
+        int rv = v(pv, &nv, npts, want, iv, seed, cfg);
+        int rc = cr_grid_pick_37460(pc, &nc, npts, want,
+                                    (const cr_image *)ic, seed, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (nv != nc) { mismatch("n", (u32)t, (u32)nv, (u32)nc); continue; }
+        cmp_buf("pts", pv, pc, (size_t)npts * 8, (u32)t);
+    }
+
+    /* Phase-3 emission.  Every cell is populated so the quotas are reachable;
+     * an all-ones bitmap gives each cell a quota of want/N, and an all-zero
+     * bitmap makes every cell "empty" (the N == empty path). */
+    for (int t = 0; t < 400; t++) {
+        int imgw = 12 + (int)(rnd() % 28u);
+        int imgh = 12 + (int)(rnd() % 28u);
+        int gw = 1 + (int)(rnd() % 3u);
+        int gh = 1 + (int)(rnd() % 3u);
+        int N = gw * gh;
+        int npts = N * 4;
+        int zero = (t & 1);
+        int want = zero ? 1 + (int)(rnd() % (unsigned)npts) : N;
+        int stride = imgw + 32;
+        unsigned seed = (unsigned)rnd();
+
+        memset(bmp, zero ? 0x00 : 0xff, sizeof bmp);
+        memset(pv, 0, sizeof pv);
+        for (int i = 0; i < npts; i++) {
+            int cell = i % N, gx = cell % gw, gy = cell / gw;
+            int32_t val = (int32_t)rnd();
+            int16_t ax = (int16_t)((2 * gx + 1) * imgw / (2 * gw));
+            int16_t ay = (int16_t)((2 * gy + 1) * imgh / (2 * gh));
+            memcpy(pv + i * 8, &val, 4);
+            memcpy(pv + i * 8 + 4, &ax, 2);
+            memcpy(pv + i * 8 + 6, &ay, 2);
+        }
+        memcpy(pc, pv, sizeof pv);
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0x08] = 0;
+        *(int16_t *)(cfg + 0x10) = (int16_t)(npts + 1);
+        cfg[0x25] = (uint8_t)gw;
+        cfg[0x26] = (uint8_t)gh;
+
+        mk_image(iv, bmp, stride, imgw, imgh, 0, 0);
+        mk_image(ic, bmp, stride, imgw, imgh, 0, 0);
+
+        int nv = -12345, nc = -12345;
+        int rv = v(pv, &nv, npts, want, iv, seed, cfg);
+        int rc = cr_grid_pick_37460(pc, &nc, npts, want,
+                                    (const cr_image *)ic, seed, cfg);
+        if (rv != rc) { mismatch("ret3", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (nv != nc) { mismatch("n3", (u32)t, (u32)nv, (u32)nc); continue; }
+        cmp_buf("pts3", pv, pc, (size_t)npts * 8, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_grid_pick_37460\n");
+}
+
+/* 0x180025050 — mask-driven inpaint / classify pipeline. */
+static void test_mask_pipeline_25050(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *, void *);
+    v_t v = (v_t)fn_at(RVA(0x180025050));
+    begin("cr_mask_pipeline_25050");
+    int bad = g_fail;
+
+    enum { MW = 24, MH = 24 };
+    static float fv[MW * MH], fc[MW * MH];
+    static uint8_t mv[MW * MH], mc[MW * MH];
+    static uint8_t iv[0x20], ic[0x20], kv[0x20], kc[0x20];
+    static uint8_t cfg[0x20];
+    static uint16_t idx[64];
+    static uint8_t lst[16];
+
+    /* mode 7: row/column gap interpolation over the float image. */
+    for (int t = 0; t < 3000; t++) {
+        int W = 1 + (int)(rnd() % MW);
+        int H = 1 + (int)(rnd() % MH);
+        int thr = (int)(rnd() % 9u) - 2;
+        int mr  = (int)(rnd() % 7u) - 1;
+        int mcx = (int)(rnd() % 7u) - 1;
+        for (int i = 0; i < W * H; i++) {
+            unsigned k = (unsigned)(rnd() % 6u);
+            float f;
+            if (k == 0)      f = 0.0f;
+            else if (k == 1) f = (float)(rnd() % 1000u) / 100.0f;
+            else if (k == 2) f = -(float)(rnd() % 1000u) / 100.0f;
+            else { uint32_t u = (uint32_t)rnd(); memcpy(&f, &u, 4); }
+            fv[i] = fc[i] = f;
+        }
+        memset(cfg, 0, sizeof cfg);
+        cfg[0] = 7;
+        memcpy(cfg + 4, &thr, 4);
+        cfg[0xc] = (uint8_t)(int8_t)mr;
+        cfg[0xd] = (uint8_t)(int8_t)mcx;
+
+        mk_image(iv, fv, W, W, H, 0, 0);
+        mk_image(ic, fc, W, W, H, 0, 0);
+        mk_image(kv, mv, W, W, H, 0, 0);
+        mk_image(kc, mc, W, W, H, 0, 0);
+
+        int rv = v(iv, lst, cfg, kv);
+        int rc = cr_mask_pipeline_25050((cr_image *)ic, lst, cfg,
+                                        (cr_image *)kc);
+        if (rv != rc) { mismatch("m7-ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("m7", (const unsigned char *)fv, (const unsigned char *)fc,
+                (size_t)W * H * 4, (u32)t);
+    }
+
+    /* modes 0..6: point-list inpaint / classify. */
+    for (int t = 0; t < 4000; t++) {
+        int W = 1 + (int)(rnd() % MW);
+        int H = 1 + (int)(rnd() % MH);
+        int npix = W * H;
+        int n = (int)(rnd() % 33u);
+        int mode = (int)(rnd() % 7u);
+        int lim = (int)(rnd() % 13u);
+        int flag = (int)(rnd() % 2u);
+        for (int i = 0; i < n; i++)
+            idx[i] = (uint16_t)(rnd() % (unsigned)npix);
+        for (int i = 0; i < npix; i++) {
+            unsigned k = (unsigned)(rnd() % 8u);
+            uint8_t b;
+            if (k == 0)      b = 0x04;
+            else if (k == 1) b = 0x20;
+            else if (k == 2) b = 0xff;
+            else if (k == 3) b = 0x00;
+            else             b = (uint8_t)rnd();
+            mv[i] = mc[i] = b;
+            float f = (float)((int)(rnd() % 2000u) - 1000) / 8.0f;
+            fv[i] = fc[i] = f;
+        }
+        memset(cfg, 0, sizeof cfg);
+        cfg[0] = (uint8_t)mode;
+        cfg[1] = (uint8_t)flag;
+        *(uint16_t *)(cfg + 2) = (uint16_t)lim;
+        memset(lst, 0, sizeof lst);
+        uint16_t nn = (uint16_t)n;
+        memcpy(lst, &nn, 2);
+        const uint16_t *ip = idx;
+        memcpy(lst + 8, &ip, 8);
+
+        mk_image(iv, fv, W, W, H, 0, 0);
+        mk_image(ic, fc, W, W, H, 0, 0);
+        mk_image(kv, mv, W, W, H, 0, 0);
+        mk_image(kc, mc, W, W, H, 0, 0);
+
+        int rv = v(iv, lst, cfg, kv);
+        int rc = cr_mask_pipeline_25050((cr_image *)ic, lst, cfg,
+                                        (cr_image *)kc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("img", (const unsigned char *)fv, (const unsigned char *)fc,
+                (size_t)npix * 4, (u32)t);
+        cmp_buf("mask", mv, mc, (size_t)npix, (u32)t);
+    }
+
+    /* NULL list: modes 0..6 must return 0 without touching anything; mode 7
+     * ignores the list entirely. */
+    for (int t = 0; t < 8; t++) {
+        int W = 4, H = 4;
+        for (int i = 0; i < W * H; i++) { fv[i] = fc[i] = (float)i; mv[i] = mc[i] = 0x04; }
+        memset(cfg, 0, sizeof cfg);
+        cfg[0] = (uint8_t)t;
+        mk_image(iv, fv, W, W, H, 0, 0);
+        mk_image(ic, fc, W, W, H, 0, 0);
+        mk_image(kv, mv, W, W, H, 0, 0);
+        mk_image(kc, mc, W, W, H, 0, 0);
+        int rv = v(iv, NULL, cfg, kv);
+        int rc = cr_mask_pipeline_25050((cr_image *)ic, NULL, cfg,
+                                        (cr_image *)kc);
+        if (rv != rc) { mismatch("null-ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("null", (const unsigned char *)fv, (const unsigned char *)fc,
+                (size_t)W * H * 4, (u32)t);
+        cmp_buf("nullm", mv, mc, (size_t)W * H, (u32)t);
+    }
+
+    if (g_fail == bad) end(); else printf("  FAIL cr_mask_pipeline_25050\n");
+}
+
+/* 0x18002bd60 — i16 image row/column normalisation. */
+static void test_norm_2bd60(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x18002bd60));
+    begin("cr_norm_2bd60");
+    int bad = g_fail;
+
+    enum { NW = 40, NH = 48 };
+    static int16_t dv[NW * NH], dc[NW * NH];
+    static uint8_t mv[(NW + 8) * NH], mc[(NW + 8) * NH];
+    static uint8_t iv[0x20], ic[0x20], kv[0x20], kc[0x20];
+    static uint8_t cfg[0x20];
+    static const int lens[3] = { 35, 36, 32 };
+
+    for (int t = 0; t < 8000; t++) {
+        int W = 1 + (int)(rnd() % NW);
+        int H = 1 + (int)(rnd() % NH);
+        int mode = (int)(rnd() % 6u);
+        int pass = (int)(rnd() % 3u);
+        int tabsel = (int)(rnd() % 8u);
+        int x0, xw, row0, nrows;
+
+        if ((t % 4) == 0) H = 31 + (int)(rnd() % (unsigned)(NH - 30));
+        if (mode == 3 && (t & 1)) {
+            int k = (int)(rnd() % 3u);
+            W = lens[k];
+            tabsel = (k == 0) ? 0 : (k == 1) ? 1 : 2 + (int)(rnd() % 4u);
+        }
+        x0 = (int)(rnd() % (unsigned)(W + 1));
+        xw = (int)(rnd() % (unsigned)(W + 1));
+        nrows = (int)(rnd() % (unsigned)H) + 1;
+        row0 = (int)(rnd() % (unsigned)(H - nrows + 1));
+        if ((t % 37) == 0) { nrows = -1; row0 = 0; }
+
+        for (int i = 0; i < W * H; i++) {
+            unsigned k = (unsigned)(rnd() % 8u);
+            int16_t x;
+            if (k == 0)      x = 0;
+            else if (k == 1) x = 16320;
+            else if (k == 2) x = 16319;
+            else if (k == 3) x = -32768;
+            else if (k == 4) x = 32767;
+            else             x = (int16_t)rnd();
+            dv[i] = dc[i] = x;
+        }
+        for (int i = 0; i < (W + 8) * H; i++) {
+            uint8_t b = (uint8_t)((rnd() % 3u == 0) ? (rnd() & 0xffu)
+                                                    : ((rnd() & 1u) ? 0x0e : 0x00));
+            mv[i] = mc[i] = b;
+        }
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[9] = (uint8_t)mode;
+        cfg[10] = (uint8_t)pass;
+        cfg[0xb] = (uint8_t)tabsel;
+        *(int32_t *)(cfg + 0xc) = x0;
+        *(int32_t *)(cfg + 0x10) = xw;
+        *(int32_t *)(cfg + 0x14) = row0;
+        *(int32_t *)(cfg + 0x18) = nrows;
+
+        mk_image(iv, dv, W, W, H, 0, 0);
+        mk_image(ic, dc, W, W, H, 0, 0);
+        mk_image(kv, mv, W + 8, W, H, 0, 0);
+        mk_image(kc, mc, W + 8, W, H, 0, 0);
+
+        int rv = v(iv, kv, cfg);
+        int rc = cr_norm_2bd60((cr_image *)ic, (const cr_image *)kc, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("img", (const unsigned char *)dv, (const unsigned char *)dc,
+                (size_t)W * H * 2, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_norm_2bd60\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -12419,6 +12725,9 @@ int main(int argc, char **argv)
     test_dirbank_3de60();
     test_pyramid_364c0();
     test_template_remove_25960();
+    test_grid_pick_37460();
+    test_mask_pipeline_25050();
+    test_norm_2bd60();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

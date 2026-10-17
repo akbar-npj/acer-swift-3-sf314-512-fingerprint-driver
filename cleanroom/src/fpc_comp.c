@@ -1940,3 +1940,579 @@ int cr_template_remove_25960(cr_image *img, const cr_image *mask, int sel)
     cr_sized_free(&tmp.data);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180037460 — grid-bucketed point picker.
+ *   int fn(void *pts, int *out_n, int npts, int want, const cr_image *bits,
+ *          uint32_t seed, const void *cfg)
+ *
+ *   `pts` is an array of 8-byte records {int32 v; int16 x; int16 y;}.  cfg:
+ *   +0x08 border, +0x10 int16 slot count, +0x25 grid width, +0x26 grid height.
+ *   `bits` is a 1-bit-per-pixel image (stride in bits at +0x00).
+ *
+ *   Phase 1 (reverse order) maps each point's (x,y) into the grid cell
+ *   (clamped) and prepends the point to that cell's singly linked list
+ *   (heads, nexts); the record's 4-byte tail is then overwritten with `v`.
+ *   Phase 2 walks the grid with a sliding window of cell width imgw/gw and
+ *   cell height imgh/gh, counts the set bits of the bitmap inside each window
+ *   and stores min(round(count*want / (window area * N)), counts[cell]) in
+ *   the cell counter.  Phase 3 shuffles the cell order with the caller's seed
+ *   and emits one point per visited non-empty cell until `want` are emitted
+ *   (cells whose counter is < 1 are only used once every cell is < 1).
+ *   Returns 0, or the first allocator status.
+ * ------------------------------------------------------------------------ */
+int cr_grid_pick_37460(void *pts, int *out_n, int npts, int want,
+                       const cr_image *bits, uint32_t seed, const void *cfg)
+{
+    const uint8_t *c = (const uint8_t *)cfg;
+    uint8_t gw = c[0x25];
+    uint8_t gh = c[0x26];
+    int N = (int)gw * (int)gh;
+    int imgw = bits->w;
+    int imgh = bits->h;
+    int border = (int)(int8_t)c[0x08];
+    int nslot = (int)*(const int16_t *)(c + 0x10);
+
+    void *counts_p = NULL, *next_p = NULL, *head_p = NULL, *order_p = NULL;
+    int r = cr_malloc_aligned16(&counts_p, (size_t)N * 4);
+    if (r != 0)
+        return r;
+    r = cr_malloc_aligned16(&next_p, (size_t)nslot * 4);
+    if (r != 0) { cr_sized_free(&counts_p); return r; }
+    r = cr_malloc_aligned16(&head_p, (size_t)N * 4);
+    if (r != 0) { cr_sized_free(&counts_p); cr_sized_free(&next_p); return r; }
+    r = cr_malloc_aligned16(&order_p, (size_t)N * 4);
+    if (r != 0) {
+        cr_sized_free(&counts_p);
+        cr_sized_free(&next_p);
+        cr_sized_free(&head_p);
+        return r;
+    }
+
+    int *counts = (int *)counts_p;
+    int *next   = (int *)next_p;
+    int *head   = (int *)head_p;
+    int *order  = (int *)order_p;
+    uint8_t *rec = (uint8_t *)pts;
+
+    for (int i = 0; i < N; i++) {
+        head[i] = -1;
+        counts[i] = 0;
+    }
+
+    for (int i = npts - 1; i >= 0; i--) {
+        int gx = ((int)*(int16_t *)(rec + i * 8 + 4) * (int)gw) / imgw;
+        if (gx < 0)
+            gx = 0;
+        int gy = ((int)*(int16_t *)(rec + i * 8 + 6) * (int)gh) / imgh;
+        *(int32_t *)(rec + i * 8 + 4) = *(int32_t *)(rec + i * 8);
+        if (gy < 0)
+            gy = 0;
+        if (gy > (int)gh - 1)
+            gy = (int)gh - 1;
+        if (gx > (int)gw - 1)
+            gx = (int)gw - 1;
+        int cell = gy * (int)gw + gx;
+        counts[cell] = counts[cell] + 1;
+        if (head[cell] == -1) {
+            head[cell] = i;
+            next[i] = -1;
+        } else {
+            next[i] = head[cell];
+            head[cell] = i;
+        }
+    }
+
+    if (gh != 0) {
+        int col = 0;
+        int base = 0;
+        for (int k = 0; k < (int)gh; k++) {
+            int yhi = imgh / (int)gh + col;
+            if (gw != 0) {
+                int y2 = imgh - border;
+                if (yhi < y2)
+                    y2 = yhi;
+                if (col <= border)
+                    col = border;
+                int xs = 0;
+                for (int j = 0; j < (int)gw; j++) {
+                    int xlo = (border < xs) ? xs : border;
+                    xs += imgw / (int)gw;
+                    int xhi = imgw - border;
+                    if (xs <= xhi)
+                        xhi = xs;
+                    int cnt = 0;
+                    if (col < y2) {
+                        for (int y = col; y != y2; y++) {
+                            if (xlo < xhi) {
+                                int bb = (bits->offy + y) * bits->a;
+                                int q = bits->offx + xlo + bb;
+                                int qend = bits->offx + xhi + bb;
+                                do {
+                                    int qn = q + 1;
+                                    cnt += (int)(((const uint32_t *)bits->data)[q >> 5]
+                                                 >> ((q - bb) & 31) & 1u);
+                                    q = qn;
+                                } while (qend != q);
+                            }
+                        }
+                    }
+                    float f = 0.0f;
+                    if (col < y2)
+                        f = (float)(cnt * want);
+                    int v = cr_lroundf(f / (float)((xhi - xlo) * N * (y2 - col)));
+                    if (counts[base + j] <= v)
+                        v = counts[base + j];
+                    counts[base + j] = v;
+                }
+            }
+            base += (int)gw;
+            col = yhi;
+        }
+    }
+
+    int empty = 0;
+    for (int i = 0; i < N; i++)
+        empty += (counts[i] < 1);
+
+    cr_shuffle_indices(order, N, (uint64_t)seed);
+
+    int nout = 0;
+    if (want >= 1) {
+        int cur = 0;
+        do {
+            int cell = order[cur];
+            cur++;
+            if (cur >= N)
+                cur = 0;
+            int h = head[cell];
+            if (h != -1) {
+                if (counts[cell] < 1) {
+                    if (N == empty) {
+                        *(int32_t *)(rec + (size_t)nout * 8) =
+                            *(int32_t *)(rec + (size_t)h * 8 + 4);
+                        nout++;
+                        head[cell] = next[h];
+                    }
+                } else {
+                    *(int32_t *)(rec + (size_t)nout * 8) =
+                        *(int32_t *)(rec + (size_t)h * 8 + 4);
+                    nout++;
+                    head[cell] = next[h];
+                    int v = counts[cell];
+                    counts[cell] = v - 1;
+                    empty += (v - 1 == 0);
+                }
+            }
+        } while (nout < want);
+    }
+
+    *out_n = nout;
+    cr_sized_free(&next_p);
+    cr_sized_free(&head_p);
+    cr_sized_free(&order_p);
+    cr_sized_free(&counts_p);
+    return 0;
+}
+
+/* 0x180025050 — mask-driven inpaint / classify pipeline.
+ *
+ * `list` is a 16-byte record: a u16 count at +0 and the u16 index array at +8.
+ * cfg[0] selects the mode; see the prototype comment in fpc_bep.h.
+ *
+ * Mode 7 is a two-pass gap interpolator over the float image: the row pass
+ * finds rows whose horizontal neighbour differences are all below cfg+4 and
+ * interpolates *vertically* between the two rows that bracket such a run; the
+ * column pass does the transposed thing.  Only strictly positive samples are
+ * bridged, and only runs no longer than cfg[0xc] / cfg[0xd].
+ */
+
+/* Fill the `count` rows strictly between `prev` and `cur` (both w floats). */
+static void cr_gap_rows_25050(float *prev, const float *cur, int count, int w)
+{
+    float inv = (float)(1.0 / (double)(count + 1));
+    for (int i = 0; i < w; i++) {
+        float a = prev[i];
+        if (!(a > 0.0f)) continue;
+        float b = cur[i];
+        if (!(b > 0.0f)) continue;
+        float delta = inv * (b - a);
+        for (int k = 1; k <= count; k++)
+            prev[(size_t)w * (size_t)k + (size_t)i] = a + (float)k * delta;
+    }
+}
+
+/* Fill the `count` columns strictly between `prev` and `cur` (both h rows). */
+static void cr_gap_cols_25050(float *prev, const float *cur, int count,
+                              int w, int h)
+{
+    float inv = (float)(1.0 / (double)(count + 1));
+    for (int j = 0; j < h; j++) {
+        float a = prev[0];
+        if (a > 0.0f) {
+            float b = cur[0];
+            if (b > 0.0f) {
+                float delta = (b - a) * inv;
+                for (int k = 1; k <= count; k++)
+                    prev[k] = a + (float)k * delta;
+            }
+        }
+        prev += w;
+        cur  += w;
+    }
+}
+
+int cr_mask_pipeline_25050(cr_image *img, const void *list,
+                           const uint8_t *cfg, cr_image *mask)
+{
+    int mode = cfg[0];
+
+    if (mode == 7) {
+        int h = img->h, w = img->w;
+        float *data = (float *)img->data;
+        float thr = (float)*(const int32_t *)(cfg + 4);
+        int maxrow = (int8_t)cfg[0xc];
+        int maxcol = (int8_t)cfg[0xd];
+
+        if (h > 0) {
+            int count = 0;
+            float *prev = NULL;
+            float *row = data;
+            for (int r = 0; r < h; r++) {
+                float d = 0.0f;
+                int brk = 1;
+                if (w >= 2) {
+                    d = (row[1] - row[0]) * (row[1] - row[0]);
+                    if (d < thr) {
+                        float *p = row + 1;
+                        float *end = row + (w - 1);
+                        brk = 0;
+                        while (p != end) {
+                            d = (p[1] - p[0]) * (p[1] - p[0]);
+                            p++;
+                            if (!(d < thr)) { brk = 1; break; }
+                        }
+                    }
+                } else {
+                    brk = !(d < thr);
+                }
+                if (!brk && !(d < thr)) brk = 1;
+                if (brk) {
+                    if (prev != NULL && count != 0 && maxrow >= count)
+                        cr_gap_rows_25050(prev, row, count, w);
+                    prev = row;
+                    count = 0;
+                } else {
+                    count++;
+                }
+                row += w;
+            }
+        }
+
+        if (w >= 1) {
+            int count = 0;
+            float *prev = NULL;
+            float *col = data;
+            for (int c = 0; c < w; c++) {
+                float d = 0.0f;
+                int brk = 1;
+                if (h >= 2) {
+                    d = (col[w] - col[0]) * (col[w] - col[0]);
+                    if (d < thr) {
+                        float *p = col + w;
+                        int k = 1;
+                        brk = 0;
+                        for (;;) {
+                            k++;
+                            if (h == k) break;
+                            d = (p[w] - p[0]) * (p[w] - p[0]);
+                            p += w;
+                            if (!(d < thr)) { brk = 1; break; }
+                        }
+                    }
+                } else {
+                    brk = !(d < thr);
+                }
+                if (!brk && !(d < thr)) brk = 1;
+                if (brk) {
+                    if (count != 0 && prev != NULL && maxcol >= count)
+                        cr_gap_cols_25050(prev, col, count, w, h);
+                    prev = col;
+                    count = 0;
+                } else {
+                    count++;
+                }
+                col++;
+            }
+        }
+        return 0;
+    }
+
+    if (list == NULL) return 0;
+    const cr_index_list *l = (const cr_index_list *)list;
+    uint16_t limit = *(const uint16_t *)(cfg + 2);
+    if (cfg[1] != 0 && l->count > limit) return 0x3e9;
+    if (mode == 0) return 0;
+
+    const uint16_t *idx = l->indices;
+    uint8_t *mb = (uint8_t *)mask->data;
+    float   *fd = (float *)img->data;
+
+    if (mode == 5) {
+        cr_inpaint_index_list(img, mask, &l->count, &idx);
+    } else if (mode == 4) {
+        int iters = 0;
+        cr_inpaint_index_list(img, mask, &l->count, &idx);
+        for (;;) {
+            if (l->count == 0) break;
+            int found = 0;
+            for (int i = 0; i < (int)l->count; i++)
+                if (mb[idx[i]] & 4) { found = 1; break; }
+            if (!found) break;
+            if (iters >= (int)limit) break;
+            iters++;
+            for (int i = 0; i < (int)l->count; i++) {
+                uint16_t p = idx[i];
+                if (mb[p] & 4) {
+                    int cnt;
+                    float sum;
+                    cr_masked_box_sum(&cnt, &sum, img, mask, 0x1b, 5, (int)p);
+                    if (cnt > 5) {
+                        float mean = sum / (float)cnt;
+                        fd[p] = mean;
+                        mb[p] = 0x20;
+                    }
+                }
+            }
+            for (int i = 0; i < (int)l->count; i++)
+                if (mb[idx[i]] & 0x20) mb[idx[i]] = 8;
+        }
+    } else {
+        int apply = 0;
+        if (mode != 3) {
+            if (mode != 2) {
+                if (mode != 1) return 0x69;
+                cr_inpaint_masked_box(mask, img, 2, 1);
+                cr_inpaint_index_list(img, mask, &l->count, &idx);
+                cr_classify_mark((const float *)img->data,
+                                 (uint8_t *const *)&mask->data, &l->count, &idx);
+                cr_inpaint_masked_box(mask, img, 0x13, 0);
+                goto post;
+            }
+            apply = 1;
+        }
+        cr_inpaint_masked_box(mask, img, 2, apply);
+        cr_inpaint_index_list(img, mask, &l->count, &idx);
+        cr_classify_mark((const float *)img->data,
+                         (uint8_t *const *)&mask->data, &l->count, &idx);
+    }
+
+post:
+    if (cfg[1] != 0 && l->count != 0) {
+        for (int i = 0; i < (int)l->count; i++)
+            if (mb[idx[i]] & 4) return 0x3e9;
+        return 0;
+    }
+    return 0;
+}
+
+/* 0x18002bd60 — i16 image row/column normalisation.
+ *
+ * img->data is int16, mask->data one byte per pixel (bit 0xe selects samples,
+ * mask->w is used as the row stride).  cfg:
+ *   +0x09  mode: 0 none, 1 gain normalise, 2 offset normalise, 3 table map
+ *   +0x0a  row-normalisation pass (0/1)
+ *   +0x0b  table selector for mode 3 (0..5)
+ *   +0x0c  x0, +0x10 window width, +0x14 row0, +0x18 row count
+ */
+
+static const float cr_norm_tab_a[35] = {
+    0.367000014f, 0.419f, 0.481000006f, 0.551999986f, 0.629000008f, 0.700999975f,
+    0.764999986f, 0.818000019f, 0.865999997f, 0.904999971f, 0.933000028f, 0.961000025f,
+    0.984000027f, 1.01499999f, 1.03299999f, 1.051f, 1.05599999f, 1.05999994f,
+    1.05900002f, 1.04999995f, 1.02999997f, 1.00399995f, 0.971000016f, 0.939999998f,
+    0.901000023f, 0.856000006f, 0.810000002f, 0.760999978f, 0.709999979f, 0.646000028f,
+    0.574999988f, 0.503000021f, 0.439999998f, 0.393000007f, 0.358999997f,
+};
+static const float cr_norm_tab_b[36] = {
+    0.324999988f, 0.367000014f, 0.419f, 0.481000006f, 0.551999986f, 0.629000008f,
+    0.700999975f, 0.764999986f, 0.818000019f, 0.865999997f, 0.904999971f, 0.933000028f,
+    0.961000025f, 0.984000027f, 1.01499999f, 1.03299999f, 1.051f, 1.05599999f,
+    1.05999994f, 1.05900002f, 1.04999995f, 1.02999997f, 1.00399995f, 0.971000016f,
+    0.939999998f, 0.901000023f, 0.856000006f, 0.810000002f, 0.760999978f, 0.709999979f,
+    0.646000028f, 0.574999988f, 0.503000021f, 0.439999998f, 0.393000007f, 0.358999997f,
+};
+static const float cr_norm_tab_c[32] = {
+    0.419f, 0.481000006f, 0.551999986f, 0.629000008f, 0.700999975f, 0.764999986f,
+    0.818000019f, 0.865999997f, 0.904999971f, 0.933000028f, 0.961000025f, 0.984000027f,
+    1.01499999f, 1.03299999f, 1.051f, 1.05599999f, 1.05999994f, 1.05900002f,
+    1.04999995f, 1.02999997f, 1.00399995f, 0.971000016f, 0.939999998f, 0.901000023f,
+    0.856000006f, 0.810000002f, 0.760999978f, 0.709999979f, 0.646000028f, 0.574999988f,
+    0.503000021f, 0.439999998f,
+};
+static const float cr_norm_tab_d[32] = {
+    0.518000007f, 0.542999983f, 0.58099997f, 0.632000029f, 0.685000002f, 0.736999989f,
+    0.787999988f, 0.833999991f, 0.876999974f, 0.916999996f, 0.952000022f, 0.98299998f,
+    1.00800002f, 1.028f, 1.04200006f, 1.04900002f, 1.04900002f, 1.04200006f,
+    1.028f, 1.00800002f, 0.98299998f, 0.952000022f, 0.916999996f, 0.876999974f,
+    0.833999991f, 0.787999988f, 0.736999989f, 0.685000002f, 0.632000029f, 0.58099997f,
+    0.542999983f, 0.518000007f,
+};
+static const float cr_norm_tab_e[32] = {
+    0.740999997f, 0.717999995f, 0.717000008f, 0.741999984f, 0.776000023f, 0.813000023f,
+    0.851000011f, 0.885999978f, 0.917999983f, 0.947000027f, 0.972000003f, 0.991999984f,
+    1.00800002f, 1.01900005f, 1.02699995f, 1.03100002f, 1.03100002f, 1.02699995f,
+    1.01900005f, 1.00800002f, 0.991999984f, 0.972000003f, 0.947000027f, 0.917999983f,
+    0.885999978f, 0.851000011f, 0.813000023f, 0.776000023f, 0.741999984f, 0.717000008f,
+    0.717999995f, 0.740999997f,
+};
+
+static int16_t cr_norm_clamp16(float v)
+{
+    int16_t out = 16320;
+    if (v <= 16320.0f) out = (int16_t)(int)v;
+    return out;
+}
+
+static int16_t cr_norm_clamp16_lo(float v)
+{
+    int i = (int)v;
+    int16_t out = 16320;
+    if (i < 16320) {
+        out = (int16_t)i;
+        if (i < 1) out = 0;
+    }
+    return out;
+}
+
+int cr_norm_2bd60(cr_image *img, const cr_image *mask, const uint8_t *cfg)
+{
+    int16_t *d = (int16_t *)img->data;
+    int w = img->w, h = img->h;
+    const uint8_t *md = (const uint8_t *)mask->data;
+    int ms = mask->w;
+
+    if (cfg[10] == 1) {
+        int nrows = *(const int32_t *)(cfg + 0x18);
+        if (nrows < 1) return 0x69;
+        int row0 = *(const int32_t *)(cfg + 0x14);
+
+        void *pv = NULL;
+        int st = cr_malloc_aligned16(&pv, (size_t)((int64_t)h << 2));
+        if (st != 0) return st;
+        float *local = (float *)pv;
+
+        for (int row = 0; row < h; row++) {
+            int sum = 0;
+            for (int i = 0; i < w; i++) sum += d[(size_t)row * w + i];
+            local[row] = (float)sum / (float)w;
+        }
+
+        float blk = 0.0f;
+        for (int i = row0; i < row0 + nrows; i++) blk += local[i];
+        float add = blk / (float)nrows;
+        for (int row = 0; row < row0; row++) {
+            float rm = local[row];
+            for (int i = 0; i < w; i++) {
+                size_t k = (size_t)row * w + i;
+                float v = ((float)(int)d[k] + add) - rm;
+                d[k] = cr_norm_clamp16(v);
+            }
+        }
+
+        int top = h - row0;
+        float blk2 = 0.0f;
+        for (int i = top - nrows; i < top; i++) blk2 += local[i];
+        float add2 = blk2 / (float)nrows;
+        for (int row = top; row < h; row++) {
+            float rm = local[row];
+            for (int i = 0; i < w; i++) {
+                size_t k = (size_t)row * w + i;
+                float v = ((float)(int)d[k] + add2) - rm;
+                d[k] = cr_norm_clamp16(v);
+            }
+        }
+
+        cr_sized_free(&pv);
+    } else if (cfg[10] != 0) {
+        return 0x69;
+    }
+
+    int mode = cfg[9];
+    if (mode == 0) return 0;
+
+    if (mode == 1 || mode == 2 || mode == 3) {
+        int x0 = *(const int32_t *)(cfg + 0xc);
+        int x1 = *(const int32_t *)(cfg + 0x10) + x0;
+        if (!(x1 < w)) return 0x69;
+        if (mode != 3 && !(h > 0x1e)) return 0x69;
+
+        const float *tab = NULL;
+        int n = 0;
+        if (mode == 3) {
+            switch (cfg[0xb]) {
+            case 0: tab = cr_norm_tab_a; n = 0x23; break;
+            case 1: tab = cr_norm_tab_b; n = 0x24; break;
+            case 2: tab = cr_norm_tab_c; n = 0x20; break;
+            case 3: tab = cr_norm_tab_d; n = 0x20; break;
+            case 4: tab = cr_norm_tab_e; n = 0x20; break;
+            case 5: tab = cr_norm_tab_e; n = 0x20; break;
+            default: return 0x69;
+            }
+            if (w != n) return 0x69;
+        }
+
+        float mean = 0.0f;
+        if (x0 < x1) {
+            int cnt = 0;
+            float sum = 0.0f;
+            for (int c = x0; c < x1; c++)
+                for (int r = 0; r < h; r++)
+                    if (md[(size_t)r * ms + c] & 0xe) {
+                        cnt++;
+                        sum += (float)(int)d[(size_t)r * w + c];
+                    }
+            if (cnt != 0) mean = sum / (float)cnt;
+        }
+
+        if (w < 1) return 0;
+
+        for (int c = 0; c < w; c++) {
+            int cnt = 0;
+            float sum = 0.0f;
+            for (int r = 0; r < h; r++)
+                if (md[(size_t)r * ms + c] & 0xe) {
+                    cnt++;
+                    sum += (float)(int)d[(size_t)r * w + c];
+                }
+
+            if (mode == 2) {
+                float off = 0.0f;
+                if (cnt != 0 && 0.0f < mean) off = mean - sum / (float)cnt;
+                for (int r = 0; r < h; r++) {
+                    size_t k = (size_t)r * w + c;
+                    d[k] = cr_norm_clamp16_lo((float)(int)d[k] + off);
+                }
+            } else if (mode == 1) {
+                float g = 1.0f;
+                if (cnt != 0 && 0.0f < mean && 0.0f < sum)
+                    g = mean / (sum / (float)cnt);
+                for (int r = 0; r < h; r++) {
+                    size_t k = (size_t)r * w + c;
+                    d[k] = cr_norm_clamp16((float)(int)d[k] * g);
+                }
+            } else {
+                float s = sum;
+                if (cnt != 0 && 0.0f < mean && 0.0f < s) s = s / (float)cnt;
+                float scale = tab[c];
+                for (int r = 0; r < h; r++) {
+                    size_t k = (size_t)r * w + c;
+                    d[k] = cr_norm_clamp16(((float)(int)d[k] - s) * scale + mean);
+                }
+            }
+        }
+        return 0;
+    }
+
+    return 0x69;
+}
