@@ -8847,6 +8847,88 @@ static void test_norm_2bd60(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_norm_2bd60\n");
 }
 
+/* 0x180016b90 — point-selection dispatcher on cfg[0x24]. */
+static void test_pick_dispatch_16b90(void)
+{
+    typedef int (WINAPI *v_t)(void *, int *, int, int, const void *, unsigned,
+                              const void *);
+    v_t v = (v_t)fn_at(RVA(0x180016b90));
+    begin("cr_pick_dispatch_16b90");
+    int bad = g_fail;
+
+    enum { MAXPTS = 40, MAXW = 512 };
+    static uint8_t ptsv[MAXPTS * 8], ptsc[MAXPTS * 8];
+    static uint8_t mcfg[0x20];
+    static uint8_t cfg[0x40];
+    static uint32_t mwords[MAXW];
+    static int dims[6];
+    static uint8_t iv[0x20], ic[0x20];
+
+    for (int t = 0; t < 3200; t++) {
+        int branch = (int)(rnd() % 4u);
+        int margin = (int)(rnd() % 3u);
+        int W = 2 * margin + 1 + (int)(rnd() % 48u);
+        int H = 2 * margin + 1 + (int)(rnd() % 48u);
+        int NX = 1 + (int)(rnd() % 5u);
+        int NY = 1 + (int)(rnd() % 5u);
+        int npts = (int)(rnd() % (MAXPTS + 1));
+        int maxout = (int)(rnd() % (MAXPTS + 3));
+        int maxpts = npts + (int)(rnd() % 5u);
+        int stride = 32 * (1 + (int)(rnd() % 4u));
+        int x0 = (int)(rnd() % 4u);
+        int y0 = (int)(rnd() % 4u);
+        int weight = (int)(rnd() % 2000u);
+        uint32_t seed = rnd();
+
+        for (int i = 0; i < MAXW; i++) mwords[i] = rnd();
+        for (int i = 0; i < MAXPTS; i++) {
+            *(int32_t *)(ptsv + i * 8) = (int32_t)rnd();
+            *(int16_t *)(ptsv + i * 8 + 4) = (int16_t)((int)(rnd() % 400u) - 100);
+            *(int16_t *)(ptsv + i * 8 + 6) = (int16_t)((int)(rnd() % 400u) - 100);
+        }
+        memcpy(ptsc, ptsv, sizeof ptsv);
+
+        memset(mcfg, 0, sizeof mcfg);
+        *(int *)(mcfg + 0x00) = stride;
+        *(void **)(mcfg + 0x08) = mwords;
+        *(int *)(mcfg + 0x10) = W;
+        *(int *)(mcfg + 0x14) = H;
+        *(int *)(mcfg + 0x18) = x0;
+        *(int *)(mcfg + 0x1c) = y0;
+
+        memset(dims, 0, sizeof dims);
+        dims[4] = W;
+        dims[5] = H;
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0x24] = (uint8_t)branch;
+        *(int8_t *)(cfg + 0x08) = (int8_t)margin;
+        *(int16_t *)(cfg + 0x10) = (int16_t)maxpts;
+        *(int *)(cfg + 0x14) = weight;
+        cfg[0x25] = (uint8_t)NX;
+        cfg[0x26] = (uint8_t)NY;
+
+        /* Both pickers spin forever unless `want` is reachable, so keep the
+         * grid picker at 0 (phases 1-2 only) and cap the keypoint picker at
+         * npts.  bin_select tolerates maxout > npts. */
+        int want = maxout;
+        if (branch == 1) want = 0;
+        if (branch == 0) want = npts ? 1 + (int)(rnd() % (unsigned)npts) : 0;
+        mk_image(iv, mwords, stride, W, H, x0, y0);
+        mk_image(ic, mwords, stride, W, H, x0, y0);
+        const void *srcv = (branch == 0) ? (const void *)dims : (const void *)iv;
+        const void *srcc = (branch == 0) ? (const void *)dims : (const void *)ic;
+
+        int ov = 0x12345678, oc = 0x12345678;
+        int rv = v(ptsv, &ov, npts, want, srcv, seed, cfg);
+        int rc = cr_pick_dispatch_16b90(ptsc, &oc, npts, want, srcc, seed, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ov != oc) mismatch("cnt", (u32)t, (u32)ov, (u32)oc);
+        cmp_buf("pts", ptsv, ptsc, sizeof ptsv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_pick_dispatch_16b90\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -12728,6 +12810,7 @@ int main(int argc, char **argv)
     test_grid_pick_37460();
     test_mask_pipeline_25050();
     test_norm_2bd60();
+    test_pick_dispatch_16b90();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

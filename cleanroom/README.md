@@ -153,7 +153,7 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **317** (89.3% of functions, 125,664 B = 74.1% of bytes) |
+| rewritten + parity-verified | **318** (89.6% of functions, 125,728 B = 74.2% of bytes) |
 
 Seventy-five batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
@@ -328,8 +328,9 @@ Seventy-five batches so far:
     emits a seeded-shuffle selection; `cr_mask_pipeline_25050` (1632 B) is the
     `cfg[0]`-dispatched inpaint/classify chain plus a two-pass row/column gap
     interpolator; `cr_norm_2bd60` (2176 B) does top/bottom row-mean correction
-    followed by a per-column gain, offset or one of six fixed table maps
-    (3 functions).
+    followed by a per-column gain, offset or one of six fixed table maps;
+    `cr_pick_dispatch_16b90` (64 B) forwards to one of the three point
+    pickers on `cfg[0x24]` (4 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

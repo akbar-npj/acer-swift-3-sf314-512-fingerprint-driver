@@ -1020,5 +1020,10 @@ int      cr_mask_pipeline_25050(cr_image *img, const void *list,
  * followed by a per-column gain / offset / table map selected by cfg[9]. */
 int      cr_norm_2bd60(cr_image *img, const cr_image *mask,
                        const uint8_t *cfg);                       /* 0x18002bd60 */
+/* cfg[0x24]: 0 -> cr_keypoint_grid_sample, 1 -> cr_grid_pick_37460,
+ * 2 -> cr_bin_select_14320, anything else -> 0. */
+int      cr_pick_dispatch_16b90(void *pts, int *out_n, int npts, int want,
+                                const void *src, uint32_t seed,
+                                const void *cfg);                 /* 0x180016b90 */
 
 #endif /* FPC_BEP_H */

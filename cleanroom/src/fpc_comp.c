@@ -2516,3 +2516,22 @@ int cr_norm_2bd60(cr_image *img, const cr_image *mask, const uint8_t *cfg)
 
     return 0x69;
 }
+
+/* 0x180016b90 — dispatch a point-selection request on cfg[0x24]. */
+int cr_pick_dispatch_16b90(void *pts, int *out_n, int npts, int want,
+                           const void *src, uint32_t seed, const void *cfg)
+{
+    switch (((const uint8_t *)cfg)[0x24]) {
+    case 0:
+        return cr_keypoint_grid_sample((cr_pt8 *)pts, out_n, npts, want,
+                                       (const int *)src, seed,
+                                       (const uint8_t *)cfg);
+    case 1:
+        return cr_grid_pick_37460(pts, out_n, npts, want,
+                                  (const cr_image *)src, seed, cfg);
+    case 2:
+        return cr_bin_select_14320(pts, out_n, npts, want, src, seed, cfg);
+    default:
+        return 0;
+    }
+}
