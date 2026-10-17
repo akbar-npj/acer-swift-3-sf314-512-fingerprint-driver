@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **318** (89.6% of functions, 125,728 B = 74.2% of bytes) |
+| rewritten + parity-verified | **319** (89.9% of functions, 127,904 B = 75.5% of bytes) |
 
-Seventy-five batches so far:
+Seventy-six batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -331,6 +331,13 @@ Seventy-five batches so far:
     followed by a per-column gain, offset or one of six fixed table maps;
     `cr_pick_dispatch_16b90` (64 B) forwards to one of the three point
     pickers on `cfg[0x24]` (4 functions).
+76. mask-aware gap inpainting: `cr_mask_inpaint_317a0` (2176 B) in
+    `src/fpc_comp.c`. Mode 5 fills the u16-listed pixels of a byte image from
+    the mean of the surrounding unlisted pixels, sweeping windows 3/5 over the
+    whole list and then retrying border pixels with 5/7 until the window-9
+    give-up check; mode 7 is a pair of transposed gap interpolators (scan rows
+    / fill columns, then scan columns / fill rows) with 10-bit fixed-point
+    steps and signed per-axis run caps (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

@@ -2535,3 +2535,257 @@ int cr_pick_dispatch_16b90(void *pts, int *out_n, int npts, int want,
         return 0;
     }
 }
+
+/* 0x1800317a0 — mask-aware gap inpainting (cfg[0] == 5 or 7).
+ *
+ * int cr_mask_inpaint_317a0(uint8_t *flag, const cr_image *img,
+ *                           const cr_index_list *list, const uint8_t *cfg);
+ *
+ * cfg[0] == 5: fill the u16-listed pixels of a u8 image with the mean of
+ * their neighbourhood, excluding the listed pixels themselves
+ * (cr_box_sum_excl).  A count-byte flag array records what has been filled.
+ * Windows 3 and 5 sweep the whole list; after that only border pixels
+ * (row or column outside [2, n-3]) are revisited, with windows 5, 7 and then
+ * 9.  Window 9 is the give-up point: when an unfilled border pixel is still
+ * present the remaining flags are checked and 0x3e9 is returned if cfg[1] is
+ * set and any pixel is still unset (otherwise 0).
+ *
+ * cfg[0] == 7: two directional passes over a u8 image.  The first scans each
+ * row for an adjacent pair whose squared difference reaches the i32 threshold
+ * at cfg+4, and interpolates *vertically* between the rows of two successive
+ * detections (run capped by the signed byte cfg[0xc]).  The second is the
+ * transposed counterpart: scan each column, interpolate horizontally, cap
+ * cfg[0xd]; an over-long run sets *flag = 1 and is skipped.  Both passes use
+ * 10-bit fixed point: step = (0x400/(run+1)) * (b-a), emit
+ * ((acc + 0x200) >> 10) + a.
+ *
+ * Any other mode returns 0x410.  Mode 5 with a NULL/empty list returns 0.
+ */
+int cr_mask_inpaint_317a0(uint8_t *flag, const cr_image *img,
+                          const cr_index_list *list, const uint8_t *cfg)
+{
+    *flag = 0;
+
+    if (cfg[0] == 5) {
+        if (list == NULL || list->count == 0)
+            return 0;
+        if (cfg[1] != 0 && *(const uint16_t *)(cfg + 2) < list->count)
+            return 0x3e9;
+
+        uint8_t *flags = NULL;
+        int rc = cr_malloc_aligned16((void **)&flags, list->count);
+        if (rc != 0)
+            return rc;
+
+        int count = list->count;
+        for (int i = 0; i < count; i++)
+            flags[i] = 0;
+
+        uint8_t *data = (uint8_t *)img->data;
+        int W = img->a;
+        int H = img->b;
+        int win = 3;
+
+        /* Phase 1: whole-list sweeps with windows 3 and 5. */
+        for (;;) {
+            int pending = 0;
+            for (int i = 0; i < count; i++)
+                if (flags[i] == 0) { pending = 1; break; }
+            if (!pending || win == 7)
+                break;
+
+            for (int i = 0; i < count; i++) {
+                if (flags[i] != 0)
+                    continue;
+                uint16_t idx = list->indices[i];
+                int cnt;
+                float sum;
+                cr_box_sum_excl(W, H, data, &list->count, &list->indices,
+                                win, (int)idx, &cnt, &sum);
+                if (win == 5 ? cnt > 5 : cnt > 0) {
+                    data[idx] = (uint8_t)(int)(sum / (float)cnt + 0.5f);
+                    flags[i] = (uint8_t)(100 / win);
+                }
+            }
+            win += 2;
+        }
+
+        /* Phase 2: border-only retries, windows 5, 7 and 9.  A pass that
+         * touches no pixel (all flagged or interior) is the terminal state. */
+        win = 5;
+        for (;;) {
+            int worked = 0;
+            for (int i = 0; i < count; i++) {
+                if (flags[i] != 0)
+                    continue;
+                uint16_t idx = list->indices[i];
+                long long li = (long long)idx;
+                int row = (int)(li / (long long)W);
+                int col = (int)(li % (long long)W);
+                if (!(row < 2 || row >= H - 2 || col < 2 || col >= W - 2))
+                    continue;
+
+                if (win == 9)
+                    goto check_flags;
+
+                worked = 1;
+                int cnt;
+                float sum;
+                cr_box_sum_excl(W, H, data, &list->count, &list->indices,
+                                win, (int)idx, &cnt, &sum);
+                if (cnt > 0) {
+                    data[idx] = (uint8_t)(int)(sum / (float)cnt + 0.5f);
+                    flags[i] = (uint8_t)cr_floorf_to_int(
+                        (1.0f / (float)win) * 100.0f);
+                }
+            }
+            if (!worked)
+                break;
+            win += 2;
+        }
+
+check_flags:
+        if (cfg[1] != 0) {
+            for (int i = 0; i < count; i++)
+                if (flags[i] == 0) {
+                    cr_sized_free((void **)&flags);
+                    return 0x3e9;
+                }
+        }
+        cr_sized_free((void **)&flags);
+        return 0;
+    }
+
+    if (cfg[0] != 7)
+        return 0x410;
+
+    uint8_t *data = (uint8_t *)img->data;
+    int W = img->w;
+    int H = img->h;
+    int thr = *(const int *)(cfg + 4);
+    int cap_a = (int8_t)cfg[0xc];
+    int cap_b = (int8_t)cfg[0xd];
+
+    /* ---- pass 1: scan rows, interpolate down the columns ---------------- */
+    if (H > 0) {
+        uint8_t *prev = NULL;
+        int run = 0;
+
+        for (int r = 0; r < H; r++) {
+            uint8_t *row = data + (size_t)r * (size_t)W;
+            int d2 = 0;
+            int gap = 0;
+
+            if (W < 2) {
+                d2 = 0;
+                gap = (thr <= d2);
+            } else {
+                int t = (int)row[1] - (int)row[0];
+                d2 = t * t;
+                if (d2 >= thr) {
+                    gap = 1;
+                } else {
+                    for (int k = 1; k <= W - 2; k++) {
+                        t = (int)row[k + 1] - (int)row[k];
+                        d2 = t * t;
+                        if (d2 >= thr) { gap = 1; break; }
+                    }
+                }
+            }
+
+            if (gap) {
+                if (prev != NULL && run != 0 && run <= cap_a) {
+                    int stepbase = 0x400 / (run + 1);
+                    for (int c = 0; c < W; c++) {
+                        int a = prev[c];
+                        if (a == 0)
+                            continue;
+                        int b = row[c];
+                        if (b == 0)
+                            continue;
+                        int step = stepbase * (b - a);
+                        int acc = step + 0x200;
+                        uint8_t *p = prev + (size_t)W + (size_t)c;
+                        for (int k = 1; k <= run; k++) {
+                            *p = (uint8_t)((acc >> 10) + a);
+                            acc += step;
+                            p += W;
+                        }
+                    }
+                }
+                prev = row;
+                run = 0;
+            } else {
+                run++;
+            }
+        }
+    }
+
+    /* ---- pass 2: scan columns, interpolate across the rows --------------- */
+    *flag = 0;
+    if (W > 0) {
+        uint8_t *prev = NULL;
+        int run = 0;
+
+        for (int c = 0; c < W; c++) {
+            uint8_t *col = data + c;
+            int d2 = 0;
+            int gap = 0;
+
+            if (H < 2) {
+                d2 = 0;
+                gap = (d2 >= thr);
+            } else {
+                int t = (int)col[W] - (int)col[0];
+                d2 = t * t;
+                if (d2 >= thr) {
+                    gap = 1;
+                } else {
+                    for (int k = 2; k < H; k++) {
+                        t = (int)col[(size_t)k * (size_t)W] -
+                            (int)col[(size_t)(k - 1) * (size_t)W];
+                        d2 = t * t;
+                        if (d2 >= thr) { gap = 1; break; }
+                    }
+                }
+            }
+
+            if (gap) {
+                if (prev == NULL || run == 0) {
+                    prev = col;
+                    run = 0;
+                } else if (run <= cap_b) {
+                    int stepbase = 0x400 / (run + 1);
+                    if (H > 0) {
+                        for (int r = 0; r < H; r++) {
+                            uint8_t *pp = prev + (size_t)r * (size_t)W;
+                            uint8_t *cc = col + (size_t)r * (size_t)W;
+                            int a = *pp;
+                            int b = *cc;
+                            if (a == 0 || b == 0)
+                                continue;
+                            int step = (b - a) * stepbase;
+                            int acc = step + 0x200;
+                            uint8_t *p = pp + 1;
+                            for (int k = 1; k <= run; k++) {
+                                *p = (uint8_t)(a + (acc >> 10));
+                                p++;
+                                acc += step;
+                            }
+                        }
+                    }
+                    prev = col;
+                    run = 0;
+                } else {
+                    *flag = 1;
+                    prev = col;
+                    run = 0;
+                }
+            } else {
+                run++;
+            }
+        }
+    }
+
+    return 0;
+}

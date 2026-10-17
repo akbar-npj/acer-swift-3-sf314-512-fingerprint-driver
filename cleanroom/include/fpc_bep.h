@@ -1025,5 +1025,15 @@ int      cr_norm_2bd60(cr_image *img, const cr_image *mask,
 int      cr_pick_dispatch_16b90(void *pts, int *out_n, int npts, int want,
                                 const void *src, uint32_t seed,
                                 const void *cfg);                 /* 0x180016b90 */
+/* cfg[0] == 5: fill the u16-listed pixels of a u8 image from the mean of the
+ * surrounding unlisted pixels (cr_box_sum_excl); windows 3/5 sweep the whole
+ * list, then border pixels only with 5/7/9 (9 gives up).  *flag is unused.
+ * cfg[0] == 7: directional gap interpolation with 10-bit fixed point; the row
+ * pass fills down columns (cap cfg[0xc]), the transposed column pass fills
+ * across rows (cap cfg[0xd]) and sets *flag = 1 for an over-long run.
+ * Any other mode returns 0x410. */
+int      cr_mask_inpaint_317a0(uint8_t *flag, const cr_image *img,
+                               const cr_index_list *list,
+                               const uint8_t *cfg);               /* 0x1800317a0 */
 
 #endif /* FPC_BEP_H */

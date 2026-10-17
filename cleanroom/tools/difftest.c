@@ -8929,6 +8929,128 @@ static void test_pick_dispatch_16b90(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_pick_dispatch_16b90\n");
 }
 
+/* 0x1800317a0 — mask-aware gap inpainting (modes 5 and 7). */
+static void test_mask_inpaint_317a0(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x1800317a0));
+    begin("cr_mask_inpaint_317a0");
+    int bad = g_fail;
+
+    enum { IW = 40, IH = 40, MAXIDX = 96 };
+    static uint8_t bv[IW * IH], bc[IW * IH];
+    static uint8_t iv[0x20], ic[0x20];
+    static uint8_t cfg[0x20];
+    static uint16_t idx[MAXIDX];
+    static uint8_t lst[16];
+
+    /* mode 7: row/column gap interpolation on a u8 image. */
+    for (int t = 0; t < 4000; t++) {
+        int W = 1 + (int)(rnd() % IW);
+        int H = 1 + (int)(rnd() % IH);
+        static const int thrs[] = { -4, -1, 0, 1, 2, 3, 5, 8, 13, 32, 64,
+                                    128, 255, 1024, 65025 };
+        int thr = thrs[rnd() % (sizeof thrs / sizeof thrs[0])];
+        int ca = (int)(rnd() % 11u) - 2;   /* -2..8 */
+        int cb = (int)(rnd() % 11u) - 2;
+
+        for (int i = 0; i < W * H; i++) {
+            unsigned k = (unsigned)(rnd() % 8u);
+            uint8_t b;
+            if (k == 0)      b = 0;
+            else if (k == 1) b = 0xff;
+            else if (k == 2) b = (uint8_t)(rnd() % 4u);
+            else if (k == 3) b = (uint8_t)(200 + rnd() % 56u);
+            else if (k == 4) b = (uint8_t)((i & 1) ? 0 : 0xff);
+            else             b = (uint8_t)rnd();
+            bv[i] = bc[i] = b;
+        }
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0] = 7;
+        memcpy(cfg + 4, &thr, 4);
+        cfg[0xc] = (uint8_t)(int8_t)ca;
+        cfg[0xd] = (uint8_t)(int8_t)cb;
+
+        mk_image(iv, bv, W, W, H, 0, 0);
+        mk_image(ic, bc, W, W, H, 0, 0);
+
+        uint8_t fv = 0x5a, fc = 0x5a;
+        int rv = v(&fv, iv, NULL, cfg);
+        int rc = cr_mask_inpaint_317a0(&fc, (cr_image *)ic, NULL, cfg);
+        if (rv != rc) { mismatch("m7-ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (fv != fc) mismatch("m7-flag", (u32)t, fv, fc);
+        cmp_buf("m7", bv, bc, (size_t)W * H, (u32)t);
+    }
+
+    /* mode 5: point-list mean inpaint with the flag array. */
+    for (int t = 0; t < 3000; t++) {
+        int W = 1 + (int)(rnd() % IW);
+        int H = 1 + (int)(rnd() % IH);
+        int npix = W * H;
+        int n = (int)(rnd() % (MAXIDX + 1));
+        int lim = (int)(rnd() % 110u);
+        int gate = (int)(rnd() % 2u);
+
+        for (int i = 0; i < n; i++)
+            idx[i] = (uint16_t)(rnd() % (unsigned)npix);
+        for (int i = 0; i < npix; i++) {
+            unsigned k = (unsigned)(rnd() % 6u);
+            uint8_t b;
+            if (k == 0)      b = 0;
+            else if (k == 1) b = 0xff;
+            else if (k == 2) b = 0x04;
+            else if (k == 3) b = (uint8_t)(rnd() % 8u);
+            else             b = (uint8_t)rnd();
+            bv[i] = bc[i] = b;
+        }
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0] = 5;
+        cfg[1] = (uint8_t)gate;
+        *(uint16_t *)(cfg + 2) = (uint16_t)lim;
+        memset(lst, 0, sizeof lst);
+        uint16_t nn = (uint16_t)n;
+        memcpy(lst, &nn, 2);
+        const uint16_t *ip = idx;
+        memcpy(lst + 8, &ip, 8);
+
+        mk_image(iv, bv, W, W, H, 0, 0);
+        mk_image(ic, bc, W, W, H, 0, 0);
+        *(int *)(iv + 4) = H;          /* mode 5 reads +0x00/+0x04 */
+        *(int *)(ic + 4) = H;
+
+        uint8_t fv = 0x5a, fc = 0x5a;
+        int rv = v(&fv, iv, lst, cfg);
+        int rc = cr_mask_inpaint_317a0(&fc, (cr_image *)ic,
+                                       (const cr_index_list *)lst, cfg);
+        if (rv != rc) { mismatch("m5-ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (fv != fc) mismatch("m5-flag", (u32)t, fv, fc);
+        cmp_buf("m5", bv, bc, (size_t)npix, (u32)t);
+    }
+
+    /* NULL list and unknown modes. */
+    for (int t = 0; t < 8; t++) {
+        int W = 6, H = 5;
+        static const uint8_t modes[] = { 5, 6, 7, 0, 1, 4, 8, 0xff };
+        for (int i = 0; i < W * H; i++) bv[i] = bc[i] = (uint8_t)(i * 7);
+        memset(cfg, 0, sizeof cfg);
+        cfg[0] = modes[t];
+        mk_image(iv, bv, W, W, H, 0, 0);
+        mk_image(ic, bc, W, W, H, 0, 0);
+        *(int *)(iv + 4) = H;
+        *(int *)(ic + 4) = H;
+        uint8_t fv = 0x5a, fc = 0x5a;
+        int rv = v(&fv, iv, NULL, cfg);
+        int rc = cr_mask_inpaint_317a0(&fc, (cr_image *)ic, NULL, cfg);
+        if (rv != rc) { mismatch("nul-ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (fv != fc) mismatch("nul-flag", (u32)t, fv, fc);
+        cmp_buf("nul", bv, bc, (size_t)W * H, (u32)t);
+    }
+
+    if (g_fail == bad) end(); else printf("  FAIL cr_mask_inpaint_317a0\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -12811,6 +12933,7 @@ int main(int argc, char **argv)
     test_mask_pipeline_25050();
     test_norm_2bd60();
     test_pick_dispatch_16b90();
+    test_mask_inpaint_317a0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
