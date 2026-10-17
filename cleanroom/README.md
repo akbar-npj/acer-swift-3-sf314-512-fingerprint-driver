@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **312** (87.9% of functions, 118,304 B = 69.8% of bytes) |
+| rewritten + parity-verified | **313** (88.2% of functions, 119,312 B = 70.4% of bytes) |
 
-Seventy-two batches done so far:
+Seventy-three batches done so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -309,6 +309,12 @@ Seventy-two batches done so far:
     per-row `coefB[r]*0x4000` bias), uses a reduced 5-tap kernel for the trailing
     partial column, and optionally clamps the whole plane non-negative
     (1 function).
+73. three-level matched-filter pyramid: the 1008-byte `0x1800364c0` that
+    partitions the caller's `out` into per-level row-pointer arrays from a
+    3×0x30-byte descriptor (planes 5/3/5), then streams output blocks through
+    bilinear resampling → `cr_matched_filter_45eb0` → `cr_block_conv_231a0` →
+    `cr_dirbank_3de60` (rotating each pointer ring by 2), and finally
+    interleaves the block planes back into the front of `out` (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

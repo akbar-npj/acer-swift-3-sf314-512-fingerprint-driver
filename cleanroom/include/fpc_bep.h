@@ -557,6 +557,14 @@ int      cr_feature_extract_step_2db20(void *state, const cr_image *fimg,
 int      cr_dirbank_3de60(int16_t *out, const int16_t *const *rows,
                           const void *cfg);                        /* 0x18003de60 */
 
+/* Three-level matched-filter pyramid.  `out` is a caller-owned scratch/output
+ * buffer partitioned into per-level row-pointer arrays (built from the level
+ * descriptors reachable through `obj`); rows are bilinearly resampled from
+ * `img` along `s`, convolved by cr_matched_filter_45eb0 / cr_block_conv_231a0
+ * and finally cr_dirbank_3de60, then interleaved back into `out`. */
+int      cr_pyramid_364c0(int16_t *out, const void *obj,
+                          const cr_image *img, const cr_sampler *s);
+
 /* ---- batch 35: bitmap set-bit centroid ------------------------------------ */
 typedef struct {
     int32_t         a;      /* +0x00  row stride in bits       */

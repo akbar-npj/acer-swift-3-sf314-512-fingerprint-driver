@@ -8370,6 +8370,103 @@ static void test_dirbank_3de60(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_dirbank_3de60\n");
 }
 
+/* ---- 0x1800364c0 — three-level matched-filter pyramid ------------------ *
+ * int fn(int16_t *out, const void *obj, const cr_image *img,
+ *        const cr_sampler *s):
+ *   obj+0x08 -> three 0x30-byte level descriptors (plane counts 5/3/5, W/H,
+ *   flags, kernel/bias pointers).  `out` is partitioned into per-level row
+ *   pointer arrays; rows are bilinearly resampled from `img` along `s`, run
+ *   through cr_matched_filter_45eb0 / cr_block_conv_231a0 / cr_dirbank_3de60,
+ *   and interleaved back into the front of `out`.  All buffers caller-owned. */
+static void test_pyramid_364c0(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x1800364c0));
+    begin("cr_pyramid_364c0");
+    int bad = g_fail;
+
+    enum { OUTN = 8192, KN = 4096 };
+    static int16_t outv[OUTN], outc[OUTN];
+    static uint8_t pool[8192];
+    static uint8_t desc[0x98];
+    static uint8_t objv[0x10], objc[0x10];
+    static uint8_t iv[0x20], ic[0x20];
+    static int32_t samp[6];
+    static int16_t k0[KN], m0[KN], k1[KN], m1[KN], cA2[KN], cB2[KN];
+
+    for (int i = 0; i < KN; i++) {
+        k0[i]  = (int16_t)((int)(rnd() % 2001) - 1000);
+        m0[i]  = (int16_t)((int)(rnd() % 2001) - 1000);
+        k1[i]  = (int16_t)((int)(rnd() % 2001) - 1000);
+        m1[i]  = (int16_t)((int)(rnd() % 2001) - 1000);
+        cA2[i] = (int16_t)((int)(rnd() % 2001) - 1000);
+        cB2[i] = (int16_t)((int)(rnd() % 2001) - 1000);
+    }
+
+    for (int t = 0; t < 3000; t++) {
+        int f08 = 32, f0c = 1;                 /* level0 -> stride0 = 16 shorts */
+        int W0  = (int)(rnd() % 2u) ? 4 : 8;   /* W0*H0 == 16 */
+        int H0  = (W0 == 8) ? 2 : 4;
+        int stride1 = 16, K1 = 1 + (int)(rnd() % 2u);
+        int W1  = 4, H1 = (int)(rnd() % 2u) ? 4 : 2;
+        int stride2 = 16, NC2 = 1 + (int)(rnd() % 2u);
+        int W2  = 4, H2 = (int)(rnd() % 2u) ? 4 : 2;
+        int nblocks = 1 + (int)(rnd() % 3u);
+        int flag0 = (int)(rnd() & 1u);
+        int flag1 = (int)(rnd() & 1u);
+        int flag2 = (int)(rnd() & 1u);
+
+        for (int i = 0; i < 8192; i++) pool[i] = (uint8_t)rnd();
+        for (int i = 0; i < OUTN; i++) { outv[i] = 0x7fff; outc[i] = 0x7fff; }
+
+        /* sampler: keep sample positions inside the byte image (idx <= ~28) */
+        samp[0] = (int32_t)(rnd() % 0x1001u);   /* xstep */
+        samp[1] = (int32_t)(rnd() % 0x8001u);   /* xcoef */
+        samp[2] = (int32_t)(rnd() % 0x8001u);   /* xbase */
+        samp[3] = (int32_t)(rnd() % 0x1001u);   /* ystep */
+        samp[4] = (int32_t)(rnd() % 0x8001u);   /* ycoef */
+        samp[5] = (int32_t)(rnd() % 0x8001u);   /* ybase */
+
+        mk_image(iv, pool + 4096, 64, 64, 64, 0, 0);
+        mk_image(ic, pool + 4096, 64, 64, 64, 0, 0);
+
+        memset(desc, 0, sizeof desc);
+        int32_t *D = (int32_t *)desc;
+        D[0x00] = 5;                            /* L0[0] plane count */
+        D[0x02] = f08; D[0x03] = f0c;
+        D[0x04] = W0;  D[0x05] = H0; D[0x06] = flag0;
+        *(void **)(desc + 0x20) = k0;
+        *(void **)(desc + 0x28) = m0;
+
+        D[0x0c] = 3;                            /* L1[0] */
+        D[0x0e] = stride1; D[0x0f] = K1;
+        D[0x10] = W1; D[0x11] = H1; D[0x12] = flag1;
+        *(void **)(desc + 0x50) = k1;
+        *(void **)(desc + 0x58) = m1;
+
+        D[0x18] = 5;                            /* L2[0] */
+        D[0x19] = 2 * nblocks + 4;
+        D[0x1a] = stride2; D[0x1b] = NC2;
+        D[0x1c] = W2; D[0x1d] = H2; D[0x1e] = flag2;
+        *(void **)(desc + 0x80) = cA2;
+        *(void **)(desc + 0x88) = cB2;
+
+        memset(objv, 0, sizeof objv);
+        memset(objc, 0, sizeof objc);
+        *(void **)(objv + 8) = desc;
+        *(void **)(objc + 8) = desc;
+
+        int rv = v(outv, objv, iv, samp);
+        int rc = cr_pyramid_364c0(outc, objc, (const cr_image *)ic,
+                                  (const cr_sampler *)samp);
+
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", (const unsigned char *)outv,
+                (const unsigned char *)outc, sizeof outv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_pyramid_364c0\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -12246,6 +12343,7 @@ int main(int argc, char **argv)
     test_feature_extract_step_26dc0();
     test_feature_extract_step_2db20();
     test_dirbank_3de60();
+    test_pyramid_364c0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

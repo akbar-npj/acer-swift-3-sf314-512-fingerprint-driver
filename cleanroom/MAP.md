@@ -661,6 +661,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x18003de60` | `fpc_bio_bep_sw23_cb074cb39c` | `cr_dirbank_3de60` | `int fn(int16_t *out, const int16_t *const *rows, const void *cfg)`. Fixed-point (Q15) directional matched-filter bank. `cfg`: `+0x08` stride, `+0x0c` ncoef, `+0x10` w, `+0x14` h, `+0x18` normalise, `+0x20` coefA (`h*ncoef*25` shorts), `+0x28` coefB (`h` shorts). `rows` is an array of ≥6 int16 row pointers. Per output row `r` the bias `coefB[r]*0x4000` is added; a 5×5 correlation is slid over `ncoef` orientation blocks (each block a distinct 25-short kernel) and **two shifted responses are max-pooled** into two int16 channels (`>>15`, arithmetic). A trailing partial column (`(w-2)>>1` full pairs then the remainder) uses a reduced 5-tap edge kernel. If `cfg+0x18 == 1` the whole `w*h` plane is then clamped non-negative (`cr_s16_clamp_nonneg`). Returns 0. Passed the difftest (326 ok). |
 
+### Batch 86 — three-level matched-filter pyramid
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x1800364c0` | `fpc_bio_bep_sw23_a9419e00dd` | `cr_pyramid_364c0` | `int fn(int16_t *out, const void *obj, const cr_image *img, const cr_sampler *s)`. `obj+0x08` → a descriptor of three 0x30-byte levels; the guard requires the plane counts `5/3/5` (`L0[0]==5 && L1[0]==3 && L2[0]==5`). Phase 1 partitions the caller-owned `out` into three row-pointer arrays: level *k* holds (planes+1) pointers spaced `stride_k` shorts apart, with `stride_0=(L0[3]*L0[2]+1)/2` and `stride_{1,2}=L{1,2}[3]*L{1,2}[2]` (the multiplier starts at 1, becomes 2). Phase 2 streams `(L2[1]-4)>>1` output blocks: bilinearly resamples new level-0 rows (`cr_bilinear_sample_u8`, `n=L0[2]` samples at an increasing global idx), runs `cr_matched_filter_45eb0` into a level-1 plane, `cr_block_conv_231a0` into a level-2 plane, and `cr_dirbank_3de60` into the next block of the tail region; each level's pointer ring is rotated by 2 (`cr_array_rotate`) and its fill index backed off by 2 when consumed. Phase 3 interleaves the block planes into the front of `out` (`out[b*nblocks+r] = block[r] row[b]`). Returns 0, `0x69` on a guard mismatch, else the first nonzero callee status. Passed the difftest (327 ok). |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

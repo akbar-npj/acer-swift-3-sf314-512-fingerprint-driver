@@ -1615,3 +1615,160 @@ int cr_dirbank_3de60(int16_t *out, const int16_t *const *rows, const void *cfg)
         cr_s16_clamp_nonneg(out, out, w * h);
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800364c0 — three-level matched-filter pyramid.
+ *
+ *   int fn(int16_t *out, const void *obj, const cr_image *img,
+ *          const cr_sampler *s):
+ *
+ * `obj + 0x08` points to a descriptor of three 0x30-byte levels; each level L
+ * has  L[0]=plane-count (5/3/5), L[2]=f08, L[3]=f0c, L[4]=W, L[5]=H,
+ * L[6]=flag, L[8]=kernel base, L[0xa]=per-row bias base.  The guard requires
+ * L0[0]==5 && L1[0]==3 && L2[0]==5.
+ *
+ * Phase 1 walks `out` building three row-pointer arrays: level k holds
+ * (plane-count+1) pointers spaced `stride_k` shorts apart where
+ * stride_0 = (L0[3]*L0[2]+1)/2 and stride_{1,2} = L{1,2}[3]*L{1,2}[2].  The
+ * running short offset is carried across levels; the tail region is the final
+ * dirbank output base.
+ *
+ * Phase 2 streams `(L2[1]-4)>>1` output blocks: it bilinearly resamples new
+ * level-0 rows (cr_bilinear_sample_u8, `n = L0[2]` samples at increasing idx),
+ * runs cr_matched_filter_45eb0 into a level-1 plane, cr_block_conv_231a0 into a
+ * level-2 plane and cr_dirbank_3de60 into the next block of the tail region.
+ * After each level is consumed its pointer ring is rotated by 2
+ * (cr_array_rotate) and the fill index backed off by 2.
+ *
+ * Phase 3 interleaves the per-block dirbank planes into the front of `out`:
+ * out[b*nblocks + r] = block[r] row[b].
+ *
+ * Returns 0 on success, 0x69 on a guard mismatch, else the first nonzero
+ * callee status.
+ * ------------------------------------------------------------------------ */
+int cr_pyramid_364c0(int16_t *out, const void *obj, const cr_image *img,
+                     const cr_sampler *s)
+{
+    const uint8_t *Db = *(const uint8_t *const *)((const uint8_t *)obj + 8);
+    const int32_t *D  = (const int32_t *)Db;
+
+    if (!(D[0] == 5 && D[0xc] == 3 && D[0x18] == 5))
+        return 0x69;
+
+    intptr_t ptrs[16];
+    intptr_t *base[3];
+    int       n[3];
+    int       offset = 0;      /* running short offset into `out` */
+
+    /* --- phase 1: build the per-level row-pointer arrays --- */
+    {
+        int mult  = 1;
+        int pidx  = 0;
+        int count = 5;         /* level0 plane count */
+        for (int lvl = 0;; lvl++) {
+            const uint8_t *Lk = Db + 0x30 * lvl;
+            int f08 = *(const int32_t *)(Lk + 0x08);
+            int f0c = *(const int32_t *)(Lk + 0x0c);
+            base[lvl] = ptrs + pidx;
+            n[lvl]    = count + 1;
+            if (count >= 0) {
+                mult = (f0c * f08 * mult + 1) / 2;
+                intptr_t p = (intptr_t)out + (intptr_t)offset * 2;
+                for (int j = 0; j <= count; j++) {
+                    base[lvl][j] = p;
+                    p += (intptr_t)mult * 2;
+                }
+                offset += mult * (count + 1);
+            }
+            if (Db + 8 + 0x30 * (lvl + 1) == Db + 0x98)
+                break;
+            pidx += count + 1;
+            count = *(const int32_t *)(Lk + 0x30);
+            mult  = 2;
+        }
+    }
+
+    intptr_t *A = base[0], *B = base[1], *C = base[2];
+    int       na = n[0], nb = n[1], nc = n[2];
+    int       ia = 0, ib = 0, ic = 0;
+
+    int16_t *fbase    = (int16_t *)((uint8_t *)out + (intptr_t)offset * 2);
+    int      nblocks  = (D[0x19] - 4) >> 1;
+    int      row      = 0;
+    int      sampIdx  = 0;
+
+    /* --- phase 2: streaming pyramid --- */
+    while (row < nblocks) {
+        int carry = ia;                       /* iVar11: na when the fill runs */
+        if (ia < na) {
+            int end = (na - ia) + sampIdx;
+            int i   = sampIdx;
+            int pi  = ia;
+            while (i != end) {
+                cr_bilinear_sample_u8((uint8_t *)A[pi], img, s, D[2], i);
+                i++;
+                pi++;
+            }
+            sampIdx = end;
+            carry   = na;
+        }
+        if (D[0] != 5)
+            return 0x69;
+        int st = cr_matched_filter_45eb0((int16_t *)B[ib],
+                                         (const uint8_t *const *)A, D);
+        if (st)
+            return st;
+        ib++;
+        cr_array_rotate((uint64_t *)A, 6);
+        ia = carry - 2;
+        if (ib == nb) {
+            if (D[0xc] != 3)
+                return 0x69;
+            st = cr_block_conv_231a0((int16_t *)C[ic],
+                                     (const intptr_t *)B, Db + 0x30);
+            if (st)
+                return st;
+            ic++;
+            cr_array_rotate((uint64_t *)B, 4);
+            ib = ib - 2;
+            if (ic == nc) {
+                if (D[0x18] != 5)
+                    return 0x69;
+                st = cr_dirbank_3de60(
+                        (int16_t *)((uint8_t *)fbase +
+                                    (intptr_t)(D[0x1d] * D[0x1c] * row) * 2),
+                        (const int16_t *const *)C, Db + 0x60);
+                if (st)
+                    return st;
+                row++;
+                cr_array_rotate((uint64_t *)C, 6);
+                ic = ic - 2;
+            }
+        }
+    }
+
+    /* --- phase 3: interleave the block planes into the front of `out` --- */
+    {
+        int H2 = D[0x1d];
+        if (H2 > 0) {
+            int W2 = D[0x1c];
+            int dstRowBase = 0;
+            for (int b = 0; b < H2; b++) {
+                if (nblocks > 0) {
+                    int srcOff = b * W2;
+                    int dstOff = dstRowBase * W2;
+                    for (int r = 0; r < nblocks; r++) {
+                        if (W2 > 0) {
+                            for (int l = 0; l < W2; l++)
+                                out[dstOff + l] = fbase[srcOff + l];
+                        }
+                        srcOff += H2 * W2;
+                        dstOff += W2;
+                    }
+                }
+                dstRowBase += nblocks;
+            }
+        }
+    }
+    return 0;
+}

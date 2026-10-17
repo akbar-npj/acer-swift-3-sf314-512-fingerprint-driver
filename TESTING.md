@@ -90,7 +90,7 @@ x64 ABI) and the clean-room implementation, and compares results bit-for-bit.
 - **`make check` is the canonical command** (non-ASan). An **ASan build** is also
   used to catch memory bugs (§4).
 
-Current baseline (2026-10-17): the suite **passes** — 326 functions `ok`, 0
+Current baseline (2026-10-17): the suite **passes** — 327 functions `ok`, 0
 `FAIL`. The last failures were vendor routines that read *uninitialised* or
 *out-of-bounds* heap memory (e.g. the streaming vertical-FIR mirror branch
 indexes `ring + rem*w` with a negative `rem`, reaching before the ring). The
@@ -196,7 +196,7 @@ The **ASan build alone** reports these three allocator tests as `FAIL` (with
 reproduces unchanged on the baseline commit — and is an artefact of the ASan
 allocator changing the descriptor-address fields those tests compare; it is not
 a regression and not a clean-room bug. The **canonical non-ASan `make check`
-passes** (326 ok / 0 FAIL as of 2026-10-17). Judge parity by the non-ASan run;
+passes** (327 ok / 0 FAIL as of 2026-10-17). Judge parity by the non-ASan run;
 use ASan only to catch heap overflows/underflows.
 
 The same `ia-fields … vendor=0 clean=0` line can also appear **rarely** (roughly
