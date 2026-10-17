@@ -1049,6 +1049,13 @@ int      cr_pick_points_2f2e0(uint8_t *out_xy, float *out_val, int *out_n,
                               const uint8_t *xy_tab, const float *val_tab,
                               int npts, int want, const void *src,
                               uint32_t seed, const void *cfg);   /* 0x18002f2e0 */
+/* cfg[0x24] == 2 gate + field forwarding to cr_pick_points_2f2e0. */
+int      cr_pick_points_dispatch_2b680(void *a, const void *src,
+                                       const uint8_t *cfg);      /* 0x18002b680 */
+/* Pyramid / max-pool stage driver + per-block projection + softmax. */
+int      cr_stage_run_273a0(float *out, const int *chain,
+                            const cr_image *img,
+                            const cr_sampler *s);               /* 0x1800273a0 */
 /* Output object of cr_feat_pack_0e850 (8 qwords). */
 typedef struct {
     uint8_t  *xy;      /* +0x00  2 bytes per point */

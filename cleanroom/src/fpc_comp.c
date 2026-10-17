@@ -2862,6 +2862,147 @@ done:
     return rc;
 }
 
+/* 0x18002b680 — point-selection dispatch for the mask-binning selector.
+ *
+ * int cr_pick_points_dispatch_2b680(void *a, const void *src,
+ *                                   const uint8_t *cfg);
+ *
+ * Thin wrapper: unless cfg[0x24] == 2 (the cr_bin_select_14320 branch) it
+ * returns 0 without touching anything.  Otherwise it forwards the seven
+ * fields held in `a` (out_xy at +0x08, out_val at +0x10, out_n at +0x40,
+ * xy_tab at +0x20, val_tab at +0x28, npts at +0x44, seed at +0x4c), the
+ * caller's `src` and `want = *(int*)(cfg+0x14)` to cr_pick_points_2f2e0.
+ */
+int cr_pick_points_dispatch_2b680(void *a, const void *src, const uint8_t *cfg)
+{
+    if (cfg[0x24] != 2)
+        return 0;
+
+    const uint8_t *b = (const uint8_t *)a;
+    return cr_pick_points_2f2e0(*(uint8_t **)(b + 0x08),
+                                *(float **)(b + 0x10),
+                                (int *)(b + 0x40),
+                                *(const uint8_t **)(b + 0x20),
+                                *(const float **)(b + 0x28),
+                                *(const int *)(b + 0x44),
+                                *(const int *)(cfg + 0x14),
+                                src,
+                                *(const uint32_t *)(b + 0x4c),
+                                cfg);
+}
+
+/* 0x1800273a0 — stage-run driver with a per-block projection pass.
+ *
+ * int cr_stage_run_273a0(float *out, const int *chain, const cr_image *img,
+ *                        const cr_sampler *s);
+ *
+ * chain[2] points at the stage-descriptor array.  When chain[0] == 3 and the
+ * descriptors form a three-level pyramid (d[0] == 5, d[0xc] == 3,
+ * d[0x18] == 5) the buffer size is
+ *     sum over the three 0x30-byte levels of (tag+1)*L[0]*L[1]*(1,2,2)
+ * plus 2*first_block[0] when there is at least one block, and the stage runs
+ * through cr_pyramid_364c0.  Otherwise the size is
+ *     2*trunc((H-tag+1)/2) * ((W-tag+1)/2) * nk + (tag+1)*H,
+ * raised to 2*chain[9], and the stage runs through cr_maxpool_stream_21000.
+ *
+ * Afterwards each of the chain[4] 0x20-byte block descriptors
+ * {p0, p1, flag, 0, coef*, bias*} projects the first p0 int16 of the buffer
+ * onto p1 outputs: out[r] = (sum_j coef[r*p0+j]*buf[j] + bias[r]*0x4000) >> 15
+ * with 32-bit wrapping accumulation; flag == 1 clamps the block non-negative.
+ * The p1 results are then copied back over the head of the buffer.  Finally
+ * cr_softmax2 writes the single float result from buf[0], buf[1] and the
+ * buffer is released.  A stage failure frees the buffer and returns the
+ * status unchanged.
+ */
+int cr_stage_run_273a0(float *out, const int *chain, const cr_image *img,
+                       const cr_sampler *s)
+{
+    const int *d = *(const int *const *)((const char *)chain + 8);
+    const int tag = d[0];
+    void *buf = NULL;
+    int r;
+
+    if (chain[0] == 3 && tag == 5 && d[0xc] == 3 && d[0x18] == 5) {
+        int size = 0, mult = 1, t = 5;
+        const int *p = d + 2;
+        for (;;) {
+            size += (t + 1) * p[0] * p[1] * mult;
+            if (p + 0xc == d + 0x26)
+                break;
+            t = p[10];
+            mult = 2;
+            p += 0xc;
+        }
+        if (chain[4] > 0)
+            size += **(const int *const *)((const char *)chain + 0x18) * 2;
+        r = cr_malloc_aligned16(&buf, (size_t)size);
+        if (r != 0)
+            return r;
+        r = 0x69;
+        if (chain[0] != 3)
+            goto fail;
+        r = cr_pyramid_364c0(buf, chain, img, s);
+    } else {
+        int x = (d[1] - tag) + 1;
+        int size = (int)(((uint32_t)x + ((uint32_t)x >> 31)) & 0xfffffffeu)
+                 * (((d[2] - tag) + 1) / 2) * d[5]
+                 + (tag + 1) * d[1];
+        int floorv = *(const int *)((const char *)chain + 0x24) * 2;
+        if (size < floorv)
+            size = floorv;
+        r = cr_malloc_aligned16(&buf, (size_t)size);
+        if (r != 0)
+            return r;
+        r = cr_maxpool_stream_21000(buf, chain, img, s);
+    }
+
+    if (r == 0) {
+        int16_t *b = (int16_t *)buf;
+        const int nblk = chain[4];
+        if (nblk > 0) {
+            const uint8_t *blk = *(const uint8_t *const *)((const char *)chain + 0x18);
+            for (int i = 0; i < nblk; i++) {
+                const uint8_t *p = blk + (size_t)i * 0x20;
+                const int p0 = *(const int *)(p + 0x00);
+                const int p1 = *(const int *)(p + 0x04);
+                const int flag = *(const int *)(p + 0x08);
+                const int16_t *coef = *(const int16_t *const *)(p + 0x10);
+                const int16_t *bias = *(const int16_t *const *)(p + 0x18);
+                int16_t *op = b + p0;
+
+                if (p1 >= 1) {
+                    int row = 0;
+                    for (int i2 = 0; i2 < p1; i2++) {
+                        uint32_t sum = 0;
+                        if (p0 > 0) {
+                            const int16_t *cp = coef + row;
+                            for (int j = 0; j < p0; j++)
+                                sum += (uint32_t)(int32_t)cp[j]
+                                     * (uint32_t)(int32_t)b[j];
+                        }
+                        row += p0;
+                        sum += (uint32_t)(int32_t)bias[i2] << 14;
+                        op[i2] = (int16_t)((int32_t)sum >> 15);
+                    }
+                    if (flag == 1)
+                        cr_s16_clamp_nonneg(op, op, p1);
+                    for (int j = 0; j < p1; j++)
+                        b[j] = op[j];
+                } else if (flag == 1) {
+                    cr_s16_clamp_nonneg(op, op, p1);
+                }
+            }
+        }
+        cr_softmax2(out, chain, b);
+        cr_sized_free(&buf);
+        return 0;
+    }
+
+fail:
+    cr_sized_free(&buf);
+    return r;
+}
+
 /* 0x18000e850 — per-keypoint descriptor packer.
  *
  * int cr_feat_pack_0e850(cr_image *src, cr_feat_obj *obj, const uint8_t *cfg);

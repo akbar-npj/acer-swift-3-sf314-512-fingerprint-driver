@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **322** (90.7% of functions, 131,216 B = 77.4% of bytes) |
+| rewritten + parity-verified | **324** (91.3% of functions, 132,096 B = 77.9% of bytes) |
 
-Seventy-nine batches so far:
+Eighty batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -357,6 +357,14 @@ Seventy-nine batches so far:
     bias and `>>15`), copies the plane back to the head of the buffer and
     chains the remaining stages through `cr_filter_chain_run_i16` (1
     function).
+80. point-selection gate + stage-run driver: `cr_pick_points_dispatch_2b680`
+    (112 B) forwards to `cr_pick_points_2f2e0` only when `cfg[0x24] == 2`;
+    `cr_stage_run_273a0` (768 B) sizes and allocates the stage buffer for
+    either the three-level pyramid (`cr_pyramid_364c0`) or the row-streaming
+    5x5 max-pool path (`cr_maxpool_stream_21000`), then runs the chain's
+    per-block projection rows (`(sum + bias*0x4000) >> 15`, optional clamp,
+    copy back to the buffer head) and finishes with `cr_softmax2` on the first
+    two shorts (2 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

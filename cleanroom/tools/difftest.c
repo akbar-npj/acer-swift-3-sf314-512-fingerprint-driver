@@ -9310,6 +9310,214 @@ static void test_maxpool_stream_21000(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_maxpool_stream_21000\n");
 }
 
+/* ---- 0x18002b680 — point-selection dispatch wrapper -------------------- */
+static void test_pick_points_dispatch_2b680(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x18002b680));
+    begin("cr_pick_points_dispatch_2b680");
+    int bad = g_fail;
+
+    enum { MAXPTS = 40, MAXW = 512 };
+    static uint8_t a[0x60], ac[0x60];
+    static uint8_t xyv[2 * MAXPTS], xyc[2 * MAXPTS];
+    static float vlv[MAXPTS], vlc[MAXPTS];
+    static uint8_t oxv[2 * MAXPTS], oxc[2 * MAXPTS];
+    static float ovv[MAXPTS], ovc[MAXPTS];
+    static uint8_t mcfg[0x20];
+    static uint8_t cfg[0x40];
+    static uint32_t mwords[MAXW];
+
+    for (int t = 0; t < 2400; t++) {
+        int guard = (t % 12 == 11);
+        int margin = (int)(rnd() % 3u);
+        int W = 2 * margin + 1 + (int)(rnd() % 48u);
+        int H = 2 * margin + 1 + (int)(rnd() % 48u);
+        int NX = 1 + (int)(rnd() % 5u);
+        int NY = 1 + (int)(rnd() % 5u);
+        int npts = (int)(rnd() % (MAXPTS + 1));
+        int maxpts = npts + (int)(rnd() % 5u);
+        int weight = (int)(rnd() % 2000u);
+        int stride = 32 * (1 + (int)(rnd() % 4u));
+        int x0 = (int)(rnd() % 4u), y0 = (int)(rnd() % 4u);
+        uint32_t seed = rnd();
+
+        for (int i = 0; i < MAXW; i++) mwords[i] = rnd();
+        for (int i = 0; i < 2 * MAXPTS; i++) {
+            uint8_t b = (rnd() % 4u == 0) ? (uint8_t)i : (uint8_t)rnd();
+            xyv[i] = xyc[i] = b;
+        }
+        for (int i = 0; i < MAXPTS; i++) {
+            uint32_t u = (uint32_t)rnd();
+            memcpy(&vlv[i], &u, 4);
+            memcpy(&vlc[i], &u, 4);
+        }
+        for (int i = 0; i < 2 * MAXPTS; i++) oxv[i] = oxc[i] = 0xa5;
+        for (int i = 0; i < MAXPTS; i++) {
+            uint32_t u = 0xdeadbeefu; memcpy(&ovv[i], &u, 4); memcpy(&ovc[i], &u, 4);
+        }
+
+        memset(mcfg, 0, sizeof mcfg);
+        *(int *)(mcfg + 0x00) = stride;
+        *(void **)(mcfg + 0x08) = mwords;
+        *(int *)(mcfg + 0x10) = W;
+        *(int *)(mcfg + 0x14) = H;
+        *(int *)(mcfg + 0x18) = x0;
+        *(int *)(mcfg + 0x1c) = y0;
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0x24] = guard ? (uint8_t)(rnd() % 3u + 3u) : 2;
+        *(int8_t *)(cfg + 0x08) = (int8_t)margin;
+        *(int16_t *)(cfg + 0x10) = (int16_t)maxpts;
+        *(int *)(cfg + 0x14) = weight;
+        cfg[0x25] = (uint8_t)NX;
+        cfg[0x26] = (uint8_t)NY;
+
+        memset(a, 0x5A, sizeof a);
+        memset(ac, 0x5A, sizeof ac);
+        for (int side = 0; side < 2; side++) {
+            uint8_t *p = side ? ac : a;
+            *(void **)(p + 0x08) = side ? oxc : oxv;
+            *(void **)(p + 0x10) = side ? (void *)ovc : (void *)ovv;
+            *(void **)(p + 0x20) = side ? xyc : xyv;
+            *(void **)(p + 0x28) = side ? (void *)vlc : (void *)vlv;
+            *(int *)(p + 0x40) = 0x12345678;
+            *(int *)(p + 0x44) = npts;
+            *(uint32_t *)(p + 0x4c) = seed;
+        }
+
+        int rv = v(a, mcfg, cfg);
+        int rc = cr_pick_points_dispatch_2b680(ac, mcfg, cfg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (*(int *)(a + 0x40) != *(int *)(ac + 0x40))
+            mismatch("outn", (u32)t, (u32)*(int *)(a + 0x40),
+                     (u32)*(int *)(ac + 0x40));
+        /* The pointer slots are per-side by construction; everything else in
+         * the object must be untouched. */
+        static const int off[6] = { 0x00, 0x18, 0x30, 0x3c, 0x48, 0x50 };
+        static const int len[6] = { 8, 8, 12, 4, 4, 16 };
+        for (int side = 0; side < 2; side++) {
+            uint8_t *p = side ? ac : a;
+            int okp = (*(void **)(p + 0x08) == (void *)(side ? oxc : oxv))
+                   && (*(void **)(p + 0x10) == (void *)(side ? (void *)ovc : (void *)ovv))
+                   && (*(void **)(p + 0x20) == (void *)(side ? xyc : xyv))
+                   && (*(void **)(p + 0x28) == (void *)(side ? (void *)vlc : (void *)vlv))
+                   && (*(uint32_t *)(p + 0x4c) == seed);
+            for (int k = 0; k < 6; k++)
+                for (int j = 0; j < len[k]; j++)
+                    if (p[off[k] + j] != 0x5A) okp = 0;
+            if (!okp) mismatch("obj", (u32)t, (u32)side, 0);
+        }
+        cmp_buf("xy", oxv, oxc, sizeof oxv, (u32)t);
+        cmp_buf("val", (const unsigned char *)ovv,
+                (const unsigned char *)ovc, sizeof ovv, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_pick_points_dispatch_2b680\n");
+}
+
+/* ---- 0x1800273a0 — stage driver + block projection + softmax ----------- */
+static void test_stage_run_273a0(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, const void *, const void *);
+    v_t v = (v_t)fn_at(RVA(0x1800273a0));
+    begin("cr_stage_run_273a0");
+    int bad = g_fail;
+
+    enum { MAXBLK = 4, NCOEF = 40 };
+    static int16_t kern[96], bias[4];
+    static int16_t bcoef[MAXBLK][NCOEF], bbias[MAXBLK][NCOEF];
+    static uint8_t pool[8192];
+    static uint8_t blkbuf[0x100];
+    static int desc[0x28];
+    static int chain[12];
+    static uint8_t iv[0x20], ic[0x20];
+
+    for (int t = 0; t < 3000; t++) {
+        int pyr = (t % 3 == 2);
+        int W = 6 + (int)(rnd() % 30u);
+        int H = 6 + (int)(rnd() % 30u);
+        int nk = 1 + (int)(rnd() % 3u);
+        /* The pyramid path's buffer formula only covers one block plane
+         * (2*first_block[0] bytes), so use exactly nblocks=1 with p0 equal to
+         * the block plane size 16 and a 16-entry projection row. */
+        int nblk = pyr ? 1 : 1 + (int)(rnd() % MAXBLK);
+        uint32_t sscale = 1u << (20 + (int)(rnd() % 10u));
+
+        for (size_t i = 0; i < sizeof pool; i++) pool[i] = (uint8_t)rnd();
+        mk_image(iv, pool + 4096, 64, 64, 64, 0, 0);
+        mk_image(ic, pool + 4096, 64, 64, 64, 0, 0);
+
+        memset(desc, 0, sizeof desc);
+        memset(chain, 0, sizeof chain);
+        memset(blkbuf, 0, sizeof blkbuf);
+
+        if (!pyr) {
+            desc[0] = 5; desc[1] = H; desc[2] = W; desc[3] = 1;
+            desc[5] = nk; desc[6] = (int)(rnd() & 1u);
+            for (int i = 0; i < nk * 25; i++) kern[i] = (int16_t)rnd();
+            for (int i = 0; i < nk; i++) bias[i] = (int16_t)rnd();
+            *(void **)(desc + 8) = kern;
+            *(void **)(desc + 10) = bias;
+            chain[0] = 1;
+        } else {
+            /* three-level pyramid descriptor, same shape as test_pyramid_364c0 */
+            desc[0x00] = 5; desc[0x02] = 32; desc[0x03] = 1;
+            desc[0x04] = 8; desc[0x05] = 2; desc[0x06] = (int)(rnd() & 1u);
+            *(void **)(desc + 0x20 / 4) = kern;
+            *(void **)(desc + 0x28 / 4) = bias;
+            desc[0x0c] = 3; desc[0x0e] = 16; desc[0x0f] = 1;
+            desc[0x10] = 4; desc[0x11] = 4; desc[0x12] = (int)(rnd() & 1u);
+            *(void **)(desc + 0x50 / 4) = kern + 25;
+            *(void **)(desc + 0x58 / 4) = bias + 1;
+            desc[0x18] = 5; desc[0x19] = 2 * nblk + 4;
+            desc[0x1a] = 16; desc[0x1b] = 1;
+            desc[0x1c] = 4; desc[0x1d] = 4; desc[0x1e] = (int)(rnd() & 1u);
+            *(void **)(desc + 0x80 / 4) = kern + 50;
+            *(void **)(desc + 0x88 / 4) = bias + 2;
+            for (int i = 0; i < 96; i++) kern[i] = (int16_t)rnd();
+            for (int i = 0; i < 4; i++) bias[i] = (int16_t)rnd();
+            chain[0] = 3;
+        }
+        *(void **)(chain + 2) = desc;
+
+        for (int k = 0; k < nblk; k++) {
+            int p0 = pyr ? 16 : 1 + (int)(rnd() % 4u);
+            int p1 = (k == nblk - 1) ? 2 : 1 + (int)(rnd() % 3u);
+            uint8_t *bp = blkbuf + k * 0x20;
+            *(int *)(bp + 0x00) = p0;
+            *(int *)(bp + 0x04) = p1;
+            *(int *)(bp + 0x08) = (int)(rnd() & 1u);
+            *(void **)(bp + 0x10) = bcoef[k];
+            *(void **)(bp + 0x18) = bbias[k];
+            for (int i = 0; i < NCOEF; i++) {
+                bcoef[k][i] = (int16_t)rnd();
+                bbias[k][i] = (int16_t)rnd();
+            }
+        }
+        chain[4] = nblk;
+        chain[8] = (int)sscale;
+        chain[9] = 1024;                    /* buffer floor, 2048 bytes */
+        *(void **)(chain + 6) = blkbuf;
+
+        int32_t smp[6];
+        smp[0] = (int32_t)(rnd() % 0x4001u);
+        smp[1] = 0;
+        smp[2] = 0;
+        smp[3] = 0;
+        smp[4] = 0x8000;
+        smp[5] = 0;
+
+        float ov = 1234.5f, oc = 1234.5f;
+        int rv = v(&ov, chain, iv, smp);
+        int rc = cr_stage_run_273a0(&oc, chain, (const cr_image *)ic,
+                                    (const cr_sampler *)smp);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("out", (const unsigned char *)&ov,
+                (const unsigned char *)&oc, 4, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_stage_run_273a0\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -13196,6 +13404,8 @@ int main(int argc, char **argv)
     test_pick_points_2f2e0();
     test_feat_pack_0e850();
     test_maxpool_stream_21000();
+    test_pick_points_dispatch_2b680();
+    test_stage_run_273a0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
