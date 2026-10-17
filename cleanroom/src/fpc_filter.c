@@ -2399,6 +2399,125 @@ int cr_filter_chain_run_i16(void *buf, const int *chain, int start, int end)
 }
 
 /* ------------------------------------------------------------------------ *
+ * 0x180021000 — row-streaming 5x5 max-pool stage runner.
+ *   int fn(uint8_t *buf, const int *chain, const cr_image *img,
+ *          const cr_sampler *s)
+ *
+ * `chain` is the same int[] used by cr_filter_chain_run_i16: `chain[2]`
+ * points at the stage descriptors.  The guard requires descriptor[3] == 1 and
+ * descriptor[0] == 5 (a 5x5 int16 stage); otherwise the *caller's* buffer is
+ * released with cr_sized_free and 0x69 returned.
+ *
+ * The buffer is a byte window of six rows of W = desc[2] bytes followed by
+ * the int16 output.  Four rows are pre-rolled through cr_bilinear_sample_u8
+ * at indices 0..3; each of the ((H-4)>>1) output rows then shifts the window
+ * up by two rows, samples the next two, and runs the stage's nk kernels.
+ * Every kernel plane writes ((H-4)>>1) x ((W-4)>>1) shorts.
+ *
+ * Per output pixel the four candidate sums are the 5x5 kernel correlation
+ * over the 6x6 window at the four 2x2 sub-offsets (a00/a01 one column apart,
+ * a10/a11 one row lower).  The vendor computes them with a rolling
+ * recurrence; the result is the same as the plain sum.  The four are
+ * max-reduced, then `(max << 6) + bias*0x4000` is arithmetic-shifted right by
+ * 15 and truncated to int16.  desc[6] == 1 clamps the whole output plane
+ * non-negative.
+ *
+ * Afterwards the output is copied to the head of `buf` and stages 1..chain[0]-1
+ * are run through cr_filter_chain_run_i16; a failure there also frees the
+ * caller's buffer before returning the status.
+ * ------------------------------------------------------------------------ */
+int cr_maxpool_stream_21000(uint8_t *buf, const int *chain,
+                            const cr_image *img, const cr_sampler *s)
+{
+    const int *d = *(const int *const *)((const char *)chain + 8);
+
+    if (!(d[3] == 1 && d[0] == 5)) {
+        cr_sized_free((void **)&buf);
+        return 0x69;
+    }
+
+    const int W  = d[2];
+    const int H  = d[1];
+    const int nk = d[5];
+    const int ow = (W - 4) >> 1;
+    const int oh = (H - 4) >> 1;
+    uint8_t *outb = buf + (int64_t)(W * 6 >> 1) * 2;
+
+    cr_bilinear_sample_u8(buf + (int64_t)2 * W, img, s, W, 0);
+    cr_bilinear_sample_u8(buf + (int64_t)3 * W, img, s, W, 1);
+    cr_bilinear_sample_u8(buf + (int64_t)4 * W, img, s, W, 2);
+    cr_bilinear_sample_u8(buf + (int64_t)5 * W, img, s, W, 3);
+
+    int rowacc = 0;
+    for (int r = 0; r < oh; r++) {
+        if (W > 0) {
+            for (int c = 0; c < W; c++) {
+                buf[c]             = buf[(int64_t)2 * W + c];
+                buf[(int64_t)W + c]     = buf[(int64_t)3 * W + c];
+                buf[(int64_t)2 * W + c] = buf[(int64_t)4 * W + c];
+                buf[(int64_t)3 * W + c] = buf[(int64_t)5 * W + c];
+            }
+        }
+        int next = 4 + 2 * r;
+        cr_bilinear_sample_u8(buf + (int64_t)4 * W, img, s, W, next);
+        cr_bilinear_sample_u8(buf + (int64_t)5 * W, img, s, W, next + 1);
+
+        if (nk > 0) {
+            const int16_t *kern = *(const int16_t *const *)((const char *)d + 0x20);
+            const int16_t *bias = *(const int16_t *const *)((const char *)d + 0x28);
+            int kacc = rowacc;
+            for (int k = 0; k < nk; k++) {
+                uint32_t bsh = (uint32_t)(int32_t)bias[k] << 14;
+                const int16_t *K = kern + (int64_t)k * 25;
+                if (ow > 0) {
+                    int16_t *op = (int16_t *)outb + kacc;
+                    for (int c = 0; c < ow; c++) {
+                        int32_t a00 = 0, a01 = 0, a10 = 0, a11 = 0;
+                        for (int i = 0; i < 5; i++) {
+                            const uint8_t *r0 = buf + (int64_t)i * W + 2 * c;
+                            const uint8_t *r1 = r0 + W;
+                            for (int j = 0; j < 5; j++) {
+                                int32_t kv = K[i * 5 + j];
+                                a00 += kv * r0[j];
+                                a01 += kv * r0[j + 1];
+                                a10 += kv * r1[j];
+                                a11 += kv * r1[j + 1];
+                            }
+                        }
+                        int32_t m = a00;
+                        if (a01 > m) m = a01;
+                        if (a10 > m) m = a10;
+                        if (a11 > m) m = a11;
+                        int32_t v = (int32_t)(((uint32_t)m << 6) + bsh);
+                        *op++ = (int16_t)(v >> 15);
+                    }
+                }
+                kacc += ow * oh;
+            }
+        }
+        rowacc += ow;
+    }
+
+    if (d[6] == 1)
+        cr_s16_clamp_nonneg((int16_t *)outb, (const int16_t *)outb, ow * oh * nk);
+
+    int n = (((H - d[0]) + 1) / 2) * (((W - d[0]) + 1) / 2) * nk;
+    if (n > 0) {
+        int16_t *dp = (int16_t *)buf;
+        const int16_t *sp = (const int16_t *)outb;
+        for (int i = 0; i < n; i++)
+            dp[i] = sp[i];
+    }
+
+    int st = cr_filter_chain_run_i16(buf, chain, 1, *chain - 1);
+    if (st != 0) {
+        cr_sized_free((void **)&buf);
+        return st;
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
  * 0x180011a70 — normalized 1-D int16 FIR down each column of a row-major
  * image (the vertical pass of a separable blur; see 0x18001e400 for the
  * horizontal twin).

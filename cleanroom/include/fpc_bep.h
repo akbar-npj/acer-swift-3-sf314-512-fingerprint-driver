@@ -653,6 +653,11 @@ int      cr_filter_bank_max3x3_i16(void *out, const void *in, int *desc); /* 0x1
 /* Run int16 filter-bank stages [start..end] (tag 5 / tag 3) over one buffer. */
 int      cr_filter_chain_run_i16(void *buf, const int *chain, int start, int end); /* 0x1800120c0 */
 
+/* Row-streaming 5x5 max-pool stage runner (stage 0 inline, then the chain). */
+int      cr_maxpool_stream_21000(uint8_t *buf, const int *chain,
+                                 const cr_image *img,
+                                 const cr_sampler *s);        /* 0x180021000 */
+
 /* ---- batch 47: object-tree lifecycle helpers + image-data accessors ------- *
  * These call into the sized allocator (cr_malloc / cr_sized_free), so their
  * observable contract is guard behaviour + NULL-ing, not pointer identity. */

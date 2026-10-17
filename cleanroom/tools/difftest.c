@@ -1336,6 +1336,8 @@ static void test_gauss_deriv_3img(void)
 /* ---- batch 68: Q15 bilinear warp of an int16 image ---------------------- */
 static void mk_image(unsigned char *d, void *data, int stride, int w, int h,
                      int offx, int offy);
+static void *v_sized_alloc(v_i_ppz vmalloc, size_t S, int sz);
+static void *c_sized_alloc(size_t S, int sz);
 static void test_warp_bilinear_q15(void)
 {
     typedef void (WINAPI *v_v_ppp)(void *, void *, const float *);
@@ -9229,6 +9231,85 @@ static void test_feat_pack_0e850(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_feat_pack_0e850\n");
 }
 
+/* ---- batch 87: row-streaming 5x5 max-pool stage runner ------------------ */
+/* 0x180021000.  The buffer is allocated through the vendor/clean-room sized
+ * allocators because the function releases the caller's buffer on every
+ * failure path; on success it stays alive and the payload is compared. */
+static void test_maxpool_stream_21000(void)
+{
+    typedef int (WINAPI *v_i_puipz)(void *, const int *, const void *, const void *);
+    v_i_puipz v = (v_i_puipz)fn_at(RVA(0x180021000));
+    v_i_ppz vmalloc = (v_i_ppz)fn_at(RVA(0x180002fe0));
+    v_v_p vsfree = (v_v_p)fn_at(RVA(0x18003bf40));
+
+    begin("cr_maxpool_stream_21000");
+    int bad = g_fail;
+
+    static int16_t kern[96];
+    static int16_t bias[4];
+    static uint8_t pool[8192];
+
+    for (int t = 0; t < 6000; t++) {
+        int W = 1 + (int)(rnd() % 40u);
+        int H = 1 + (int)(rnd() % 40u);
+        int nk = (int)(rnd() % 4u);
+        int ow = (W - 4) >> 1, oh = (H - 4) >> 1;
+        size_t nout = (ow > 0 && oh > 0) ? (size_t)ow * (size_t)oh * (size_t)nk : 0;
+        size_t need = (size_t)6 * W + 2 * nout + 2;
+
+        int desc[24];
+        memset(desc, 0, sizeof desc);
+        desc[0] = 5; desc[1] = H; desc[2] = W; desc[3] = 1; desc[5] = nk;
+        desc[6] = (int)(rnd() & 1u);
+        *(void **)(desc + 8) = kern;
+        *(void **)(desc + 10) = bias;
+        for (int i = 0; i < nk * 25; i++) kern[i] = (int16_t)rnd();
+        for (int i = 0; i < nk; i++) bias[i] = (int16_t)rnd();
+
+        int chain[4];
+        chain[0] = 1;
+        chain[1] = 0;
+        *(int **)(chain + 2) = desc;
+
+        /* Mode: 0 = success path, 1 = guard failure, 2 = chain failure. */
+        int mode = (t % 6 == 5) ? 1 : ((t % 11 == 7) ? 2 : 0);
+        if (mode == 1) {
+            if (rnd() & 1) desc[3] = (int)(rnd() % 4u) + 2;
+            else           desc[0] = (int)(rnd() % 5u) + (rnd() & 1 ? 6 : 0);
+        } else if (mode == 2) {
+            chain[0] = 2;
+            desc[12] = 7;                    /* unknown stage tag */
+        }
+
+        int32_t smp[6] = { 0x8000, 0, 0, 0, 0x8000, 0 };
+        for (size_t i = 0; i < sizeof pool; i++) pool[i] = (uint8_t)rnd();
+        uint8_t *data = pool + 4096;
+        unsigned char iv[0x20], ic[0x20];
+        mk_image(iv, data, W, W, H, 0, 0);
+        mk_image(ic, data, W, W, H, 0, 0);
+
+        /* The tail copy reads n shorts from buf+6W where n is computed with
+         * signed division; for degenerate W/H (<= 2) n stays positive even
+         * though ow/oh are negative, so the read runs past the payload.  Give
+         * the block a zeroed margin so both sides see the same bytes. */
+        int sz = 1 + (int)(rnd() % 8u);
+        uint8_t *bv = v_sized_alloc(vmalloc, need + (size_t)sz + 32, sz);
+        uint8_t *bc = c_sized_alloc(need + (size_t)sz + 32, sz);
+
+        int rv = v(bv, chain, iv, smp);
+        int rc = cr_maxpool_stream_21000(bc, chain, (const cr_image *)ic,
+                                         (const cr_sampler *)smp);
+        if ((u32)rv != (u32)rc)
+            mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (rv == 0) {
+            cmp_buf("out", bv, bc, (u32)need, (u32)t);
+            vsfree(&bv);
+            cr_sized_free((void **)&bc);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_maxpool_stream_21000\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -13114,6 +13195,7 @@ int main(int argc, char **argv)
     test_mask_inpaint_317a0();
     test_pick_points_2f2e0();
     test_feat_pack_0e850();
+    test_maxpool_stream_21000();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
