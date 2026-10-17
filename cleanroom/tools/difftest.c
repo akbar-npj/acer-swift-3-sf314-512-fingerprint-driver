@@ -8467,6 +8467,80 @@ static void test_pyramid_364c0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_pyramid_364c0\n");
 }
 
+/* ---- 0x180025960 — fixed-pattern (ridge template) removal ---------------- */
+static void test_template_remove_25960(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, int);
+    v_t v = (v_t)fn_at(RVA(0x180025960));
+    begin("cr_template_remove_25960");
+    int bad = g_fail;
+
+    enum { MAXN = 176 * 64 };
+    static float srcv[MAXN], srcc[MAXN];
+    static uint8_t mskv[MAXN], mskc[MAXN];
+    static uint8_t iv[0x20], ic[0x20], mv[0x20], mc[0x20];
+
+    /* NULL image */
+    {
+        mk_image(mv, mskv, 64, 64, 80, 0, 0);
+        mk_image(mc, mskc, 64, 64, 80, 0, 0);
+        int rv = v(NULL, mv, 1);
+        int rc = cr_template_remove_25960(NULL, (const cr_image *)mc, 1);
+        if (rv != rc) mismatch("null", 0, (u32)rv, (u32)rc);
+    }
+
+    for (int t = 0; t < 400; t++) {
+        int sel = (int)(rnd() % 6u) - 1;              /* -1 .. 4 */
+        int h = 80, w = 64;
+        int pick = (int)(rnd() % 10u);
+        if (pick < 5) {                               /* matching sel */
+            if (sel == 2) h = 176;
+            else if (sel == 1) h = 80;
+            else h = (int)(rnd() % 2u) ? 80 : 176;    /* sel invalid -> early */
+        } else if (pick < 7) {                        /* dim/sel mismatch */
+            h = (sel == 1) ? 176 : 80;
+        } else if (pick < 9) {                        /* wrong width */
+            w = (int)(rnd() % 2u) ? 62 : 66;
+        } else {                                      /* odd h and odd w */
+            h = (int)(rnd() % 2u) ? 79 : 81;
+            w = (int)(rnd() % 2u) ? 63 : 65;
+        }
+
+        int n = h * 64;
+        if (n > MAXN) n = MAXN;
+        for (int i = 0; i < n; i++) {
+            float f;
+            switch (rnd() % 5u) {
+            case 0:  f = 255.0f; break;
+            case 1:  f = (float)(int)(rnd() % 256u); break;
+            case 2:  f = (float)(int)(rnd() % 2001u) / 8.0f; break;
+            case 3:  f = 300.0f; break;
+            default: f = (float)(int)(rnd() % 256u); break;
+            }
+            srcv[i] = f;
+            srcc[i] = f;
+        }
+        for (int i = 0; i < n; i++) {
+            uint8_t b = (rnd() % 3u) ? 0xff : (uint8_t)rnd();
+            mskv[i] = b;
+            mskc[i] = b;
+        }
+
+        mk_image(iv, srcv, 64, w, h, 0, 0);
+        mk_image(ic, srcc, 64, w, h, 0, 0);
+        mk_image(mv, mskv, 64, w, h, 0, 0);
+        mk_image(mc, mskc, 64, w, h, 0, 0);
+
+        int rv = v(iv, mv, sel);
+        int rc = cr_template_remove_25960((cr_image *)ic,
+                                          (const cr_image *)mc, sel);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("src", (const unsigned char *)srcv,
+                (const unsigned char *)srcc, (size_t)n * 4, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_template_remove_25960\n");
+}
+
 /* ---- 0x18001bbf0 — scale-space blob detector --------------------------- *
  * float +0x1c = sigma, plus the cr_grid_cfg fields read by cr_grid_insert.
  * maskcfg: [0] = bit-row stride, [2..3] = word pointer, [6]/[7] = x/y origin. */
@@ -12344,6 +12418,7 @@ int main(int argc, char **argv)
     test_feature_extract_step_2db20();
     test_dirbank_3de60();
     test_pyramid_364c0();
+    test_template_remove_25960();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

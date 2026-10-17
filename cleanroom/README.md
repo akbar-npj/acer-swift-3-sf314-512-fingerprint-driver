@@ -153,9 +153,9 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **313** (88.2% of functions, 119,312 B = 70.4% of bytes) |
+| rewritten + parity-verified | **314** (88.5% of functions, 120,368 B = 71.0% of bytes) |
 
-Seventy-three batches done so far:
+Seventy-four batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -315,6 +315,13 @@ Seventy-three batches done so far:
     bilinear resampling → `cr_matched_filter_45eb0` → `cr_block_conv_231a0` →
     `cr_dirbank_3de60` (rotating each pointer ring by 2), and finally
     interleaves the block planes back into the front of `out` (1 function).
+74. fixed-pattern (ridge template) removal: the 1088-byte `0x180025960` that
+    seeds a scratch `h×64` float plane with a separable ridge template
+    (`tab[o]` / `tab[h/2-1]` plus a 32-entry mirrored ramp), blends it toward
+    the centre sample by `src/255`, fits a least-squares gain over the
+    `mask == 0xff` samples (`0.9*cov/var`, clamped at 0), subtracts
+    `(buf - mean)*gain` from the image and blends the residual back toward
+    `max(src)` by the mask (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

@@ -996,5 +996,11 @@ int      cr_bitmap_filter_apply_s16(void *dst, const cr_image *src,
  * FFT, multiply by `weights` (W*H floats), inverse FFT, store back as int16. */
 int      cr_fft_weighted_apply_32af0(int *desc, const float *weights,
                                      const void *cfg);          /* 0x180032af0 */
+/* Fit the fixed additive ridge template of a float image (h x 64, h = 80 for
+ * sel 1 / 176 for sel 2) and subtract it from img->data in place, then blend
+ * the residual back toward `maxsrc` by the byte mask.  mask->data holds one
+ * byte per pixel (0xff = valid). */
+int      cr_template_remove_25960(cr_image *img, const cr_image *mask,
+                                  int sel);                     /* 0x180025960 */
 
 #endif /* FPC_BEP_H */

@@ -1772,3 +1772,171 @@ int cr_pyramid_364c0(int16_t *out, const void *obj, const cr_image *img,
     }
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180025960 — fixed-pattern (ridge template) removal on a float image.
+ *   int fn(cr_image *img, const cr_image *mask, int sel)
+ *
+ *   Guard: img NULL -> 0x69; odd h *and* odd w -> 0x69; sel must be 1 or 2
+ *   (sel == 0 returns 0, anything else 0x3ee) and then h must equal the
+ *   table's 80 / 176 rows with w == 64, else 0x3ee.
+ *
+ *   A scratch h*64 float plane is allocated and seeded with the separable
+ *   ridge template: for o in [0, h/2) row o carries tab[o] plus the 32-entry
+ *   ramp tab[0..32) mirrored about the row centre (columns 0..31 get
+ *   tab[0..31], columns 63..32 get the same sequence reversed), while the
+ *   mirrored row h-1-o carries tab[h/2-1] plus that same ramp.  The template
+ *   is then blended toward the
+ *   centre sample C = buf[n/2 + 32] by the image itself,
+ *       buf[i] = (1 - src[i]/255)*buf[i] + (src[i]/255)*C,
+ *   a least-squares gain is fitted over the mask==0xff samples,
+ *       gain = 0.9 * sum((buf*cnt - sum)*src) / (cnt*sumsq - sum^2)
+ *   (clamped at 0; left at 1.0 when the variance is exactly 0), the template
+ *   deviation is subtracted from the image,
+ *       src[i] -= (buf[i] - mean(buf)) * gain,
+ *   and finally each pixel is blended back toward the image maximum,
+ *       src[i] = clamp(((255-m)*maxsrc + src[i]*m) / 255, 0, 255)
+ *   with m = mask[i].  The scratch plane is released and 0 returned.
+ * ------------------------------------------------------------------------ */
+static const float cr_tmpl_tab80[40] = {
+    0.0f, 22.4829998f, 37.6220016f, 47.3530006f, 53.6040001f, 57.6580009f,
+    60.3300018f, 62.1339989f, 63.3919983f, 64.3010025f, 64.9869995f,
+    65.5270004f, 65.9690018f, 66.3450012f, 66.6750031f, 66.9700012f,
+    67.2389984f, 67.487999f, 67.7210007f, 67.9400024f, 68.1470032f,
+    68.3440018f, 68.5319977f, 68.711998f, 68.8850021f, 69.0510025f,
+    69.2099991f, 69.3639984f, 69.5130005f, 69.6559982f, 69.7949982f,
+    69.9300003f, 70.060997f, 70.060997f, 70.060997f, 70.060997f, 70.060997f,
+    70.060997f, 70.060997f, 70.060997f,
+};
+
+static const float cr_tmpl_tab176[88] = {
+    0.0f, 22.1560001f, 37.0750008f, 46.6650009f, 52.8250008f, 56.8190002f,
+    59.4519997f, 61.230999f, 62.4700012f, 63.3660011f, 64.0419998f,
+    64.5739975f, 65.0100021f, 65.3799973f, 65.7050018f, 65.9960022f,
+    66.2610016f, 66.5070038f, 66.7360001f, 66.9520035f, 67.1559982f,
+    67.3499985f, 67.5360031f, 67.7129974f, 67.8830032f, 68.0459976f,
+    68.2040024f, 68.3550034f, 68.5019989f, 68.6429977f, 68.7799988f,
+    68.913002f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f, 69.0419998f,
+    69.0419998f, 69.0419998f,
+};
+
+int cr_template_remove_25960(cr_image *img, const cr_image *mask, int sel)
+{
+    if (img == NULL)
+        return 0x69;
+    int h = img->h;
+    int w = img->w;
+    if ((h & 1) && (w & 1))
+        return 0x69;
+
+    const float *tab;
+    int need;
+    if (sel == 1) { tab = cr_tmpl_tab80;  need = 0x50; }
+    else if (sel == 2) { tab = cr_tmpl_tab176; need = 0xb0; }
+    else return sel == 0 ? 0 : 0x3ee;
+
+    if (h != need || w != 0x40)
+        return 0x3ee;
+
+    float *src = (float *)img->data;
+    const uint8_t *msk = (const uint8_t *)mask->data;
+    int n = h * 0x40;
+
+    cr_image tmp;
+    uint32_t r = cr_image_set(&tmp, NULL, 0x40, h);
+    if ((int)r != 0)
+        return (int)r;
+    r = (uint32_t)cr_malloc_aligned16(&tmp.data, (size_t)n * 4);
+    if ((int)r != 0)
+        return (int)r;
+
+    float *buf = (float *)tmp.data;
+    int half = h >> 1;
+    float kc = tab[half - 1];
+    for (int o = 0; o < half; o++) {
+        for (int i = 0; i < 32; i++) {
+            float rp = tab[i];
+            float top = tab[o] + rp;
+            float bot = kc + rp;
+            buf[0x40 * o + i]          = top;   /* row o,      cols 0..31  */
+            buf[0x3f + 0x40 * o - i]   = top;   /* row o,      cols 63..32 */
+            buf[n - 0x40 - 0x40 * o + i] = bot; /* row h-1-o,  cols 0..31  */
+            buf[n - 1 - 0x40 * o - i]  = bot;   /* row h-1-o,  cols 63..32 */
+        }
+    }
+
+    /* The vendor re-reads the centre sample from the scratch plane on every
+     * pixel, so once the scan reaches that index the *blended* value is fed
+     * back for the remaining pixels.  Model it with a volatile load. */
+    volatile float *centre = &buf[(n >> 1) + 0x20];
+    float sum = 0.0f, sumsq = 0.0f;
+    int cnt = 0;
+    for (int rr = 0; rr < h; rr++) {
+        for (int i = 0; i < 0x40; i++) {
+            int j = 0x40 * rr + i;
+            float a = src[j] / 255.0f;
+            float v = (1.0f - a) * buf[j] + a * *centre;
+            buf[j] = v;
+            if (msk[j] == 0xff) {
+                sum += v;
+                cnt++;
+                sumsq += v * v;
+            }
+        }
+    }
+
+    float cov = 0.0f;
+    float cntf = (float)cnt;
+    for (int rr = 0; rr < h; rr++) {
+        for (int i = 0; i < 0x40; i++) {
+            int j = 0x40 * rr + i;
+            if (msk[j] == 0xff)
+                cov += (buf[j] * cntf - sum) * src[j];
+        }
+    }
+
+    float var = cntf * sumsq - sum * sum;
+    float gain = 1.0f;
+    if (var != 0.0f) {
+        gain = (cov * 0.9f) / var;
+        if (!(0.0f < gain))
+            gain = 0.0f;
+    }
+
+    float total = 0.0f, maxsrc = 0.0f;
+    for (int j = 0; j < n; j++) {
+        total += buf[j];
+        float s = src[j];
+        if (!(s <= maxsrc))
+            maxsrc = s;
+    }
+    float mean = total / (float)n;
+
+    for (int j = 0; j < n; j++)
+        src[j] = src[j] - (buf[j] - mean) * gain;
+
+    for (int j = 0; j < n; j++) {
+        float v = src[j];
+        float out = 255.0f;
+        if (!(v >= 255.0f)) {
+            float m = (float)(int)msk[j];
+            float t = ((float)(int)(0xff - (uint32_t)msk[j]) * maxsrc + v * m) / 255.0f;
+            if (!(t > 255.0f))
+                out = (t < 0.0f) ? 0.0f : t;
+        }
+        src[j] = out;
+    }
+
+    cr_sized_free(&tmp.data);
+    return 0;
+}
