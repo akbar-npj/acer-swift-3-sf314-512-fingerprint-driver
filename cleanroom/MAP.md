@@ -732,6 +732,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x180011170` | `fpc_bio_bep_sw23_...` | `cr_slot_select_11170` | `int fn(cr_image *a1, const cr_image *a2, void *a3, void *a4, void **slots, const uint8_t *cfg, int flag)`. `a3` is a state block: `+0x00` "advanced" flag, `+0x04` current index, `+0x08` index count, `+0x0c` selector byte, `+0x10` index array. All of `slots[0..4]` must be populated (a NULL first slot returns `0x3ea`) and must match `a1`'s w/h (else `0x82`). The mode byte at `cfg[0x108]` selects the behaviour: 0 (and 3 with `cnt==1`) runs one `cr_mask_stage_208a0` at index 0, 1 picks index 0/1 from the slot count, 2 walks a ranked index list (computing it on the first call from a 1000-weighted blend of a "usable pixel" score `1000 - 1000*count(v==thr>>2 || v==0)/n` and a 15×15 box-mean gradient score `count(|plane-boxmean| re-boxmean > thr<<4)*1000/n`, then stable descending bubble sort of (score, index) pairs), 3 (`cnt>1`) runs `cr_mask_dispatch_39820`. Finally the f32 scratch is scaled back into `a1` with `cr_f32_to_i16_scaled(a1, &img, 6)`. |
 
+### Batch 95 — per-slot quality ranking over u8 payloads
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180022b70` | `fpc_bio_bep_sw23_50a00ec676` | `cr_slot_rank_u8_22b70` | `int fn(void *a1, const cr_image *a2, void *a3, void *state, const void *a5, void **slots, const uint8_t *cfg, int flag)`. Clears `state[0]`, rejects a NULL `a2` with `0x69`, reads `w/h` from `a2->a`/`a2->b`, and validates the populated run `slots[0..4]` against them (NULL first slot -> `0x3ea`, size mismatch -> `0x82`). Requires `cfg[0x108] == 2` (else returns `1`). On the first call (`state[4] == 0`) it builds the ranked list: `cnt == 1` short-circuits to `order[0] = 0`, otherwise each slot is scored from `k = (cfg[0x110] << 12) / 100` — for `k > 0xfff` a pure "usable pixel" score `1000 - 1000*count(v == 0xff)/n`, otherwise `(0x1000-k)*sca + k*scb` where `sca` is `count(|v - boxmean15(v)| re-boxmeaned > (int16)cfg[0x10a]) * 1000/n` (two `cr_boxsum15_u8` passes over a per-slot scratch buffer) — then stably bubble-sorts the `(score, index)` pairs descending. It then writes `state[0xc] = order[state[4]]` and calls `cr_mask_refine_344e0(a1, a2, a3, state, a5, slots, cfg, (uint8_t)order[state[4]], flag)`, advancing `state[4]` and setting `state[0]` while more entries remain. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

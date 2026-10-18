@@ -5115,3 +5115,160 @@ int cr_slot_select_11170(cr_image *a1, const cr_image *a2, void *a3,
         return ret;
     }
 }
+/* 0x180022b70 — per-slot quality ranking over u8 payloads + refine dispatch.
+ *
+ * int cr_slot_rank_u8_22b70(void *a1, const cr_image *a2, void *a3,
+ *                           void *state, const void *a5, void **slots,
+ *                           const uint8_t *cfg, int flag);
+ *
+ * `state` is the same block the ranking dispatcher uses: +0x00 "advanced"
+ * flag, +0x04 current index, +0x08 index count, +0x0c selector byte, +0x10
+ * the ranked index array.  The function validates the populated run
+ * slots[0..4] against a2's a/b geometry (NULL first slot -> 0x3ea, size
+ * mismatch -> 0x82), requires cfg[0x108] == 2 (else returns 1), and on the
+ * first call builds the ranked list.  Each slot is scored as a 1000-weighted
+ * blend of a "usable pixel" score (1000 - 1000*count(v == 0xff)/n) and a
+ * 15x15 box-mean gradient score (count(|v - boxmean(v)| re-boxmeaned > thr<<4)
+ * * 1000/n), where the weight k is (cfg[0x110] << 12) / 100 clamped to
+ * 0..0x1000.  The (score, index) pairs are then stably sorted descending.
+ * The call then walks one entry of the list and hands it to
+ * cr_mask_refine_344e0 as its a8 selector.  Verified by difftest. */
+int cr_slot_rank_u8_22b70(void *a1, const cr_image *a2, void *a3,
+                          void *state, const void *a5, void **slots,
+                          const uint8_t *cfg, int flag)
+{
+    uint8_t *st = (uint8_t *)state;
+    int *order = (int *)(st + 0x10);
+    int w, h, cnt, i, e;
+
+    *(int *)st = 0;                             /* 0x180022b86 */
+    if (a2 == NULL)
+        return 0x69;
+
+    w = a2->a;                                  /* 0x180022b9b */
+    h = a2->b;
+
+    cnt = 0;
+    for (i = 0; i < 5; i++) {
+        const cr_pixbuf *p = (const cr_pixbuf *)slots[i];
+        if (p == NULL)
+            break;
+        if (p->h != h || p->w != w)
+            return 0x82;
+        cnt = i + 1;
+    }
+    if (cnt == 0)
+        return 0x3ea;
+
+    if (cfg[0x108] != 2)                        /* 0x180022be5 */
+        return 1;
+
+    if (*(const int *)(st + 4) == 0) {
+        if (cnt == 1) {
+            order[0] = 0;                       /* 0x180022c16 */
+            *(int *)(st + 8) = cnt;
+        } else {
+            int *scores = NULL;
+            int32_t sh = (int32_t)((uint32_t)*(const int32_t *)(cfg + 0x110) << 12);
+            int k = (int)(sh / 100);            /* 0x180022d6c */
+
+            e = cr_malloc_aligned16((void **)&scores,
+                                    (size_t)((long)cnt * 4));
+            if (e != 0)
+                return e;                       /* 0x180022cff */
+
+            for (i = 0; i < cnt; i++) {
+                const cr_pixbuf *s = (const cr_pixbuf *)slots[i];
+                const uint8_t *src = (const uint8_t *)s->data;
+                int n = (int)s->w * (int)s->h;  /* 0x180022d8e */
+                int score;
+
+                if (k > 0xfff) {
+                    /* 0x180022d9e — usable-pixel score only */
+                    int c = 0, sc;
+                    for (int j = 0; j < n; j++)
+                        c += (uint8_t)(src[j] - 1) > 0xfdu;   /* v == 0xff */
+                    sc = (n > 0) ? 1000 + (c * -1000) / n : 1000;
+                    score = (sc * k + 0x800) >> 12;           /* 0x180022df2 */
+                } else {
+                    uint8_t *scratch = NULL;
+                    int sca, wgt, c;
+                    int16_t thr = (int16_t)*(const uint16_t *)(cfg + 0x10a);
+
+                    e = cr_malloc_aligned16((void **)&scratch, (size_t)n);
+                    if (e != 0) {                           /* 0x180023020 */
+                        cr_sized_free((void **)&scores);
+                        return e;
+                    }
+                    for (int j = 0; j < n; j++)
+                        scratch[j] = src[j];
+                    cr_boxsum15_u8(scratch, (int)s->w, (int)s->h);
+                    for (int j = 0; j < n; j++) {
+                        int d = (int)scratch[j] - (int)src[j];
+                        scratch[j] = (uint8_t)(d < 0 ? -d : d);
+                    }
+                    cr_boxsum15_u8(scratch, (int)s->w, (int)s->h);
+
+                    c = 0;
+                    for (int j = 0; j < n; j++)
+                        if ((int)scratch[j] > (int)thr)
+                            c++;
+                    sca = (n > 0) ? (1000 * c) / n : 0;
+                    wgt = (0x1000 - k) * sca;               /* 0x180022fdb */
+                    cr_sized_free((void **)&scratch);
+
+                    if (k > 0) {                            /* 0x180023068 */
+                        int c2 = 0, scb;
+                        for (int j = 0; j < n; j++)
+                            c2 += (uint8_t)(src[j] - 1) > 0xfdu;
+                        scb = (n > 0) ? 1000 + (c2 * -1000) / n : 1000;
+                        score = (wgt + scb * k + 0x800) >> 12;
+                    } else {
+                        score = (wgt + 0x800) >> 12;
+                    }
+                }
+                scores[i] = score;
+                order[i] = i;                           /* 0x180022e0f */
+            }
+
+            /* stable descending bubble sort of (score, index) pairs */
+            for (;;) {                                  /* 0x180022e39 */
+                int swapped = 0;
+                for (int j = 0; j + 1 < cnt; j++) {
+                    if (scores[j] < scores[j + 1]) {
+                        int t = scores[j];
+                        scores[j] = scores[j + 1];
+                        scores[j + 1] = t;
+                        t = order[j];
+                        order[j] = order[j + 1];
+                        order[j + 1] = t;
+                        swapped = 1;
+                    }
+                }
+                if (!swapped)
+                    break;
+            }
+            cr_sized_free((void **)&scores);            /* 0x180023011 */
+            *(int *)(st + 8) = cnt;
+        }
+    }
+
+    {
+        int idx = *(const int *)(st + 4);               /* 0x180022c22 */
+        int v = order[idx];
+
+        st[0xc] = (uint8_t)v;
+        e = cr_mask_refine_344e0(a1, (void *)a2, a3, state, (void *)a5,
+                                 slots, (void *)cfg, (int)(uint8_t)v, flag);
+        if (e != 0)
+            return e;                                   /* 0x180022c75 */
+
+        {
+            int nx = *(const int *)(st + 4) + 1;
+            *(int *)(st + 4) = nx;
+            if (nx < *(const int *)(st + 8))
+                *(int *)st = 1;                         /* 0x180022c88 */
+        }
+    }
+    return 0;
+}

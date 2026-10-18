@@ -1144,5 +1144,8 @@ int      cr_mask_dispatch_39820(void *a1, void *a2, void *a3, void *a4,
 int      cr_slot_select_11170(cr_image *a1, const cr_image *a2, void *a3,
                                void *a4, void **slots, const uint8_t *cfg,
                                int flag);                     /* 0x180011170 */
+int      cr_slot_rank_u8_22b70(void *a1, const cr_image *a2, void *a3,
+                                void *state, const void *a5, void **slots,
+                                const uint8_t *cfg, int flag); /* 0x180022b70 */
 
 #endif /* FPC_BEP_H */

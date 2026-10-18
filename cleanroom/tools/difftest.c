@@ -14329,6 +14329,161 @@ static void test_slot_select_11170(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_slot_select_11170\n");
 }
 
+/* ---- 0x180022b70: per-slot quality ranking over u8 payloads ------------ */
+static void test_slot_rank_u8_22b70(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *, void *, const void *,
+                              void **, const void *, int);
+    v_t v = (v_t)fn_at(RVA(0x180022b70));
+    begin("cr_slot_rank_u8_22b70");
+    int bad = g_fail;
+
+    enum { MAXW = 80, MAXH = 50, MAXPIX = MAXW * MAXH, MAXW32 = 96 };
+    static uint8_t  imgv[MAXPIX], imgc[MAXPIX];
+    static uint32_t bitv[MAXW32 / 32 * MAXH], bitc[MAXW32 / 32 * MAXH];
+    static uint8_t  plv[5][MAXPIX], plc[5][MAXPIX];
+    static int16_t  gsv[MAXPIX], gsc[MAXPIX];
+    static uint8_t  a5v[0x80], a5c[0x80];
+    static uint8_t  a3v[0x20], a3c[0x20];
+    static uint8_t  stv[0x100], stc[0x100];
+    static uint8_t  cfgv[0x140], cfgc[0x140];
+    static void    *slv[8], *slc[8];
+    static uint8_t  sdv[5][0x20], sdc[5][0x20];
+    static uint8_t  ilv[0x20], ilc[0x20];
+    static uint16_t idv[16], idc[16];
+
+    for (int t = 0; t < 700; t++) {
+        int W = 40 + (int)(rnd() % 40u);
+        int H = 30 + (int)(rnd() % 20u);
+        int n = W * H;
+        int astride = ((W + 31) / 32) * 32;
+        int nwords  = astride / 32 * H;
+        int cnt = 1 + ((t / 4) % 5);
+        int style = t % 4;
+
+        for (int i = 0; i < n; i++) {
+            uint8_t b = (uint8_t)rnd();
+            imgv[i] = b; imgc[i] = b;
+            int16_t g = (int16_t)((int)(rnd() % 4096u) - 2048);
+            gsv[i] = g; gsc[i] = g;
+        }
+        for (int i = 0; i < nwords; i++) {
+            uint32_t w = rnd();
+            bitv[i] = w; bitc[i] = w;
+        }
+        /* slot payloads: 0 noise, 1 flat, 2 all-0xff, 3 half-and-half */
+        for (int k = 0; k < 5; k++) {
+            for (int i = 0; i < n; i++) {
+                uint8_t x;
+                if (style == 1)
+                    x = (uint8_t)(10 + k * 40);
+                else if (style == 2)
+                    x = 0xff;
+                else if (style == 3)
+                    x = (i < n / 2) ? 0x00 : 0xff;
+                else
+                    x = (uint8_t)rnd();
+                plv[k][i] = x; plc[k][i] = x;
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            uint16_t k = (uint16_t)(rnd() % (unsigned)n);
+            idv[i] = k; idc[i] = k;
+        }
+
+        int mode;
+        switch (t % 6) {
+        case 0:  mode = 0; break;
+        case 1:  mode = 1; break;
+        case 2:  mode = 2; break;
+        case 3:  mode = 3; break;
+        case 4:  mode = -1; break;
+        default: mode = (int)(rnd() % 4u); break;
+        }
+        int sub = (t % 2) ? 5 : 0;
+
+        memset(a5v, 0, sizeof a5v); memset(a5c, 0, sizeof a5c);
+        int8_t flag = (int8_t)((t & 2) ? 1 : -1);
+        *(int8_t *)(a5v + 8) = flag; *(int8_t *)(a5c + 8) = flag;
+        *(int32_t *)(a5v + 0x50) = W; *(int32_t *)(a5v + 0x54) = H;
+        *(int32_t *)(a5c + 0x50) = W; *(int32_t *)(a5c + 0x54) = H;
+        *(void **)(a5v + 0x58) = gsv; *(void **)(a5c + 0x58) = gsc;
+        *(int32_t *)(a5v + 0x60) = W; *(int32_t *)(a5v + 0x64) = H;
+        *(int32_t *)(a5c + 0x60) = W; *(int32_t *)(a5c + 0x64) = H;
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+
+        for (int k = 0; k < 5; k++) {
+            memset(sdv[k], 0, 0x20); memset(sdc[k], 0, 0x20);
+            *(int16_t *)(sdv[k] + 0) = (int16_t)W;
+            *(int16_t *)(sdv[k] + 2) = (int16_t)H;
+            *(int16_t *)(sdc[k] + 0) = (int16_t)W;
+            *(int16_t *)(sdc[k] + 2) = (int16_t)H;
+            *(void **)(sdv[k] + 0x10) = plv[k];
+            *(void **)(sdc[k] + 0x10) = plc[k];
+        }
+
+        memset(ilv, 0, 0x20); memset(ilc, 0, 0x20);
+        *(uint16_t *)(ilv + 0) = 8; *(uint16_t *)(ilc + 0) = 8;
+        *(void **)(ilv + 8) = idv; *(void **)(ilc + 8) = idc;
+
+        for (int i = 0; i < 8; i++) { slv[i] = NULL; slc[i] = NULL; }
+        for (int k = 0; k < cnt; k++) { slv[k] = sdv[k]; slc[k] = sdc[k]; }
+        slv[5] = ilv; slc[5] = ilc;
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[0x44] = (uint8_t)(int8_t)mode; cfgc[0x44] = cfgv[0x44];
+        cfgv[0xc0] = (uint8_t)sub; cfgc[0xc0] = (uint8_t)sub;
+        cfgv[0xc1] = (uint8_t)(t & 1); cfgc[0xc1] = (uint8_t)(t & 1);
+        *(uint16_t *)(cfgv + 0xc2) = 8; *(uint16_t *)(cfgc + 0xc2) = 8;
+        cfgv[0x108] = (uint8_t)((t % 8 == 0) ? 3 : 2);
+        cfgc[0x108] = cfgv[0x108];
+        uint16_t thr2 = (uint16_t)(rnd() % 2001u);
+        *(uint16_t *)(cfgv + 0x10a) = thr2; *(uint16_t *)(cfgc + 0x10a) = thr2;
+        static const int32_t kvals[6] = { 0, 1, 50, 99, 100, 150 };
+        int32_t kv = kvals[t % 6];
+        *(int32_t *)(cfgv + 0x110) = kv; *(int32_t *)(cfgc + 0x110) = kv;
+
+        memset(stv, 0, sizeof stv); memset(stc, 0, sizeof stc);
+        if ((t & 3) == 3) {
+            /* start mid-walk: pre-seed a consistent order list */
+            int start = 1 + (int)(rnd() % (unsigned)cnt);
+            *(int *)(stv + 4) = start;
+            *(int *)(stc + 4) = start;
+            *(int *)(stv + 8) = cnt;
+            *(int *)(stc + 8) = cnt;
+            for (int j = 0; j < 5; j++) {
+                *(int *)(stv + 0x10 + j * 4) = (cnt - 1) - (j % cnt);
+                *(int *)(stc + 0x10 + j * 4) = *(int *)(stv + 0x10 + j * 4);
+            }
+        }
+
+        cr_image mv, mc, av, ac;
+        memset(&mv, 0, sizeof mv); memset(&mc, 0, sizeof mc);
+        memset(&av, 0, sizeof av); memset(&ac, 0, sizeof ac);
+        mv.a = mv.w = W; mv.b = mv.h = H; mv.data = imgv;
+        mc.a = mc.w = W; mc.b = mc.h = H; mc.data = imgc;
+        av.a = astride; av.b = H; av.data = bitv; av.w = W; av.h = H;
+        ac.a = astride; ac.b = H; ac.data = bitc; ac.w = W; ac.h = H;
+
+        uint8_t fv = 0, fc = 0;
+        for (int step = 0; step <= cnt + 1; step++) {
+            int rv = v(&fv, &mv, &av, stv, a5v, slv, cfgv, (t & 1));
+            int rc = cr_slot_rank_u8_22b70(&fc, &mc, &ac, stc, a5c, slc,
+                                           cfgc, (t & 1));
+            if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); break; }
+            if (fv != fc) mismatch("flag", (u32)t, (u32)fv, (u32)fc);
+            cmp_buf("img", (const u8 *)imgv, (const u8 *)imgc, (size_t)n,
+                    (u32)t);
+            cmp_buf("bits", (const u8 *)bitv, (const u8 *)bitc,
+                    (size_t)nwords * 4, (u32)t);
+            cmp_buf("state", (const u8 *)stv, (const u8 *)stc,
+                    (size_t)(0x10 + cnt * 4), (u32)t);
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_slot_rank_u8_22b70\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -14755,6 +14910,7 @@ int main(int argc, char **argv)
     test_feature_run_28bc0();
     test_mask_dispatch_39820();
     test_slot_select_11170();
+    test_slot_rank_u8_22b70();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **337** (94.7% of functions, 148,304 B = 86.6% of bytes) |
+| rewritten + parity-verified | **338** (95.2% of functions, 149,616 B = 88.3% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Eighty-eight batches so far:
+Eighty-nine batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -435,6 +435,13 @@ Eighty-eight batches so far:
     gradient scores, then stable descending bubble sort). Finally the f32
     scratch is scaled back into `a1` with `cr_f32_to_i16_scaled(..., 6) (1
     function).
+89. per-slot quality ranking over u8 payloads:
+    `cr_slot_rank_u8_22b70` (1312 B) validates the populated slot run against
+    the image geometry, requires `cfg[0x108] == 2`, and on the first call
+    scores each slot with a 1000-weighted blend of a 0xff-fraction "usable"
+    score and a 15×15 box-mean gradient score (`cr_boxsum15_u8` twice over
+    `|v - boxmean(v)|`), sorts the (score, index) pairs descending, and walks
+    one entry into `cr_mask_refine_344e0` as its selector (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
