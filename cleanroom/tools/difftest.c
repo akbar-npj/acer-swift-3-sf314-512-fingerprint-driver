@@ -15323,6 +15323,140 @@ static void test_feature_pipeline_1ad30(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_feature_pipeline_1ad30\n");
 }
 
+/* ---- batch 105: chain stages ------------------------------------------ */
+static void test_chain_stages(void)
+{
+    enum { MAXW = 64, MAXH = 64, MAXN = MAXW * MAXH };
+    static int16_t sv[MAXN];
+    static uint32_t bits[MAXH * 4];
+    static u8 bdv[0x20], bdc[0x20], imv[0x20], imc[0x20];
+    static u8 ctv[0x80], ctc[0x80];
+    static u8 cfg[8];
+
+    /* ---- 0x180026a70: the scale is passed in xmm3 ---------------------- */
+    {
+        typedef int (WINAPI *v7)(int16_t *, const void *, const void *,
+                                 float, float, float, float);
+        v7 v = (v7)fn_at(RVA(0x180026a70));
+        begin("cr_chain_score_26a70");
+        int bad = g_fail, ran = 0;
+
+        for (int t = 0; t < 40; t++) {
+            int w = 8 + (int)(rnd() % 56);
+            int h = 8 + (int)(rnd() % 56);
+            int sw = (w + 31) / 32;
+            for (int i = 0; i < h * sw; i++) bits[i] = rnd();
+            for (int i = 0; i < w * h; i++)
+                sv[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+            memset(bdv, 0, 0x20);
+            *(int *)(bdv + 0x00) = sw * 32;
+            *(void **)(bdv + 0x08) = bits;
+            *(int *)(bdv + 0x10) = w;
+            *(int *)(bdv + 0x14) = h;
+            memcpy(bdc, bdv, 0x20);
+            mk_img2(imv, sv, w, h);
+            mk_img2(imc, sv, w, h);
+
+            float scale;
+            switch (t % 4) {
+            case 0: scale = 1.0f; break;
+            case 1: scale = 1.0f + (float)(rnd() % 1000u) * 0x1p-10f; break;
+            case 2: scale = 0.5f; break;
+            default: scale = 2.0f + (float)(rnd() % 4u); break;
+            }
+
+            int16_t rv = 0x4321, rc = 0x4321;
+            int er = v(&rv, bdv, imv, scale, scale, scale, scale);
+            int ec = cr_chain_score_26a70(&rc, bdc, imc, scale);
+            if (er != ec) mismatch("ret", (u32)t, (u32)er, (u32)ec);
+            if (rv != rc) mismatch("out", (u32)t, (u16)rv, (u16)rc);
+            ran++;
+        }
+        printf("  [26a70] cases=%d\n", ran);
+        if (g_fail == bad) end(); else printf("  FAIL cr_chain_score_26a70\n");
+    }
+
+    /* ---- 0x180043020: selector gate ----------------------------------- */
+    {
+        typedef int (WINAPI *v4)(int16_t *, const void *, const void *,
+                                 const void *);
+        v4 v = (v4)fn_at(RVA(0x180043020));
+        begin("cr_chain_gate_43020");
+        int bad = g_fail, ran = 0;
+
+        for (int t = 0; t < 40; t++) {
+            int w = 8 + (int)(rnd() % 56);
+            int h = 8 + (int)(rnd() % 56);
+            int sw = (w + 31) / 32;
+            for (int i = 0; i < h * sw; i++) bits[i] = rnd();
+            for (int i = 0; i < w * h; i++)
+                sv[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+            memset(bdv, 0, 0x20);
+            *(int *)(bdv + 0x00) = sw * 32;
+            *(void **)(bdv + 0x08) = bits;
+            *(int *)(bdv + 0x10) = w;
+            *(int *)(bdv + 0x14) = h;
+            memcpy(bdc, bdv, 0x20);
+            mk_img2(imv, sv, w, h);
+            mk_img2(imc, sv, w, h);
+
+            memset(cfg, 0, sizeof cfg);
+            cfg[0] = (u8)((t % 5 == 0) ? 3 : 4);
+            *(float *)(cfg + 4) = 1.0f + (float)(rnd() % 1000u) * 0x1p-10f;
+
+            int16_t rv = 0x7777, rc = 0x7777;
+            int er = v(&rv, bdv, imv, cfg);
+            int ec = cr_chain_gate_43020(&rc, bdc, imc, cfg);
+            if (er != ec) mismatch("ret", (u32)t, (u32)er, (u32)ec);
+            if (rv != rc) mismatch("out", (u32)t, (u16)rv, (u16)rc);
+            ran++;
+        }
+        printf("  [43020] cases=%d\n", ran);
+        if (g_fail == bad) end(); else printf("  FAIL cr_chain_gate_43020\n");
+    }
+
+    /* ---- 0x180043040: centroid + chain classify ----------------------- */
+    {
+        typedef int (WINAPI *v4)(void *, const void *, uint8_t, int);
+        v4 v = (v4)fn_at(RVA(0x180043040));
+        begin("cr_chain_stage_43040");
+        int bad = g_fail, ran = 0;
+
+        for (int t = 0; t < 40; t++) {
+            int w = 8 + (int)(rnd() % 56);
+            int h = 8 + (int)(rnd() % 56);
+            int sw = (w + 31) / 32;
+            for (int i = 0; i < h * sw; i++) bits[i] = rnd();
+            for (int i = 0; i < w * h; i++)
+                sv[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+            memset(bdv, 0, 0x20);
+            *(int *)(bdv + 0x00) = sw * 32;
+            *(void **)(bdv + 0x08) = bits;
+            *(int *)(bdv + 0x10) = w;
+            *(int *)(bdv + 0x14) = h;
+            memcpy(bdc, bdv, 0x20);
+            mk_img2(imv, sv, w, h);
+            mk_img2(imc, sv, w, h);
+
+            memset(ctv, 0x5a, sizeof ctv);
+            memcpy(ctv + 0x50, bdv, 0x20);
+            memcpy(ctc, ctv, sizeof ctv);
+
+            static const uint8_t sels[8] = { 0, 6, 8, 10, 12, 13, 3, 14 };
+            uint8_t sel = sels[t % 8];
+            int margin = (int)(rnd() % 6);
+
+            int er = v(ctv, imv, sel, margin);
+            int ec = cr_chain_stage_43040(ctc, imc, sel, margin);
+            if (er != ec) mismatch("ret", (u32)t, (u32)er, (u32)ec);
+            cmp_buf("ctx", ctv, ctc, sizeof ctv, (u32)t);
+            ran++;
+        }
+        printf("  [43040] cases=%d\n", ran);
+        if (g_fail == bad) end(); else printf("  FAIL cr_chain_stage_43040\n");
+    }
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -15759,6 +15893,7 @@ int main(int argc, char **argv)
     test_block_orient_48010();
     test_orient_score_dispatch_1c220();
     test_feature_pipeline_1ad30();
+    test_chain_stages();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

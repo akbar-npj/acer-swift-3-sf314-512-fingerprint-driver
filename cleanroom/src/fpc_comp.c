@@ -6827,3 +6827,104 @@ fail_all:                                                     /* 0x18001b88c */
     cr_cleanup_ptr8_clear_b(&img);
     return st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180026a70 — chain centroid + pyramid scoring (192 bytes)
+ *               fpc_bio_bep_sw23_63b79ffea2
+ *
+ *   int fn(int16_t *a1, const void *bm, const void *img, float scale)
+ *
+ * The float arrives in xmm3 (the vendor's only caller, 0x180043020, sets it
+ * explicitly before tail-jumping).  cr_desc_get_ptr1(&chain, 4) yields the
+ * static trained-model chain at image+0x159ea0; its node pointer sits at
+ * chain+8 and supplies the two window fields (node[1], node[2]).  The
+ * centroid affine seed is written into a 24-byte cr_sampler, which the
+ * pyramid stage then consumes together with the chain and `img`.
+ * The result is stored as (int16_t)(100.0f * out).
+ * ------------------------------------------------------------------------ */
+int cr_chain_score_26a70(int16_t *a1, const void *bm, const void *img,
+                         float scale)
+{
+    void *chain = NULL;
+    int xy[6];
+    float f = 0.0f;
+    int st;
+
+    if (cr_desc_get_ptr1(&chain, 4))                       /* 0x180026a9f */
+        return 1;
+
+    const int32_t *cd = (const int32_t *)((const void **)chain)[1];
+    st = cr_centroid_affine(xy, bm, scale, (int)(intptr_t)img,
+                            cd[2], cd[1]);                 /* 0x180026aea */
+    if (st)                                                /* 0x180026af1 */
+        return st;
+
+    st = cr_stage_run_273a0(&f, (const int *)chain, (const cr_image *)img,
+                            (const cr_sampler *)xy);       /* 0x180026b03 */
+    if (st)                                                /* 0x180026b0a */
+        return st;
+
+    *a1 = (int16_t)(int)(100.0f * f);                      /* 0x180026b14 */
+    return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180043020 — chain selector gate (32 bytes)
+ *               fpc_bio_bep_sw23_e617d5a6b0
+ *
+ *   int fn(int16_t *a1, const void *bm, const void *img, const void *cfg)
+ *
+ * `cfg` is a {u8 sel; float scale} pair: sel must be 4, otherwise 0x69.  The
+ * scale is loaded into xmm3 and the call tail-jumps to cr_chain_score_26a70.
+ * ------------------------------------------------------------------------ */
+int cr_chain_gate_43020(int16_t *a1, const void *bm, const void *img,
+                        const void *cfg)
+{
+    if (*(const uint8_t *)cfg != 4)                        /* 0x180043020 */
+        return 0x69;
+    return cr_chain_score_26a70(a1, bm, img,
+                                *(const float *)((const uint8_t *)cfg + 4));
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180043040 — chain centroid classify stage (224 bytes)
+ *               fpc_bio_bep_sw23_e6767afcb6
+ *
+ *   int fn(void *ctx, const void *bm, uint8_t sel, int margin)
+ *
+ * `sel > 0xd` -> 0x69; the bitmask 0x3540 admits only {6, 8, 10, 12, 13}
+ * (sel == 0 returns 0, every other rejected selector returns 0x69).
+ * cr_desc_get_ptr2(&chain, sel) supplies the static chain descriptor; the
+ * bitmap descriptor lives at ctx+0x50 and the window fields come from
+ * chain[8][1] / chain[8][2].  cr_bitmap_centroid writes (y, x), which
+ * cr_chain_classify_i16 turns into a score stored at ctx+0x7e as
+ * (int16_t)(1000.0f * v).
+ * ------------------------------------------------------------------------ */
+int cr_chain_stage_43040(void *ctx, const void *bm, uint8_t sel, int margin)
+{
+    void *chain = NULL;
+    int y, x, st;
+
+    if (sel > 0xd)                                         /* 0x180043040 */
+        return 0x69;
+    if (((1u << sel) & 0x3540u) == 0)                      /* 0x180043064 */
+        return (sel == 0) ? 0 : 0x69;
+
+    if (cr_desc_get_ptr2(&chain, (char)sel))               /* 0x18004308f */
+        return 1;
+
+    const int32_t *cd = (const int32_t *)((const void **)chain)[1];
+    st = cr_bitmap_centroid((const cr_bitmap_desc *)((uint8_t *)ctx + 0x50),
+                            cd[1], cd[2], &y, &x, margin); /* 0x1800430bf */
+    if (st)                                                /* 0x1800430c4 */
+        return st;
+
+    float v;
+    st = cr_chain_classify_i16(&v, (const int *)chain, bm, x, y);
+    if (st)                                                /* 0x1800430e7 */
+        return st;
+
+    *(int16_t *)((uint8_t *)ctx + 0x7e) =
+        (int16_t)(int)(1000.0f * v);                       /* 0x1800430fd */
+    return 0;
+}

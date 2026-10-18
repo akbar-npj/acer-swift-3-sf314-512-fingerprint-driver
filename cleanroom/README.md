@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **347** (97.7% of functions, 165,728 B = 97.8% of bytes) |
+| rewritten + parity-verified | **350** (98.6% of functions, 166,176 B = 98.0% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Ninety-eight batches so far:
+Ninety-nine batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -512,6 +512,15 @@ Ninety-eight batches so far:
     stages (1 function).  This batch also fixed `cr_desc_get_ptr_size_69`,
     which was not storing the `image+0x1229e0` / `image+0xa0c80` pointers for
     selectors 15/16.
+99. trained-model chain stages:
+    `cr_chain_score_26a70` (192 B), `cr_chain_gate_43020` (32 B) and
+    `cr_chain_stage_43040` (224 B) resolve the static chain descriptors through
+    `cr_desc_get_ptr1`/`cr_desc_get_ptr2`, seed an affine sampler from the
+    bitmap centroid, run the pyramid stage or the int16 chain classifier, and
+    store the scaled score.  `cr_desc_get_ptr1` (sel 4) and
+    `cr_desc_get_ptr2` (sel 12/13) now return the real `image+0x159ea0` /
+    `image+0x122980` / `image+0x1598e0` chain addresses instead of NULL, which
+    is what unblocked this batch (3 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

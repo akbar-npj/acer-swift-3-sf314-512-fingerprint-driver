@@ -55,13 +55,15 @@ static const int16_t cr_tab_1174e0[256] = {
        707,   1124,   1086,    182,   1077,   2594,  -3087,   4740,
 };
 
-/* 0x18002aeb0 — single pointer getter, selector 4. */
+/* 0x18002aeb0 — single pointer getter, selector 4 (chain at image+0x159ea0). */
 uint64_t cr_desc_get_ptr1(void *p, char sel)
 {
     void **q = (void **)p;
     *q = NULL;
-    if (sel == 4)
+    if (sel == 4) {
+        *q = (void *)(g_cr_image_base + 0x159ea0u);
         return 0;
+    }
     return 1;
 }
 
@@ -81,13 +83,20 @@ uint64_t cr_desc_get_ptr_size(void *p1, uint32_t *p2, char sel)
     return 1;
 }
 
-/* 0x180020860 — two-selector pointer getter. */
+/* 0x180020860 — two-selector pointer getter.
+ * sel 12 -> image+0x122980, sel 13 -> image+0x1598e0. */
 uint64_t cr_desc_get_ptr2(void *p, char sel)
 {
     void **q = (void **)p;
     *q = NULL;
-    if (sel == 12 || sel == 13)
+    if (sel == 12) {
+        *q = (void *)(g_cr_image_base + 0x122980u);
         return 0;
+    }
+    if (sel == 13) {
+        *q = (void *)(g_cr_image_base + 0x1598e0u);
+        return 0;
+    }
     return 1;
 }
 
