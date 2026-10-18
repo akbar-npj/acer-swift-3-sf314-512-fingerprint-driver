@@ -9725,6 +9725,8 @@ static void test_desc_getters(void)
             uint64_t rc = cr_desc_get_ptr_size(&cv, &cs, (char)s);
             if (rv != rc) mismatch("ret", (u32)s, rv, rc);
             if (vs != cs) mismatch("size", (u32)s, (u64)vs, (u64)cs);
+            if ((vv != 0) != (cv != 0))
+                mismatch("ptrnull", (u32)s, (u64)(vv != 0), (u64)(cv != 0));
         }
         if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_ptr_size\n");
     }

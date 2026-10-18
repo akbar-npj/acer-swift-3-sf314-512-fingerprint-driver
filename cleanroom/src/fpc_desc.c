@@ -6,10 +6,34 @@
  * The cleanroom library does not contain the vendor's data tables, so the
  * pointer stores are zeroed (the scalar fields, byte markers and u64 tags are
  * reproduced exactly).  The difftest compares status codes and scalar fields;
- * pointer slots are not compared.
+ * pointer slots are compared for nullness only.
+ *
+ * One exception: the sel-6 table at 0x1801174e0 is a plain 128-entry int16
+ * coefficient block (a 64-tap 8x8 kernel), not trained-model state, so it is
+ * embedded verbatim below and the getter hands out its address.
  */
 
 #include "fpc_bep.h"
+
+/* 0x1801174e0 — 0x100-byte coefficient block returned by selector 6. */
+static const int16_t cr_tab_1174e0[128] = {
+      4740,  -3087,   2594,   1077,    182,   1086,   1124,    707,
+       397,   1775,    900,  -1691,   4801,   2013, -13967,  29921,
+    -28547,  15340,   -660,  -3402,   3072,    378,   -282,   1038,
+       229,    770,    652,   -845,   2526,   1134,  -7308,  15792,
+    -14982,   8125,   -303,  -1747,   1664,    249,   -111,    593,
+       190,    412,    386,   -287,   1206,    593,  -3159,   7102,
+     -6569,   3698,    -47,   -692,    831,    201,     21,    369,
+       189,    192,    338,     50,    257,    685,   -802,   1228,
+      2743,  -1791,   1531,    575,    112,    755,    428,    421,
+       825,     46,    450,   1854,  -1546,   -100,   8249, -14665,
+     15866,  -7053,   1277,   2778,   -654,    645,   1307,    404,
+       296,   1447,    682,  -1178,   3570,   1517, -10079,  21788,
+    -20661,  11198,   -413,  -2409,   2294,    345,   -153,    817,
+       262,    569,    533,   -396,   1663,    818,  -4357,   9796,
+     -9060,   5100,    -65,   -955,   1146,    277,     29,    510,
+       260,    264,    466,     69,    355,    946,  -1106,   1694,
+};
 
 /* 0x18002aeb0 — single pointer getter, selector 4. */
 uint64_t cr_desc_get_ptr1(void *p, char sel)
@@ -30,6 +54,7 @@ uint64_t cr_desc_get_ptr_size(void *p1, uint32_t *p2, char sel)
     if (sel == 0)
         return 0;
     if (sel == 6) {
+        *q1 = (void *)cr_tab_1174e0;      /* 0x1801174e0 */
         *p2 = 0x100;
         return 0;
     }
