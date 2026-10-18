@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **343** (96.6% of functions, 158,464 B = 93.5% of bytes) |
+| rewritten + parity-verified | **344** (96.9% of functions, 162,272 B = 95.7% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Ninety-four batches so far:
+Ninety-five batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -484,6 +484,13 @@ Ninety-four batches so far:
     difference, blur + 14-bit stretch, `cr_orient_encode_1ba60` + stretch, and
     blur + `cr_blur_divnorm_stretch`; the non-FFT paths optionally finish with
     `cr_bitmap_filter_apply_s16` (1 function).
+95. block orientation / run-length descriptor:
+    `cr_block_orient_195d0` (3808 B, ten arguments) walks an `X`-sized cell grid
+    over the Gaussian-derivative pair, popcounts each cell against the bitmap,
+    eigen-decomposes the 2×2 structure tensor, samples an oriented `X×X` patch,
+    thresholds its column profile between the local extrema means, and reports
+    four run statistics plus a masked coherence score while clearing
+    low-quality cells from the bitmap (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

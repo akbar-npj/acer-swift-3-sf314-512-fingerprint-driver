@@ -6093,3 +6093,367 @@ int cr_orient_pipeline_18c60(cr_image *a1, const cr_image *a2,
         return cr_bitmap_filter_apply_s16(a1, a4, c);
     return 0;
 }
+
+/* Extended bitmap descriptor used by 0x1800195d0: stride@0, words@8,
+ * offx@0x18, offy@0x1c (the first five fields match cr_bitmap_desc). */
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800195d0 — block orientation / run-length descriptor.
+ *
+ *   Args (ms_abi):
+ *     rcx = a1   int16 out: average masked quality (-1 on entry)
+ *     rdx = a2   float grid 0        r8  = a3  float grid 1
+ *     r9  = a4   float grid 2        [0x28] = a5 float grid 3
+ *     [0x30] = a6  float grid 4 *and* the grid geometry (w/h)
+ *     [0x38] = arg7 float[4] scratch (per-block run statistics)
+ *     [0x40] = arg8 bitmap (stride@0, words@8, offx@0x18, offy@0x1c)
+ *     [0x48] = arg9 int16 source image
+ *     [0x50] = arg10 config: X@0x10, sigma@0xc, qthr@0x14, bounds@0x18..0x54
+ *
+ *   Requires W > X and H > X and X > 0.  Computes the gradient pair with
+ *   cr_gauss_deriv_3img, then walks an X-sized block grid inset by
+ *   x0 = lroundf(ox/2), y0 = lroundf(oy/2) where
+ *   ox = W - (gw*X - 2X), oy = H - (gh*X - 2X).
+ *
+ *   Per block: sums B^2, C^2, B*C (as floats of the int32 products) and the
+ *   bitmap population count.  Unless every bit is set the five grids receive
+ *   -1.0f; otherwise the 2x2 tensor is eigen-decomposed, an oriented X x X
+ *   patch is sampled from the source, its column means are thresholded at the
+ *   midpoint of the local-extrema means, and the resulting binary runs give
+ *   four statistics written to the grids.  The block's coherence (times 100)
+ *   is scaled by a config mask, accumulated, and the block is cleared from the
+ *   bitmap when it falls below cfg[0x14].  Finally the four grids are reduced
+ *   with cr_masked_median_f32 and a1 receives the mean masked quality.
+ * ------------------------------------------------------------------------ */
+int cr_block_orient_195d0(int16_t *a1, cr_image *a2, cr_image *a3,
+                          cr_image *a4, cr_image *a5, cr_image *a6,
+                          float *out4, const void *bmp,
+                          const cr_image *src, const uint8_t *cfg)
+{
+    const cr_image *bm = (const cr_image *)bmp;
+    const uint32_t *bw = (const uint32_t *)bm->data;
+    const float *cf = (const float *)cfg;
+    int X = *(const int32_t *)(cfg + 0x10);
+    int W = src->w, H = src->h;
+    int nS, N;
+    cr_image A, B, C;
+    void *pool = NULL;
+    uint32_t st;
+
+    *(int16_t *)a1 = -1;                                  /* 0x180019669 */
+    if (W <= X || H <= X || X <= 0)
+        return 0x69;
+
+    st = cr_image_set(&A, NULL, X, X);                    /* 0x180019739 */
+    if (st) return (int)st;
+    st = cr_image_set(&B, NULL, W, H);                    /* 0x18001975e */
+    if (st) return (int)st;
+    st = cr_image_set(&C, NULL, W, H);                    /* 0x180019783 */
+    if (st) return (int)st;
+
+    nS = X * X;
+    N  = W * H;
+    st = (uint32_t)cr_pool_alloc3(&pool, &B.data, (uint32_t)(N * 2),
+                                  &C.data, (uint32_t)(N * 2),
+                                  &A.data, (uint32_t)(nS * 2));
+    if (st) return (int)st;                               /* 0x18001968a */
+
+    st = (uint32_t)cr_gauss_deriv_3img(&B, &C, (void *)src, cf[3]);
+    if (st) {                                             /* 0x18001a408 */
+        cr_sized_free_if(&pool);
+        return (int)st;
+    }
+
+    {
+        int ox = 0, oy = 0;                               /* 0x18001980a */
+        if (a6->w * X != W) ox = W - (a6->w * X - 2 * X);
+        if (a6->h * X != H) oy = H - (a6->h * X - 2 * X);
+        int x0 = cr_lroundf((float)ox * 0.5f);            /* 0x180019857 */
+        int y0 = cr_lroundf((float)oy * 0.5f);            /* 0x180019871 */
+        int f1 = (x0 != 0);                               /* 0x180019884 */
+        int f2 = (y0 != 0);                               /* 0x180019894 */
+        int xmax = W - x0, ymax = H - y0;
+        int rowacc = y0 * W;                              /* 0x64 */
+        float qsum = 0.0f;
+        int qcount = 0;
+
+        if (y0 < ymax) {
+            for (int yb = y0; ; yb += X) {
+                int y_end = yb + X;
+                if (x0 < xmax) {
+                    for (int x = x0; ; x += X) {
+                        uint32_t pop = 0;
+                        float sBB = 0.0f, sCC = 0.0f, sBC = 0.0f;
+                        float *g2 = (float *)a2->data;
+                        float *g3 = (float *)a3->data;
+                        float *g4 = (float *)a4->data;
+                        float *g5 = (float *)a5->data;
+                        float *g6 = (float *)a6->data;
+                        int idx, r;
+                        float qual = 0.0f;
+                        float *buf0 = NULL, *buf1 = NULL;
+
+                        for (r = 0; r < X; r++) {         /* 0x1800199e5 */
+                            int y = yb + r;
+                            const int16_t *Bp =
+                                (const int16_t *)B.data + rowacc
+                                + (size_t)r * W;
+                            const int16_t *Cp =
+                                (const int16_t *)C.data + rowacc
+                                + (size_t)r * W;
+                            int bi = (bm->offy + y) * bm->a + (bm->offx + x);
+                            for (int i = 0; i < X; i++) {
+                                int32_t b = Bp[x + i];
+                                int32_t c = Cp[x + i];
+                                sBB += (float)(int32_t)(b * b);
+                                sCC += (float)(int32_t)(c * c);
+                                sBC += (float)(int32_t)(b * c);
+                                pop += (bw[bi >> 5] >>
+                                        ((bm->offx + x + i) & 31)) & 1u;
+                                bi++;
+                            }
+                        }
+
+                        idx = (x / X) + (yb / X + f1) * a6->w + f2;
+                        if (pop != (uint32_t)nS)
+                            goto blk_sentinel;
+
+                        {
+                            float nSf = (float)nS;
+                            float varB = sBB / nSf;       /* 0x180019c5e */
+                            float varC = sCC / nSf;       /* 0x180019c66 */
+                            float cov  = sBC / nSf;       /* 0x180019c5a */
+                            float d1, b1, ratio, ang;
+                            float co, si, m[6];
+                            float hc, hp, xc, yc, rad;
+                            float thr;
+                            int i, j, first, last;
+
+                            if (cov * cov >= 1e-12f) {    /* 0x180019eb8 */
+                                float mean = (varB + varC) * 0.5f;
+                                float det  = varB * varC - cov * cov;
+                                float s    = cr_sqrtf(mean * mean - det);
+                                float lam1 = mean + s;
+                                float lam2 = mean - s;
+                                d1 = lam1 - varB;
+                                b1 = cov;
+                                if (!(lam1 > 0.0f))
+                                    goto blk_sentinel;
+                                ratio = lam2 / lam1;
+                            } else {                      /* 0x180019c7f */
+                                if (!(varB > 0.0f))
+                                    goto blk_sentinel;
+                                d1 = 0.0f;
+                                b1 = 1.0f;
+                                ratio = varC / varB;
+                            }
+                            qual  = (1.0f - ratio) * 100.0f;   /* 0x180019d51 */
+                            ang   = cr_atan2_deg(d1, b1);      /* 0x180019d5f */
+                            rad   = ang * 3.14159274f / 180.0f;
+                            hc    = ((float)X - 1.0f) * 0.5f;
+                            hp    = (float)(X - 1) * 0.5f;
+                            yc    = (float)yb + hc;
+                            xc    = (float)x + hc;
+                            cr_sincos_f32(&co, &si, rad);
+                            m[0] = co;
+                            m[1] = -si;
+                            m[2] = xc - (co - si) * hp;
+                            m[3] = si;
+                            m[4] = co;
+                            m[5] = yc - (co + si) * hp;
+                            cr_affine_sample_s16_nn(&A, src, m, -16000);
+
+                            out4[0] = out4[1] = out4[2] = out4[3] = 0.0f;
+                            st = (uint32_t)cr_malloc_aligned16(
+                                     (void **)&buf0, 4);
+                            if (st) {                 /* 0x180019e9b */
+                                cr_sized_free_if(&pool);
+                                return (int)st;
+                            }
+                            st = (uint32_t)cr_malloc_aligned16(
+                                     (void **)&buf1, (size_t)X * 4);
+                            if (st) {                 /* 0x18001a0f4 */
+                                cr_sized_free((void **)&buf0);
+                                cr_sized_free_if(&pool);
+                                return (int)st;
+                            }
+
+                            for (j = 0; j < X; j++) { /* 0x180019f62 */
+                                int sum = 0, cnt = 0;
+                                const int16_t *Ad = (const int16_t *)A.data;
+                                for (i = 0; i < X; i++) {
+                                    int16_t v = Ad[i * X + j];
+                                    if (v != -16000) { sum += v; cnt++; }
+                                }
+                                buf1[j] = cnt
+                                    ? (float)sum / (float)cnt
+                                    : 3.4028234663852886e+38f;
+                            }
+
+                            if (X - 1 <= 1) {         /* 0x180019fcb */
+                                thr = 3.4028234663852886e+38f;
+                            } else {
+                                float smax = 0.0f, smin = 0.0f;
+                                int cmax = 0, cmin = 0;
+                                for (i = 1; i < X - 1; i++) {
+                                    float cur = buf1[i];
+                                    float prv = buf1[i - 1];
+                                    float nxt = buf1[i + 1];
+                                    if (cur > prv && !(cur < nxt)) {
+                                        smax += cur; cmax++;
+                                    }
+                                    if (prv > cur && !(nxt < cur)) {
+                                        smin += cur; cmin++;
+                                    }
+                                }
+                                if ((int16_t)cmin == 0 || (int16_t)cmax == 0)
+                                    thr = 3.4028234663852886e+38f;
+                                else
+                                    thr = (smax / (float)(int16_t)cmax +
+                                           smin / (float)(int16_t)cmin) * 0.5f;
+                            }
+                            buf0[0] = thr;
+
+                            first = 0;                /* 0x18001a076 */
+                            last  = X - 1;
+                            for (i = 0; i < X; i++) {
+                                if (buf1[i] == 3.4028234663852886e+38f)
+                                    continue;
+                                buf1[i] = (buf1[i] > thr) ? 1.0f : 0.0f;
+                                if (first == 0) {
+                                    if (i != 0 && buf1[i] != buf1[i - 1]) {
+                                        last = i; first = i;
+                                    }
+                                } else {
+                                    if (i != 0 && buf1[i] != buf1[i - 1])
+                                        last = i;
+                                }
+                            }
+
+                            if (first >= last) {      /* 0x18001a495 */
+                                out4[0] = -1.0f;
+                                out4[1] = -1.0f;
+                                out4[2] = -1.0f;
+                                out4[3] = -1.0f;
+                            } else {
+                                float ones = 0.0f, zeros = 0.0f;
+                                float t10 = 0.0f, t01 = 0.0f;
+                                for (i = first; i < last; i++) {
+                                    float v = buf1[i], nx = buf1[i + 1];
+                                    if (v == 1.0f) {
+                                        ones += 1.0f;
+                                        if (nx == 0.0f) t10 += 1.0f;
+                                    } else if (v == 0.0f) {
+                                        zeros += 1.0f;
+                                        if (nx == 1.0f) t01 += 1.0f;
+                                    }
+                                }
+                                if (!(zeros > 0.0f) && !(ones > 0.0f)) {
+                                    out4[0] = -1.0f;
+                                    out4[1] = -1.0f;
+                                    out4[2] = -1.0f;
+                                    out4[3] = -1.0f;
+                                } else {
+                                    out4[0] = (t10 + t01) /
+                                              (2.0f * (zeros + ones));
+                                    if (!(t10 > 0.0f)) {
+                                        out4[1] = -1.0f;
+                                        if (!(t01 > 0.0f)) {
+                                            out4[2] = -1.0f;
+                                            out4[3] = -1.0f;
+                                        } else {
+                                            out4[2] = zeros / t01;
+                                            out4[3] = -1.0f; /* 0x18001a42a */
+                                        }
+                                    } else {
+                                        out4[1] = ones / t10;
+                                        if (!(t01 > 0.0f)) {
+                                            out4[2] = -1.0f;
+                                            out4[3] = -1.0f;
+                                        } else {
+                                            out4[2] = zeros / t01;
+                                            out4[3] = out4[2] / out4[1];
+                                        }
+                                    }
+                                }
+                            }
+
+                            cr_sized_free((void **)&buf0);   /* 0x18001a1f6 */
+                            cr_sized_free((void **)&buf1);
+                        }
+
+                        g2[idx] = out4[0];                /* 0x18001a25d */
+                        g3[idx] = out4[1];
+                        g4[idx] = out4[2];
+                        g5[idx] = out4[3];
+                        g6[idx] = qual;                   /* 0x18001a2a3 */
+
+                        {
+                            float mask = 0.5f;            /* 0x18001a29c */
+                            if (!(out4[1] > cf[0x30 / 4] ||
+                                  cf[0x2c / 4] > out4[1] ||
+                                  out4[2] > cf[0x40 / 4] ||
+                                  cf[0x3c / 4] > out4[2] ||
+                                  out4[0] > cf[0x20 / 4] ||
+                                  cf[0x1c / 4] > out4[0] ||
+                                  out4[3] > cf[0x50 / 4]))
+                                mask = (out4[3] < cf[0x4c / 4])
+                                     ? 0.5f : 1.0f;
+                            if (out4[1] > cf[0x34 / 4] ||
+                                cf[0x28 / 4] > out4[1] ||
+                                out4[2] > cf[0x44 / 4] ||
+                                cf[0x38 / 4] > out4[2] ||
+                                out4[0] > cf[0x24 / 4] ||
+                                cf[0x18 / 4] > out4[0] ||
+                                out4[3] > cf[0x54 / 4] ||
+                                out4[3] < cf[0x48 / 4])
+                                mask = 0.0f;          /* 0x18001a3ef */
+                            qual *= mask;
+                            qcount++;
+                            qsum += qual;
+                            if (cf[0x14 / 4] > qual &&
+                                !(cf[0x14 / 4] < 0.0f))
+                                cr_bitmap_clear_rect((cr_image *)bmp, yb,
+                                                     y_end, x, x + X);
+                        }
+                        goto next_x;
+
+blk_sentinel:                                     /* 0x180019a6d */
+                        g2[idx] = -1.0f;
+                        g3[idx] = -1.0f;
+                        g4[idx] = -1.0f;
+                        g5[idx] = -1.0f;
+                        g6[idx] = -1.0f;
+next_x:
+                        if (!(xmax > x + X))
+                            break;
+                    }
+                }
+                rowacc += W * X;                          /* 0x180019b35 */
+                if (!(ymax > y_end))
+                    break;
+            }
+        }
+
+        {
+            /* One scratch float, zeroed once at entry (0x180019673) and
+             * reused for all four reductions, so a failed call leaves the
+             * previous median in place. */
+            float med = 0.0f;
+            for (int i = 0; i < 4; i++) {                 /* 0x180019b80 */
+                float *g = (float *)(i == 0 ? a2->data
+                                : i == 1 ? a3->data
+                                : i == 2 ? a4->data : a5->data);
+                cr_masked_median_f32(&med, g, a6->w * a6->h, -1.0f);
+                out4[i] = med;
+            }
+        }
+        if (qcount != 0)
+            *(int16_t *)a1 = (int16_t)(int32_t)(qsum / (float)qcount);
+        else
+            *(int16_t *)a1 = (int16_t)(int32_t)(qsum / 0.0f);
+    }
+
+    cr_sized_free_if(&pool);                              /* 0x180019c44 */
+    return 0;
+}

@@ -1160,6 +1160,11 @@ int      cr_orient_encode_1ba60(cr_image *a1, const cr_image *a2, int a3,
 int      cr_orient_pipeline_18c60(cr_image *a1, const cr_image *a2,
                                   const uint8_t *cfg, const cr_image *a4,
                                   int a5, int a6);          /* 0x180018c60 */
+int      cr_block_orient_195d0(int16_t *a1, cr_image *a2, cr_image *a3,
+                               cr_image *a4, cr_image *a5, cr_image *a6,
+                               float *out4, const void *bmp,
+                               const cr_image *src,
+                               const uint8_t *cfg);         /* 0x1800195d0 */
 
 /* 0x180145240 — 501-entry bank of 9x9 int16 correlation kernels handed out by
  * cr_desc_get_tag_ptr selector 0 (tag 0x1f500000009: K=9, count=501). */

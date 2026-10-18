@@ -14868,6 +14868,136 @@ static void test_orient_pipeline_18c60(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_orient_pipeline_18c60\n");
 }
 
+/* ---- batch 101: block orientation / run-length descriptor -------------- */
+static void test_block_orient_195d0(void)
+{
+    typedef int (WINAPI *v_t)(int16_t *, cr_image *, cr_image *, cr_image *,
+                              cr_image *, cr_image *, float *, const void *,
+                              const cr_image *, const uint8_t *);
+    v_t v = (v_t)fn_at(RVA(0x1800195d0));
+    begin("cr_block_orient_195d0");
+    int bad = g_fail;
+    enum { MAXW = 56, MAXH = 56, MAXN = MAXW * MAXH, GRID = 256 };
+    static int16_t sv[MAXN], sc[MAXN];
+    static float gv[5][GRID], gc[5][GRID];
+    static uint32_t bmw[2048], bmc[2048];
+    static u8 cfg[0x80];
+    static u8 iv[5][0x20], ic[5][0x20];
+    static u8 svd[0x20], scd[0x20];
+    static u8 bdv[0x20], bdc[0x20];
+    static float ov[4], oc[4];
+    int ran = 0;
+
+    for (int t = 0; t < 400; t++) {
+        int X  = 5 + (int)(rnd() % 5);
+        int gw = 2 + (int)(rnd() % 4);
+        int gh = 2 + (int)(rnd() % 4);
+        int W  = X * gw + (int)(rnd() % (unsigned)X);
+        int H  = X * gh + (int)(rnd() % (unsigned)X);
+        int N  = W * H;
+        int a  = ((W + 31) / 32) * 32;
+        int offx = (int)(rnd() % 8), offy = (int)(rnd() % 8);
+
+        for (int i = 0; i < N; i++) {
+            int16_t x = (int16_t)((int)(rnd() % 65536) - 32768);
+            sv[i] = x; sc[i] = x;
+        }
+        for (int g = 0; g < 5; g++)
+            for (int i = 0; i < GRID; i++) {
+                float f = (float)((int)(rnd() % 2001) - 1000) * 0.01f;
+                gv[g][i] = f; gc[g][i] = f;
+            }
+        for (int i = 0; i < (int)(sizeof bmw / sizeof bmw[0]); i++) {
+            uint32_t w = (t % 5 < 2) ? 0xffffffffu : rnd();
+            bmw[i] = w; bmc[i] = w;
+        }
+        ov[0] = ov[1] = ov[2] = ov[3] = 0.0f;
+        oc[0] = oc[1] = oc[2] = oc[3] = 0.0f;
+
+        memset(cfg, 0, sizeof cfg);
+        *(float *)(cfg + 0x0c) = (float)(rnd() % 200u) / 100.0f;
+        *(int   *)(cfg + 0x10) = X;
+        *(float *)(cfg + 0x14) = (t & 1) ? -1.0f
+                                        : (float)(rnd() % 120u);
+        {
+            static const int plo[8] = { 0x18, 0x1c, 0x28, 0x2c,
+                                        0x38, 0x3c, 0x48, 0x4c };
+            static const int phi[8] = { 0x24, 0x20, 0x34, 0x30,
+                                        0x44, 0x40, 0x54, 0x50 };
+            for (int i = 0; i < 8; i++) {
+                int lo = plo[i], hi = phi[i];
+                switch ((t / 8 + i) % 4) {
+                case 0: *(float *)(cfg + lo) = -1e6f;
+                        *(float *)(cfg + hi) =  1e6f; break;
+                case 1: *(float *)(cfg + lo) =  0.0f;
+                        *(float *)(cfg + hi) =  1.0f; break;
+                case 2: *(float *)(cfg + lo) = -1.0f;
+                        *(float *)(cfg + hi) =  2.0f; break;
+                default:*(float *)(cfg + lo) =  0.05f;
+                        *(float *)(cfg + hi) =  0.5f;  break;
+                }
+            }
+        }
+
+        for (int g = 0; g < 4; g++)
+            mk_img2(iv[g], (int16_t *)gv[g], W, H);
+        mk_img2(iv[4], (int16_t *)gv[4], gw, gh);
+        memcpy(ic, iv, sizeof iv);
+        for (int g = 0; g < 5; g++)
+            *(void **)(ic[g] + 0x08) = gc[g];
+        mk_img2(svd, sv, W, H);
+        mk_img2(scd, sc, W, H);
+        mk_img2(bdv, (int16_t *)bmw, W, H);
+        memcpy(bdc, bdv, 0x20);
+        *(void **)(bdc + 0x08) = bmc;
+        *(int *)(bdv + 0x00) = a;
+        *(int *)(bdc + 0x00) = a;
+        *(int *)(bdv + 0x18) = offx;
+        *(int *)(bdc + 0x18) = offx;
+        *(int *)(bdv + 0x1c) = offy;
+        *(int *)(bdc + 0x1c) = offy;
+
+        int16_t rv = 0x1234, rc = 0x1234;
+        int er = v(&rv, (cr_image *)iv[0], (cr_image *)iv[1],
+                   (cr_image *)iv[2], (cr_image *)iv[3], (cr_image *)iv[4],
+                   ov, bdv, (const cr_image *)svd, cfg);
+        int ec = cr_block_orient_195d0(&rc, (cr_image *)ic[0],
+                   (cr_image *)ic[1], (cr_image *)ic[2], (cr_image *)ic[3],
+                   (cr_image *)ic[4], oc, bdc, (const cr_image *)scd, cfg);
+
+        if (er != ec) mismatch("ret", (u32)t, (u32)er, (u32)ec);
+        if (rv != rc) mismatch("q", (u32)t, (u16)rv, (u16)rc);
+        for (int g = 0; g < 5; g++)
+            cmp_buf("grid", (const u8 *)gv[g], (const u8 *)gc[g],
+                    GRID * sizeof(float), (u32)t);
+        cmp_buf("out4", (const u8 *)ov, (const u8 *)oc, 16, (u32)t);
+        cmp_buf("bmp", (const u8 *)bmw, (const u8 *)bmc,
+                sizeof bmw, (u32)t);
+        ran++;
+    }
+
+    /* Guard paths: X >= W or X >= H must return 0x69 and write -1. */
+    for (int t = 0; t < 12; t++) {
+        int X = 6 + t, W = 6 + (t / 3), H = 8 + (t / 2);
+        memset(cfg, 0, sizeof cfg);
+        *(int *)(cfg + 0x10) = X;
+        mk_img2(svd, sv, W, H);
+        mk_img2(scd, sc, W, H);
+        int16_t rv = 7, rc = 7;
+        int er = v(&rv, (cr_image *)iv[0], (cr_image *)iv[1],
+                   (cr_image *)iv[2], (cr_image *)iv[3], (cr_image *)iv[4],
+                   ov, bdv, (const cr_image *)svd, cfg);
+        int ec = cr_block_orient_195d0(&rc, (cr_image *)ic[0],
+                   (cr_image *)ic[1], (cr_image *)ic[2], (cr_image *)ic[3],
+                   (cr_image *)ic[4], oc, bdc, (const cr_image *)scd, cfg);
+        if (er != ec) mismatch("gret", (u32)t, (u32)er, (u32)ec);
+        if (rv != rc) mismatch("gq", (u32)t, (u16)rv, (u16)rc);
+        ran++;
+    }
+    printf("  [195d0] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_block_orient_195d0\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -15300,6 +15430,7 @@ int main(int argc, char **argv)
     test_pad_filter_12aa0();
     test_orient_encode_1ba60();
     test_orient_pipeline_18c60();
+    test_block_orient_195d0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
