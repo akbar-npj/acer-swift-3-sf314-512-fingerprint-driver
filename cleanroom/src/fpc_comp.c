@@ -3996,9 +3996,10 @@ cleanup:
  *   v = v/255 + 0.5, then clamp: v<=0 -> img1[i]; v>=255 -> 0xff; else trunc.
  * out2 = sharpness(img1,mask) after the rewrite.  Verified by difftest. */
 int cr_masked_contrast_norm_26410(int *out1, int *out2, cr_image *mask,
-                                  const cr_image *src, const void *ctx)
+                                  const cr_image *src, const void *ctx5,
+                                  const void *ctx6)
 {
-    const uint8_t *c = (const uint8_t *)ctx;
+    const uint8_t *c = (const uint8_t *)ctx5;
     int w  = mask->w;
     int h  = mask->h;
     uint8_t *mdata = (uint8_t *)mask->data;
@@ -4008,7 +4009,7 @@ int cr_masked_contrast_norm_26410(int *out1, int *out2, cr_image *mask,
     if ((e = cr_image_alloc_u8((int *)&img1, w, h)) != 0)
         return e;
 
-    float sigma0 = *(const float *)(c + 0x4);
+    float sigma0 = *(const float *)((const uint8_t *)ctx6 + 0x4);
     if ((e = cr_bitmap_unpack_boxmax_fir(&img1, src, 1, 1, sigma0)) != 0) {
         cr_cleanup_ptr8_a(&img1);
         return e;
@@ -4332,5 +4333,115 @@ int cr_feature_pipeline_34ed0(void *obj, const void *arg2, int arg3,
     }
 
     cr_cleanup_ptr8_clear(&img);
+    return 0;
+}
+
+/* 0x180048310 — sharpness-gated mask refinement.
+ *
+ * int cr_sharp_gate_48310(void *a1, void *a2, void *a3, void *a4,
+ *                         const void *a5, const void *a6, int a7, int a8,
+ *                         const void *a9);
+ *
+ * Returns 0 immediately when `a3` is NULL.  `a1` is overwritten with the
+ * block-extreme bitmap of `a2`, and unless the mode byte at `a5+0x44` is 1 or
+ * 2 the call also returns 0.  `a4` then receives the image fields of `a3`
+ * (cr_copy_image_fields).  In mode 1, when both `*(int*)(a6+4)` and `a7` are
+ * zero, the feature-extraction step runs against `*(void**)(a4+0x38+a8*8)`
+ * (0x3ec when that handle is NULL) with the config at `a5+0x44`.  The masked
+ * contrast normalisation of `a2` against `a1` follows; its two sharpness
+ * outputs are compared as `(int)(0.8f * out2) > out1`, and only when that
+ * holds is the `a2->a * a2->b`-byte payload of the slot descriptor `a9` copied
+ * into `a2->data`.  Verified by difftest. */
+int cr_sharp_gate_48310(void *a1, void *a2, void *a3, void *a4,
+                        const void *a5, const void *a6, int a7, int a8,
+                        const void *a9)
+{
+    if (a3 == NULL)
+        return 0;
+
+    cr_block_extreme_bitmap((cr_image *)a1, (const cr_image *)a2);
+
+    const uint8_t *mode = (const uint8_t *)a5 + 0x44;
+    if ((uint8_t)(*mode - 1) > 1u)
+        return 0;
+
+    int e = cr_copy_image_fields(a4, a3);
+    if (e != 0)
+        return e;
+
+    if (*mode == 1 && ((*(const int *)((const uint8_t *)a6 + 4) | a7) == 0)) {
+        void *h = *(void **)((uint8_t *)a4 + 0x38 + (size_t)a8 * 8);
+        if (h == NULL)
+            return 0x3ec;
+        e = cr_feature_extract_step_26dc0(a3, (const cr_image *)a2, h,
+                                          (const cr_image *)a1, mode);
+        if (e != 0)
+            return e;
+    }
+
+    int o1 = 0, o2 = 0;
+    e = cr_masked_contrast_norm_26410(&o1, &o2, (cr_image *)a2,
+                                      (const cr_image *)a1, a3, mode);
+    if (e != 0)
+        return e;
+
+    if ((int)(0.8f * (float)o2) <= o1)
+        return 0;
+
+    int n = *(const int *)a2 * *(const int *)((const uint8_t *)a2 + 4);
+    if (n <= 0)
+        return 0;
+
+    const uint8_t *sdata = *(const uint8_t * const *)((const uint8_t *)a9 + 0x10);
+    uint8_t       *ddata = *(uint8_t * const *)((const uint8_t *)a2 + 8);
+    for (int i = 0; i < n; i++)
+        ddata[i] = sdata[i];
+    return 0;
+}
+
+/* 0x1800344e0 — mask refine: slot copy, sharpness gate, inpaint, extremes.
+ *
+ * int cr_mask_refine_344e0(void *a1, void *a2, void *a3, void *a4, void *a5,
+ *                          void *a6, void *a7, int a8, int a9);
+ *
+ * `a6` is the slot table: `a6[a8]` supplies the payload copied byte-for-byte
+ * into `a2->data` (a2->a * a2->b bytes) and `a6+0x70` is the index list.
+ * The mode byte at `a7+0x44` must be 0, 1 or 2; a negative or larger value
+ * returns 0x69.  For modes 1 and 2 cr_sharp_gate_48310 runs with `a3` as its
+ * destination image, `a5` as the context, `a4` as the object, `a7` as the
+ * config and the same slot index; mode 0 skips it.  Then
+ * cr_mask_inpaint_317a0 flags `a1`, inpaints `a2` from the index list using
+ * the sub-config at `a7+0xc0`, and cr_block_extreme_bitmap writes the final
+ * bitmap into `a3`.  Verified by difftest. */
+int cr_mask_refine_344e0(void *a1, void *a2, void *a3, void *a4, void *a5,
+                         void *a6, void *a7, int a8, int a9)
+{
+    void *slot = *(void **)((uint8_t *)a6 + (size_t)a8 * 8);
+    void *list = *(void **)((uint8_t *)a6 + 0x70);
+
+    int n = *(const int *)a2 * *(const int *)((const uint8_t *)a2 + 4);
+    if (n > 0) {
+        const uint8_t *s = *(const uint8_t * const *)((const uint8_t *)slot + 0x10);
+        uint8_t       *d = *(uint8_t * const *)((const uint8_t *)a2 + 8);
+        for (int i = 0; i < n; i++)
+            d[i] = s[i];
+    }
+
+    int8_t mode = (int8_t)((const uint8_t *)a7)[0x44];
+    if (mode != 0) {
+        if (mode < 0 || mode > 2)
+            return 0x69;
+        int e = cr_sharp_gate_48310(a3, a2, a5, a6, a7, a4, a9, a8, slot);
+        if (e != 0)
+            return e;
+    }
+
+    int e = cr_mask_inpaint_317a0((uint8_t *)a1, (const cr_image *)a2,
+                                  (const cr_index_list *)list,
+                                  (const uint8_t *)a7 + 0xc0);
+    if (e != 0)
+        return e;
+
+    cr_block_extreme_bitmap((cr_image *)a3, (const cr_image *)a2);
     return 0;
 }

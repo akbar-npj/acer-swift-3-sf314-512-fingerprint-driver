@@ -13355,7 +13355,7 @@ static void test_masked_contrast_norm_26410(void)
         int o1v = 0, o1c = 0, o2v = 0, o2c = 0;
         int rv = v(&o1v, &o2v, &mv, (const cr_image *)&sv, ctxV, ctxV);
         int rc = cr_masked_contrast_norm_26410(&o1c, &o2c, &mc,
-                                              (const cr_image *)&sc, ctxC);
+                                              (const cr_image *)&sc, ctxC, ctxC);
         if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
         if (o1v != o1c) mismatch("out1", (u32)t, (u32)o1v, (u32)o1c);
         if (o2v != o2c) mismatch("out2", (u32)t, (u32)o2v, (u32)o2c);
@@ -13655,6 +13655,218 @@ static void test_feature_pipeline_34ed0(void)
         memset(outv, 0, sizeof outv); memset(outc, 0, sizeof outc);
     }
     if (g_fail == bad) end(); else printf("  FAIL cr_feature_pipeline_34ed0\n");
+}
+
+/* ---- 0x180048310: sharpness-gated mask refinement ---------------------- */
+static void test_sharp_gate_48310(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *, void *, const void *,
+                              const void *, int, int, const void *);
+    v_t v = (v_t)fn_at(RVA(0x180048310));
+    begin("cr_sharp_gate_48310");
+    int bad = g_fail;
+
+    enum { MAXW = 80, MAXH = 50, MAXPIX = MAXW * MAXH, MAXW32 = 96 };
+    static uint8_t  maskv[MAXPIX], maskc[MAXPIX];
+    static uint32_t bitv[MAXW32 / 32 * MAXH], bitc[MAXW32 / 32 * MAXH];
+    static int16_t  gsv[MAXPIX], gsc[MAXPIX];
+    static uint8_t  a3v[0x80], a3c[0x80];
+    static uint8_t  a4v[0x100], a4c[0x100];
+    static uint8_t  a5v[0x100], a5c[0x100];
+    static uint8_t  a6v[8],    a6c[8];
+    static uint8_t  a9v[0x20], a9c[0x20];
+    static uint8_t  slv[MAXPIX], slc[MAXPIX];
+
+    for (int t = 0; t < 2000; t++) {
+        int W = 40 + (int)(rnd() % 40u);
+        int H = 30 + (int)(rnd() % 20u);
+        int n = W * H;
+        int astride = ((W + 31) / 32) * 32;
+        int nwords  = astride / 32 * H;
+
+        for (int i = 0; i < n; i++) {
+            uint8_t m = (uint8_t)rnd();
+            maskv[i] = m; maskc[i] = m;
+            int16_t g = (int16_t)((int)(rnd() % 4096u) - 2048);
+            gsv[i] = g; gsc[i] = g;
+            uint8_t s = (uint8_t)rnd();
+            slv[i] = s; slc[i] = s;
+        }
+        for (int i = 0; i < nwords; i++) {
+            uint32_t w = rnd();
+            bitv[i] = w; bitc[i] = w;
+        }
+
+        int mode, skip, a7, idx = (int)(rnd() % 3u);
+        switch (t % 5) {
+        case 0:  mode = 1; skip = 0; a7 = 0; break;
+        case 1:  mode = 1; skip = 1; a7 = 0; break;
+        case 2:  mode = 1; skip = 0; a7 = 1; break;
+        case 3:  mode = 2; skip = (int)(rnd() % 2u); a7 = (int)(rnd() % 2u); break;
+        default: mode = (t & 1) ? 0 : 3; skip = 0; a7 = 0; break;
+        }
+        int null3 = (t % 17 == 0);
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+        int8_t flag = (int8_t)((t & 2) ? 1 : -1);
+        *(int8_t *)(a3v + 8) = flag; *(int8_t *)(a3c + 8) = flag;
+        *(int32_t *)(a3v + 0x50) = W; *(int32_t *)(a3v + 0x54) = H;
+        *(int32_t *)(a3c + 0x50) = W; *(int32_t *)(a3c + 0x54) = H;
+        *(void **)(a3v + 0x58) = gsv; *(void **)(a3c + 0x58) = gsc;
+        *(int32_t *)(a3v + 0x60) = W; *(int32_t *)(a3v + 0x64) = H;
+        *(int32_t *)(a3c + 0x60) = W; *(int32_t *)(a3c + 0x64) = H;
+
+        memset(a4v, 0, sizeof a4v); memset(a4c, 0, sizeof a4c);
+        memset(a5v, 0, sizeof a5v); memset(a5c, 0, sizeof a5c);
+        a5v[0x44] = (uint8_t)mode; a5c[0x44] = (uint8_t)mode;
+        float sig = (float)(rnd() % 50u) / 10.0f + 0.1f;
+        *(float *)(a5v + 0x48) = sig; *(float *)(a5c + 0x48) = sig;
+
+        memset(a6v, 0, sizeof a6v); memset(a6c, 0, sizeof a6c);
+        *(int32_t *)(a6v + 4) = skip; *(int32_t *)(a6c + 4) = skip;
+
+        memset(a9v, 0, sizeof a9v); memset(a9c, 0, sizeof a9c);
+        *(void **)(a9v + 0x10) = slv; *(void **)(a9c + 0x10) = slc;
+
+        cr_image av, ac, mv, mc;
+        memset(&av, 0, sizeof av); memset(&ac, 0, sizeof ac);
+        memset(&mv, 0, sizeof mv); memset(&mc, 0, sizeof mc);
+        av.a = astride; av.b = H; av.data = bitv; av.w = W; av.h = H;
+        ac.a = astride; ac.b = H; ac.data = bitc; ac.w = W; ac.h = H;
+        mv.a = mv.w = W; mv.b = mv.h = H; mv.data = maskv;
+        mc.a = mc.w = W; mc.b = mc.h = H; mc.data = maskc;
+
+        int rv = v(&av, &mv, null3 ? NULL : a3v, a4v, a5v, a6v, a7, idx, a9v);
+        int rc = cr_sharp_gate_48310(&ac, &mc, null3 ? NULL : a3c, a4c,
+                                     a5c, a6c, a7, idx, a9c);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("bits", (const u8 *)bitv, (const u8 *)bitc,
+                (size_t)nwords * 4, (u32)t);
+        cmp_buf("mask", (const u8 *)maskv, (const u8 *)maskc, (size_t)n, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_sharp_gate_48310\n");
+}
+
+/* ---- 0x1800344e0: mask refine ------------------------------------------ */
+static void test_mask_refine_344e0(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *, void *, void *, void *,
+                              void *, int, int);
+    v_t v = (v_t)fn_at(RVA(0x1800344e0));
+    begin("cr_mask_refine_344e0");
+    int bad = g_fail;
+
+    enum { MAXW = 80, MAXH = 50, MAXPIX = MAXW * MAXH, MAXW32 = 96 };
+    static uint8_t  imgv[MAXPIX], imgc[MAXPIX];
+    static uint32_t bitv[MAXW32 / 32 * MAXH], bitc[MAXW32 / 32 * MAXH];
+    static uint8_t  slv[MAXPIX], slc[MAXPIX];
+    static uint8_t  sl2v[MAXPIX], sl2c[MAXPIX];
+    static uint8_t  sl3v[MAXPIX], sl3c[MAXPIX];
+    static int16_t  gsv[MAXPIX], gsc[MAXPIX];
+    static uint8_t  a5v[0x80], a5c[0x80];
+    static uint8_t  a4v[0x100], a4c[0x100];
+    static uint8_t  a6v[0x80], a6c[0x80];
+    static uint8_t  a7v[0x100], a7c[0x100];
+    static uint8_t  s0v[0x20], s0c[0x20], s1v[0x20], s1c[0x20];
+    static uint8_t  s2v[0x20], s2c[0x20];
+    static uint8_t  ilv[0x20], ilc[0x20];
+    static uint16_t idv[16], idc[16];
+
+    for (int t = 0; t < 1500; t++) {
+        int W = 40 + (int)(rnd() % 40u);
+        int H = 30 + (int)(rnd() % 20u);
+        int n = W * H;
+        int astride = ((W + 31) / 32) * 32;
+        int nwords  = astride / 32 * H;
+
+        for (int i = 0; i < n; i++) {
+            uint8_t b = (uint8_t)rnd();
+            imgv[i] = b; imgc[i] = b;
+            uint8_t s = (uint8_t)rnd();
+            slv[i] = s; slc[i] = s;
+            uint8_t s2 = (uint8_t)rnd();
+            sl2v[i] = s2; sl2c[i] = s2;
+            uint8_t s3 = (uint8_t)rnd();
+            sl3v[i] = s3; sl3c[i] = s3;
+            int16_t g = (int16_t)((int)(rnd() % 4096u) - 2048);
+            gsv[i] = g; gsc[i] = g;
+        }
+        for (int i = 0; i < nwords; i++) {
+            uint32_t w = rnd();
+            bitv[i] = w; bitc[i] = w;
+        }
+        for (int i = 0; i < 8; i++) {
+            uint16_t k = (uint16_t)(rnd() % (unsigned)n);
+            idv[i] = k; idc[i] = k;
+        }
+
+        int mode;
+        switch (t % 6) {
+        case 0:  mode = 0; break;
+        case 1:  mode = 1; break;
+        case 2:  mode = 2; break;
+        case 3:  mode = 3; break;
+        case 4:  mode = -1; break;
+        default: mode = (int)(rnd() % 4u); break;
+        }
+        int sub  = (t % 2) ? 5 : 0;
+        int a8   = (int)(rnd() % 3u);
+        int a9   = (int)(rnd() % 3u);
+
+        memset(a5v, 0, sizeof a5v); memset(a5c, 0, sizeof a5c);
+        int8_t flag = (int8_t)((t & 2) ? 1 : -1);
+        *(int8_t *)(a5v + 8) = flag; *(int8_t *)(a5c + 8) = flag;
+        *(int32_t *)(a5v + 0x50) = W; *(int32_t *)(a5v + 0x54) = H;
+        *(int32_t *)(a5c + 0x50) = W; *(int32_t *)(a5c + 0x54) = H;
+        *(void **)(a5v + 0x58) = gsv; *(void **)(a5c + 0x58) = gsc;
+        *(int32_t *)(a5v + 0x60) = W; *(int32_t *)(a5v + 0x64) = H;
+        *(int32_t *)(a5c + 0x60) = W; *(int32_t *)(a5c + 0x64) = H;
+
+        memset(a4v, 0, sizeof a4v); memset(a4c, 0, sizeof a4c);
+
+        memset(s0v, 0, 0x20); memset(s0c, 0, 0x20);
+        memset(s1v, 0, 0x20); memset(s1c, 0, 0x20);
+        memset(s2v, 0, 0x20); memset(s2c, 0, 0x20);
+        *(void **)(s0v + 0x10) = slv;  *(void **)(s0c + 0x10) = slc;
+        *(void **)(s1v + 0x10) = sl2v; *(void **)(s1c + 0x10) = sl2c;
+        *(void **)(s2v + 0x10) = sl3v; *(void **)(s2c + 0x10) = sl3c;
+
+        memset(ilv, 0, 0x20); memset(ilc, 0, 0x20);
+        *(uint16_t *)(ilv + 0) = 8; *(uint16_t *)(ilc + 0) = 8;
+        *(void **)(ilv + 8) = idv; *(void **)(ilc + 8) = idc;
+
+        memset(a6v, 0, sizeof a6v); memset(a6c, 0, sizeof a6c);
+        *(void **)(a6v + 0x00) = s0v; *(void **)(a6c + 0x00) = s0c;
+        *(void **)(a6v + 0x08) = s1v; *(void **)(a6c + 0x08) = s1c;
+        *(void **)(a6v + 0x10) = s2v; *(void **)(a6c + 0x10) = s2c;
+        *(void **)(a6v + 0x70) = ilv; *(void **)(a6c + 0x70) = ilc;
+
+        memset(a7v, 0, sizeof a7v); memset(a7c, 0, sizeof a7c);
+        *(int8_t *)(a7v + 0x44) = (int8_t)mode;
+        *(int8_t *)(a7c + 0x44) = (int8_t)mode;
+        a7v[0xc0] = (uint8_t)sub; a7c[0xc0] = (uint8_t)sub;
+        a7v[0xc1] = (uint8_t)(t & 1); a7c[0xc1] = (uint8_t)(t & 1);
+        *(uint16_t *)(a7v + 0xc2) = 8; *(uint16_t *)(a7c + 0xc2) = 8;
+
+        cr_image av, ac, mv, mc;
+        memset(&av, 0, sizeof av); memset(&ac, 0, sizeof ac);
+        memset(&mv, 0, sizeof mv); memset(&mc, 0, sizeof mc);
+        av.a = astride; av.b = H; av.data = bitv; av.w = W; av.h = H;
+        ac.a = astride; ac.b = H; ac.data = bitc; ac.w = W; ac.h = H;
+        mv.a = mv.w = W; mv.b = mv.h = H; mv.data = imgv;
+        mc.a = mc.w = W; mc.b = mc.h = H; mc.data = imgc;
+
+        uint8_t fv = 0, fc = 0;
+        int rv = v(&fv, &mv, &av, a4v, a5v, a6v, a7v, a8, a9);
+        int rc = cr_mask_refine_344e0(&fc, &mc, &ac, a4c, a5c, a6c, a7c,
+                                      a8, a9);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (fv != fc) mismatch("flag", (u32)t, (u32)fv, (u32)fc);
+        cmp_buf("img", (const u8 *)imgv, (const u8 *)imgc, (size_t)n, (u32)t);
+        cmp_buf("bits", (const u8 *)bitv, (const u8 *)bitc,
+                (size_t)nwords * 4, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_mask_refine_344e0\n");
 }
 
 /* ---- main -------------------------------------------------------------- */
@@ -14078,6 +14290,8 @@ int main(int argc, char **argv)
     test_block_variance_run_42150();
     test_mask_stage_208a0();
     test_feature_pipeline_34ed0();
+    test_sharp_gate_48310();
+    test_mask_refine_344e0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

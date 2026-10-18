@@ -1124,11 +1124,18 @@ int      cr_block_variance_run_42150(cr_image *img, const uint8_t *cfg,
  * rewritten mask to *out2.  See src/fpc_comp.c. */
 int      cr_masked_contrast_norm_26410(int *out1, int *out2, cr_image *mask,
                                        const cr_image *src,
-                                       const void *ctx);        /* 0x180026410 */
+                                       const void *ctx5,
+                                       const void *ctx6);       /* 0x180026410 */
 int      cr_mask_stage_208a0(cr_image *dst, cr_image *img, const void *a3,
                              const void *a4, void **slots, const uint8_t *cfg,
                              int idx, int flag);              /* 0x1800208a0 */
 int      cr_feature_pipeline_34ed0(void *obj, const void *arg2, int arg3,
                                   const uint8_t *cfg);         /* 0x180034ed0 */
+int      cr_sharp_gate_48310(void *a1, void *a2, void *a3, void *a4,
+                             const void *a5, const void *a6, int a7, int a8,
+                             const void *a9);                 /* 0x180048310 */
+int      cr_mask_refine_344e0(void *a1, void *a2, void *a3, void *a4,
+                               void *a5, void *a6, void *a7, int a8,
+                               int a9);                        /* 0x1800344e0 */
 
 #endif /* FPC_BEP_H */

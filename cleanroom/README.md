@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **332** (93.5% of functions, 142,592 B = 84.1% of bytes) |
+| rewritten + parity-verified | **334** (94.1% of functions, 143,536 B = 84.7% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Eighty-four batches so far:
+Eighty-five batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -405,6 +405,13 @@ Eighty-four batches so far:
     `cr_feature_pipeline_34ed0` (640 B) drives the point-grid constructor,
     populate and selector, then packs the angle field and allocates the bit
     table (2 functions).
+85. sharpness gate and mask refine:
+    `cr_sharp_gate_48310` (320 B) block-extreme-unpacks the mask, gates on the
+    mode byte, runs the feature-extraction step, compares the two masked
+    sharpness outputs at 0.8x and copies the slot payload when it improves;
+    `cr_mask_refine_344e0` (272 B) copies the slot payload, runs the gate for
+    modes 1/2, inpaints from the index list and writes the final bitmap
+    (2 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
