@@ -4818,3 +4818,300 @@ int cr_mask_dispatch_39820(void *a1, void *a2, void *a3, void *a4,
         return ret;
     }
 }
+
+/* ---- 0x180011170 helpers ------------------------------------------------ */
+
+/* 0x1800115cb — "usable pixel" score: 1000 - 1000*count(v == thr>>2 || v == 0)/n */
+static int cr_slot_usable_score(const cr_image *s16, const uint8_t *cfg)
+{
+    int n = s16->w * s16->h;
+    int16_t t = (int16_t)((int16_t)(*(const uint16_t *)(cfg + 0x2c)) >> 2);
+    const int16_t *d = (const int16_t *)s16->data;
+    int c = 0;
+
+    for (int j = 0; j < n; j++)
+        c += (d[j] == t) | (d[j] == 0);
+    return 1000 + (c * -1000) / n;
+}
+
+/* 0x180011695 — gradient score: 15x15 box-mean, |plane - plane|, box-mean,
+ * count(v > thr<<4) * 1000 / n.  Allocates and frees its own scratch plane. */
+static int cr_slot_grad_score(const cr_image *s16, const uint8_t *cfg, int *out)
+{
+    int n = s16->w * s16->h;
+    int16_t *tmp = NULL;
+    int e = cr_malloc_aligned16((void **)&tmp, (size_t)(2 * n));
+    if (e != 0)
+        return e;
+
+    if (n > 0)
+        cr_copy(tmp, s16->data, 2 * n);
+    cr_boxsum15_s16(tmp, s16->w, s16->h);
+    {
+        const int16_t *src = (const int16_t *)s16->data;
+        for (int j = 0; j < n; j++) {
+            int a = tmp[j];
+            int b = src[j];
+            tmp[j] = (uint16_t)(a < b ? b - a : a - b);
+        }
+    }
+    cr_boxsum15_s16(tmp, s16->w, s16->h);
+    {
+        int16_t t = (int16_t)((uint16_t)(*(const uint16_t *)(cfg + 0x10a)) << 4);
+        int c = 0;
+        for (int j = 0; j < n; j++)
+            if (tmp[j] > t)
+                c++;
+        *out = (1000 * c) / n;
+    }
+    cr_sized_free((void **)&tmp);
+    return 0;
+}
+
+/* 0x180011170 — per-slot quality ranking + mask-stage dispatcher.
+ *
+ * int cr_slot_select_11170(cr_image *a1, const cr_image *a2, void *a3,
+ *                          void *a4, void **slots, const uint8_t *cfg,
+ *                          int flag);
+ *
+ * `a3` is a state block: +0x00 "advanced" flag, +0x04 current index, +0x08
+ * index count, +0x0c the selector byte, +0x10 the index array.  All of
+ * slots[0..4] must be populated (a NULL first slot returns 0x3ea) and must
+ * match a1's w/h (else 0x82).  The mode byte at cfg+0x108 selects the
+ * behaviour: 0 runs one mask stage at index 0, 1 picks index 0/1 from the slot
+ * count, 2 walks a ranked index list (computing it on the first call), 3 runs
+ * the multi-slot fusion driver.  Finally the f32 scratch is scaled back into
+ * a1 with cr_f32_to_i16_scaled(..., 6).  Verified by difftest. */
+int cr_slot_select_11170(cr_image *a1, const cr_image *a2, void *a3,
+                         void *a4, void **slots, const uint8_t *cfg, int flag)
+{
+    uint8_t *st = (uint8_t *)a3;
+    int *order = (int *)(st + 0x10);
+    cr_image img;
+    int w, h, cnt, i, e;
+
+    if (a1 == NULL)
+        return 0x69;
+    *(int *)st = 0;
+
+    w = a1->w;
+    h = a1->h;
+
+    cnt = 0;
+    for (i = 0; i < 5; i++) {
+        const cr_pixbuf *p = (const cr_pixbuf *)slots[i];
+        if (p == NULL)
+            break;
+        if (p->h != h || p->w != w)
+            return 0x82;
+        cnt = i + 1;
+    }
+    if (cnt == 0)
+        return 0x3ea;
+
+    e = cr_image_alloc_f32(&img, w, h);
+    if (e != 0)
+        return e;
+
+    {
+        uint8_t mode = cfg[0x108];
+        int ret = 0;
+
+        if (mode == 3 && cnt != 1) {
+            e = cr_mask_dispatch_39820(&img, (void *)a2, a3, a4, slots,
+                                       cfg, flag);
+            if (e != 0) {
+                ret = e;
+                goto fail;
+            }
+            order[*(const int *)(st + 4)] = 1;
+            st[0xc] = 1;
+            goto emit;
+        }
+
+        if (mode == 3 || mode == 0) {
+            order[*(const int *)(st + 4)] = 0;
+            st[0xc] = 0;
+            e = cr_mask_stage_208a0(&img, (cr_image *)a2, a3, a4, slots,
+                                    cfg, 0, flag);
+            if (e != 0) {
+                ret = e;
+                goto fail;
+            }
+            goto emit;
+        }
+
+        if (mode == 1) {
+            int idx = (cnt == 1) ? 0 : 1;
+            st[0xc] = (uint8_t)idx;
+            order[*(const int *)(st + 4)] = idx;
+            e = cr_mask_stage_208a0(&img, (cr_image *)a2, a3, a4, slots,
+                                    cfg, idx, flag);
+            if (e != 0) {
+                ret = e;
+                goto fail;
+            }
+            goto emit;
+        }
+
+        if (mode != 2) {
+            ret = 1;
+            goto fail;
+        }
+
+        /* mode 2 — walk the ranked index list */
+        {
+            int idx = *(const int *)(st + 4);
+
+            if (idx == 0) {
+                if (cnt == 1) {
+                    order[0] = 0;
+                    *(int *)(st + 8) = cnt;
+                    goto mode2_use;
+                }
+                goto mode2_init;
+            }
+            if (idx >= *(const int *)(st + 8))
+                goto fail_3ea;
+            {
+                int v = order[idx];
+                if (v == -1)
+                    goto fail_3ea;
+                st[0xc] = (uint8_t)v;
+                e = cr_mask_stage_208a0(&img, (cr_image *)a2, a3, a4, slots,
+                                        cfg, (uint8_t)v, flag);
+                if (e != 0) {
+                    ret = e;
+                    goto fail;
+                }
+                {
+                    int nx = *(const int *)(st + 4) + 1;
+                    *(int *)(st + 4) = nx;
+                    if (nx < *(const int *)(st + 8))
+                        *(int *)st = 1;
+                }
+                goto emit;
+            }
+
+        mode2_init:
+            {
+                int *scores = NULL;
+                cr_image s16;
+
+                e = cr_malloc_aligned16((void **)&scores, (size_t)((long)cnt * 4));
+                if (e != 0) {
+                    ret = e;
+                    goto fail;
+                }
+                {
+                    const cr_pixbuf *s0 = (const cr_pixbuf *)slots[0];
+                    e = cr_image_alloc_s16((int *)&s16, s0->w, s0->h);
+                    if (e != 0) {
+                        cr_sized_free((void **)&scores);
+                        ret = e;
+                        goto fail;
+                    }
+                }
+
+                for (i = 0; i < cnt; i++) {
+                    int k;
+                    int32_t sh;
+
+                    e = cr_image_fill_desc(slots, i, 4, &s16);
+                    if (e != 0)
+                        goto init_fail;
+                    sh = (int32_t)((uint32_t)*(const int32_t *)(cfg + 0x110) << 12);
+                    k = (int)(sh / 100);
+
+                    if (k > 0xfff) {
+                        int sc = cr_slot_usable_score(&s16, cfg);
+                        scores[i] = (sc * k + 0x800) >> 12;
+                    } else {
+                        int sca = 0;
+                        int wgt;
+                        int r = cr_slot_grad_score(&s16, cfg, &sca);
+                        if (r != 0) {
+                            e = r;
+                            goto init_fail;
+                        }
+                        wgt = (0x1000 - k) * sca;
+                        if (k <= 0) {
+                            scores[i] = (wgt + 0x800) >> 12;
+                        } else {
+                            int scb = cr_slot_usable_score(&s16, cfg);
+                            scores[i] = (wgt + scb * k + 0x800) >> 12;
+                        }
+                    }
+                    order[i] = i;
+                }
+
+                cr_cleanup_ptr8_clear(&s16);
+
+                /* stable descending bubble sort of (score, index) pairs */
+                for (;;) {
+                    int swapped = 0;
+                    for (int j = 0; j + 1 < cnt; j++) {
+                        if (scores[j] < scores[j + 1]) {
+                            int t = scores[j];
+                            scores[j] = scores[j + 1];
+                            scores[j + 1] = t;
+                            t = order[j];
+                            order[j] = order[j + 1];
+                            order[j + 1] = t;
+                            swapped = 1;
+                        }
+                    }
+                    if (!swapped)
+                        break;
+                }
+
+                cr_sized_free((void **)&scores);
+                *(int *)(st + 8) = cnt;
+                goto mode2_use;
+
+            init_fail:
+                cr_sized_free((void **)&scores);
+                cr_cleanup_ptr8_clear(&s16);
+                ret = e;
+                goto fail;
+            }
+
+        mode2_use:
+            {
+                int j = *(const int *)(st + 4);
+                int v;
+
+                if (j >= *(const int *)(st + 8))
+                    goto fail_3ea;
+                v = order[j];
+                if (v == -1)
+                    goto fail_3ea;
+                st[0xc] = (uint8_t)v;
+                e = cr_mask_stage_208a0(&img, (cr_image *)a2, a3, a4, slots,
+                                        cfg, (uint8_t)v, flag);
+                if (e != 0) {
+                    ret = e;
+                    goto fail;
+                }
+                {
+                    int nx = *(const int *)(st + 4) + 1;
+                    *(int *)(st + 4) = nx;
+                    if (nx < *(const int *)(st + 8))
+                        *(int *)st = 1;
+                }
+                goto emit;
+            }
+        }
+
+    fail_3ea:
+        ret = 0x3ea;
+    fail:
+        cr_cleanup_ptr8_clear_b(&img);
+        return ret;
+
+    emit:
+        cr_f32_to_i16_scaled(a1, &img, 6);
+        cr_cleanup_ptr8_clear_b(&img);
+        return ret;
+    }
+}

@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **336** (94.6% of functions, 146,192 B = 86.3% of bytes) |
+| rewritten + parity-verified | **337** (94.7% of functions, 148,304 B = 86.6% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Eighty-seven batches so far:
+Eighty-eight batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -425,6 +425,16 @@ Eighty-seven batches so far:
     saturation-gated selector, two mask stages, two boxmax/FIR bitmaps, an
     agreement score over the covered pixels, then either a stretch + per-pixel
     weighted blend or a straight copy-out (1 function).
+88. per-slot quality ranking + mask dispatch:
+    `cr_slot_select_11170` (1856 B) reads the pixel geometry from `slots[0]`,
+    validates that each populated slot matches `a1`'s w/h, allocates a f32
+    scratch, then dispatches on `cfg[0x108]`: mode 0/3 (cnt==1) runs one mask
+    stage at idx 0, mode 1 picks idx 0 or 1 from the slot count, mode 3 runs
+    the multi-slot fusion driver, mode 2 walks a ranked index list (computing
+    it on the first call from a 1000-weighted blend of "usable pixel" and 15×15
+    gradient scores, then stable descending bubble sort). Finally the f32
+    scratch is scaled back into `a1` with `cr_f32_to_i16_scaled(..., 6) (1
+    function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

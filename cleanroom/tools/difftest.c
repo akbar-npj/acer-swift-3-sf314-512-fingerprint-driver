@@ -14161,6 +14161,174 @@ static void test_mask_dispatch_39820(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_mask_dispatch_39820\n");
 }
 
+/* ---- 0x180011170: per-slot quality ranking + mask dispatch -------------- */
+static void test_slot_select_11170(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *, void *, void **,
+                              const void *, int);
+    v_t v = (v_t)fn_at(RVA(0x180011170));
+    begin("cr_slot_select_11170");
+    int bad = g_fail;
+
+    enum { MAXPIX = 64 * 64 };
+    static float    d0v[MAXPIX], d0c[MAXPIX];
+    static uint8_t  d1v[MAXPIX], d1c[MAXPIX];
+    static uint8_t  ssv[5][MAXPIX], ssc[5][MAXPIX];
+    static uint16_t mkv[MAXPIX], mkc[MAXPIX];
+    static uint16_t m2v[MAXPIX], m2c[MAXPIX];
+    static uint16_t f0v[MAXPIX], f0c[MAXPIX];
+    static uint16_t f1v[MAXPIX], f1c[MAXPIX];
+    static uint8_t  ctxv[0x80], ctxc[0x80];
+    static uint8_t  a3v[0x100], a3c[0x100];
+    static uint8_t  cfgv[0x140], cfgc[0x140];
+    static void    *slv[16], *slc[16];
+    static uint8_t  s0v[0x20], s0c[0x20];
+    static uint8_t  s5v[0x20], s5c[0x20];
+    static uint8_t  s6v[0x20], s6c[0x20];
+    static uint8_t  sdv[5][0x20], sdc[5][0x20];
+    static uint8_t  ilv[0x10], ilc[0x10];
+    static uint16_t idv[16], idc[16];
+
+    for (int t = 0; t < 600; t++) {
+        int W = 24 + (int)(rnd() % 25u);
+        int H = 24 + (int)(rnd() % 25u);
+        int n = W * H;
+        int cnt = 1 + ((t / 5) % 5);
+        int mode = t % 5;              /* 4 -> invalid mode byte */
+        int noisy = (t % 3) != 0;
+
+        for (int i = 0; i < n; i++) {
+            float f = noisy ? (float)(rnd() % 2560u) / 10.0f : 0.0f;
+            d0v[i] = f; d0c[i] = f;
+            uint8_t b = noisy ? (uint8_t)rnd() : 0xff;
+            d1v[i] = b; d1c[i] = b;
+            uint16_t m = (uint16_t)((rnd() % 3u == 0) ? 0xffffu : rnd());
+            mkv[i] = m; mkc[i] = m;
+            uint16_t m2 = (uint16_t)rnd();
+            m2v[i] = m2; m2c[i] = m2;
+        }
+        for (int k = 0; k < 5; k++) {
+            uint8_t c = (uint8_t)(2 + k * 40);
+            for (int i = 0; i < n; i++) {
+                uint8_t x = noisy ? (uint8_t)rnd() : c;
+                ssv[k][i] = x; ssc[k][i] = x;
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            uint16_t k = (uint16_t)(rnd() % (unsigned)n);
+            idv[i] = k; idc[i] = k;
+        }
+
+        memset(ctxv, 0, sizeof ctxv); memset(ctxc, 0, sizeof ctxc);
+        float sig = (float)(rnd() % 50u) / 10.0f + 0.1f;
+        *(float *)(ctxv + 4) = sig;  *(float *)(ctxc + 4) = sig;
+        int8_t cflag = (int8_t)((t & 1) ? 1 : -1);
+        *(int8_t *)(ctxv + 8) = cflag; *(int8_t *)(ctxc + 8) = cflag;
+        *(void **)(ctxv + 0x18) = m2v; *(void **)(ctxc + 0x18) = m2c;
+        *(void **)(ctxv + 0x58) = mkv; *(void **)(ctxc + 0x58) = mkc;
+
+        memset(s0v, 0, 0x20); memset(s0c, 0, 0x20);
+        *(int16_t *)(s0v + 0) = (int16_t)W; *(int16_t *)(s0v + 2) = (int16_t)H;
+        *(int16_t *)(s0c + 0) = (int16_t)W; *(int16_t *)(s0c + 2) = (int16_t)H;
+
+        memset(s5v, 0, 0x20); memset(s5c, 0, 0x20);
+        *(int16_t *)(s5v + 0) = (int16_t)W; *(int16_t *)(s5v + 2) = (int16_t)H;
+        *(int16_t *)(s5c + 0) = (int16_t)W; *(int16_t *)(s5c + 2) = (int16_t)H;
+        *(void **)(s5v + 0x10) = f0v; *(void **)(s5c + 0x10) = f0c;
+
+        memset(s6v, 0, 0x20); memset(s6c, 0, 0x20);
+        *(int16_t *)(s6v + 0) = (int16_t)W; *(int16_t *)(s6v + 2) = (int16_t)H;
+        *(int16_t *)(s6c + 0) = (int16_t)W; *(int16_t *)(s6c + 2) = (int16_t)H;
+        *(void **)(s6v + 0x10) = f1v; *(void **)(s6c + 0x10) = f1c;
+
+        for (int k = 0; k < 5; k++) {
+            memset(sdv[k], 0, 0x20); memset(sdc[k], 0, 0x20);
+            *(int16_t *)(sdv[k] + 0) = (int16_t)W;
+            *(int16_t *)(sdv[k] + 2) = (int16_t)H;
+            *(int16_t *)(sdc[k] + 0) = (int16_t)W;
+            *(int16_t *)(sdc[k] + 2) = (int16_t)H;
+            sdv[k][6] = 8; sdc[k][6] = 8;
+            *(void **)(sdv[k] + 0x10) = ssv[k];
+            *(void **)(sdc[k] + 0x10) = ssc[k];
+        }
+
+        memset(ilv, 0, 0x10); memset(ilc, 0, 0x10);
+        *(uint16_t *)(ilv + 0) = 8; *(uint16_t *)(ilc + 0) = 8;
+        *(void **)(ilv + 8) = idv; *(void **)(ilc + 8) = idc;
+
+        for (int i = 0; i < 16; i++) { slv[i] = NULL; slc[i] = NULL; }
+        for (int k = 0; k < cnt; k++) { slv[k] = sdv[k]; slc[k] = sdc[k]; }
+        slv[5] = s5v;  slc[5] = s5c;
+        slv[6] = s6v;  slc[6] = s6c;
+        slv[0x0e] = ilv; slc[0x0e] = ilc;
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        int tsel = (t % 3 == 0) ? 3 : 0;
+        cfgv[9] = (uint8_t)tsel; cfgc[9] = (uint8_t)tsel;
+        int bw = 4 + (int)(rnd() % 5u);
+        *(int16_t *)(cfgv + 6) = (int16_t)bw; *(int16_t *)(cfgc + 6) = (int16_t)bw;
+        int16_t thr = (int16_t)((int)(rnd() % 4001u) - 2000);
+        *(int16_t *)(cfgv + 0x2c) = thr; *(int16_t *)(cfgc + 0x2c) = thr;
+        cfgv[0x30] = (uint8_t)(t % 4 == 0); cfgc[0x30] = cfgv[0x30];
+        int selm = (t % 5 == 0) ? 7 : 0;
+        cfgv[0x40] = (uint8_t)selm; cfgc[0x40] = (uint8_t)selm;
+        cfgv[0x44] = (uint8_t)((t % 4 == 0) ? 3 : (t % 3));
+        cfgc[0x44] = cfgv[0x44];
+        float bsig = (float)(rnd() % 30u) / 10.0f + 0.3f;
+        *(float *)(cfgv + 0x48) = bsig; *(float *)(cfgc + 0x48) = bsig;
+        int pmode = (t % 5 == 0) ? 7 : 0;
+        cfgv[0xc0] = (uint8_t)pmode; cfgc[0xc0] = (uint8_t)pmode;
+        cfgv[0xc1] = (uint8_t)(t & 1); cfgc[0xc1] = (uint8_t)(t & 1);
+        *(uint16_t *)(cfgv + 0xc2) = 16; *(uint16_t *)(cfgc + 0xc2) = 16;
+        int32_t pthr = (int32_t)(rnd() % 500u);
+        *(int32_t *)(cfgv + 0xc4) = pthr; *(int32_t *)(cfgc + 0xc4) = pthr;
+        cfgv[0xcc] = 3; cfgc[0xcc] = 3;
+        cfgv[0xcd] = 3; cfgc[0xcd] = 3;
+
+        cfgv[0x108] = (uint8_t)((mode == 4) ? 7 : mode);
+        cfgc[0x108] = cfgv[0x108];
+        int16_t thr2 = (int16_t)(int)(rnd() % 2001u);
+        *(int16_t *)(cfgv + 0x10a) = thr2; *(int16_t *)(cfgc + 0x10a) = thr2;
+        static const int32_t kvals[6] = { 0, 1, 50, 99, 100, 150 };
+        int32_t kv = kvals[t % 6];
+        *(int32_t *)(cfgv + 0x110) = kv; *(int32_t *)(cfgc + 0x110) = kv;
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+
+        cr_image a1v, a1c, a2v, a2c;
+        memset(&a1v, 0, sizeof a1v); memset(&a1c, 0, sizeof a1c);
+        memset(&a2v, 0, sizeof a2v); memset(&a2c, 0, sizeof a2c);
+        a1v.a = a1v.w = W; a1v.b = a1v.h = H; a1v.data = d0v;
+        a1c.a = a1c.w = W; a1c.b = a1c.h = H; a1c.data = d0c;
+        a2v.a = a2v.w = W; a2v.b = a2v.h = H; a2v.data = d1v;
+        a2c.a = a2c.w = W; a2c.b = a2c.h = H; a2c.data = d1c;
+
+        for (int step = 0; step <= cnt + 2; step++) {
+            int rv = v(&a1v, &a2v, a3v, ctxv, slv, cfgv, (t & 1));
+            int rc = cr_slot_select_11170(&a1c, &a2c, a3c, ctxc, slc, cfgc,
+                                          (t & 1));
+            if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); break; }
+            cmp_buf("d0", (const u8 *)d0v, (const u8 *)d0c, (size_t)n * 2,
+                    (u32)t);
+            cmp_buf("d1", (const u8 *)d1v, (const u8 *)d1c, (size_t)n, (u32)t);
+            for (int off = 0; off < 0x0c; off += 4) {
+                u32 a = *(u32 *)(a3v + off), b = *(u32 *)(a3c + off);
+                if (a != b) mismatch("st", (u32)t, a, b);
+            }
+            {
+                u32 a = (u32)a3v[0x0c], b = (u32)a3c[0x0c];
+                if (a != b) mismatch("sel", (u32)t, a, b);
+            }
+            for (int j = 0; j < cnt; j++) {
+                u32 a = *(u32 *)(a3v + 0x10 + j * 4);
+                u32 b = *(u32 *)(a3c + 0x10 + j * 4);
+                if (a != b) mismatch("ord", (u32)t, a, b);
+            }
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_slot_select_11170\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -14586,6 +14754,7 @@ int main(int argc, char **argv)
     test_mask_refine_344e0();
     test_feature_run_28bc0();
     test_mask_dispatch_39820();
+    test_slot_select_11170();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
