@@ -15224,7 +15224,21 @@ static void test_feature_pipeline_1ad30(void)
     static const int famA5[4]   = { 16, 64,  8, 80 };
     static const int famCemax[4]= { 63, 31, 15, 31 };
     static const int famRemax[4]= { 63, 63, 11, 63 };
+    static const int famE2max[4]= { 63, 63, 15, 63 };
     static const u8  modes[4]   = {  3,  5,  4,  6 };
+
+    /* `mx` (the max of the box-meaned block energies) never leaves the
+     * function directly -- it only decides the `cfg.f32[4] >= mx` branch.
+     * A wrong centre/box-mean therefore shows up only at thresholds close
+     * to the true mx, so sweep cfg+4 geometrically over a wide range
+     * instead of using only +/-1e30. */
+    static const float thr[20] = {
+        1.0e-6f, 4.0e-6f, 1.6e-5f, 6.4e-5f, 2.56e-4f,
+        1.024e-3f, 4.096e-3f, 1.6384e-2f, 6.5536e-2f, 0.262144f,
+        1.048576f, 4.194304f, 16.777216f, 67.108864f, 268.435456f,
+        1073.741824f, 4294.967296f, 17179.869184f, 68719.476736f,
+        274877.906944f
+    };
 
     for (int fam = 0; fam < 4; fam++) {
         int W   = famW[fam];
@@ -15235,6 +15249,7 @@ static void test_feature_pipeline_1ad30(void)
         int a5  = famA5[fam];
         int cemax = famCemax[fam];
         int remax = famRemax[fam];
+        int e2max = famE2max[fam];
         int N   = W * H;
 
         for (int t = 0; t < 20; t++) {
@@ -15249,7 +15264,7 @@ static void test_feature_pipeline_1ad30(void)
             *(int *)(cfg + 0x14) = 0;
             *(int *)(cfg + 0x18) = cemax;
             *(int *)(cfg + 0x1c) = 0;
-            *(int *)(cfg + 0x20) = W - 1;
+            *(int *)(cfg + 0x20) = e2max;
             cfg[0x01] = 6;
             cfg[0x02] = (u8)dsel;
             cfg[0x24] = 1;
@@ -15258,9 +15273,9 @@ static void test_feature_pipeline_1ad30(void)
             cfg[0x27] = (u8)s;
             cfg[0x28] = (u8)m;
             cfg[0x29] = (t & 4) ? 1 : 0;
-            /* first half takes the "passed" early return, second half the
-             * full pipeline */
-            *(float *)(cfg + 0x04) = (t < 10) ? 1.0e30f : -1.0e30f;
+            /* the sweep straddles the true mx, so both the "passed" early
+             * return and the full pipeline are exercised */
+            *(float *)(cfg + 0x04) = thr[t];
 
             mk_img2(av, sv, W, H);
             mk_img2(ac, sc, W, H);
@@ -15321,6 +15336,130 @@ static void test_feature_pipeline_1ad30(void)
 
     printf("  [1ad30] cases=%d\n", ran);
     if (g_fail == bad) end(); else printf("  FAIL cr_feature_pipeline_1ad30\n");
+}
+
+/* ---- 1ad30 geometry + mx probe ----------------------------------------- *
+ * Two blind spots in the families above:
+ *   - they all use rs == cs == 0, which makes the vendor's `rs..re` and
+ *     `cs..ce` bounds numerically indistinguishable from the row/column
+ *     counts (a `re` vs `e` mix-up is invisible);
+ *   - `mx` never leaves the function, it only selects the cfg+4 branch, so
+ *     a wrong mean/centre/matmul only shows up at a threshold close to the
+ *     true mx.
+ * This test uses non-zero origins and binary-searches the clean-room flip
+ * point, then compares both implementations at that threshold and one ulp
+ * below it.  If the two mx values differ, one of those two probes flips the
+ * branch differently. */
+static uint32_t cr_f2o(float f)
+{
+    uint32_t b;
+    memcpy(&b, &f, 4);
+    return (b & 0x80000000u) ? ~b : (b | 0x80000000u);
+}
+static float cr_o2f(uint32_t o)
+{
+    uint32_t b = (o & 0x80000000u) ? (o & 0x7fffffffu) : ~o;
+    float f;
+    memcpy(&f, &b, 4);
+    return f;
+}
+
+static int WINAPI cr_1ad30_win(cr_image *a, int *b, const u8 *c, int d, int e)
+{
+    return cr_feature_pipeline_1ad30(a, b, c, d, e);
+}
+
+static int run_1ad30(int (WINAPI *fn)(cr_image *, int *, const u8 *, int, int),
+                     const int16_t *src, int W, int H, const u8 *cfg,
+                     int a4, int a5, float thr, int16_t *out)
+{
+    static u8 c[0x40];
+    u8 iv[0x20];
+    int r = -1;
+    memcpy(out, src, (size_t)W * H * sizeof(int16_t));
+    mk_img2(iv, out, W, H);
+    memcpy(c, cfg, sizeof c);
+    *(float *)(c + 4) = thr;
+    int st = fn((cr_image *)iv, &r, c, a4, a5);
+    return st == 0 ? r : -2;
+}
+
+static void test_feature_pipeline_1ad30_bounds(void)
+{
+    typedef int (WINAPI *v_t)(cr_image *, int *, const u8 *, int, int);
+    v_t v = (v_t)fn_at(RVA(0x18001ad30));
+    begin("cr_feature_pipeline_1ad30 bounds/mx");
+    int bad = g_fail;
+    enum { MAXN = 80 * 64 };
+    static int16_t src[MAXN], wv[MAXN], wc[MAXN];
+    static u8 cfg[0x40];
+    int ran = 0;
+
+    static const struct { int W,H,m,s,dsel,a5,rs,re,cs,ce,d,e2; } fam[] = {
+        { 64, 64, 1, 1, 16,  16,  8, 63,  0, 63, 0, 63 },  /* rs != 0 */
+        { 64, 64, 2, 2, 16,  64,  4, 63, 16, 47, 0, 63 },  /* rs,cs != 0 */
+        { 80, 64, 2, 2, 16,  80,  0, 63,  8, 39, 0, 63 },  /* cs != 0, W != n */
+    };
+
+    for (unsigned k = 0; k < sizeof fam / sizeof fam[0]; k++) {
+        int W = fam[k].W, H = fam[k].H, N = W * H;
+        int a5 = fam[k].a5;
+        for (int i = 0; i < N; i++)
+            src[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+
+        memset(cfg, 0, sizeof cfg);
+        *(int *)(cfg + 0x0c) = fam[k].rs;
+        *(int *)(cfg + 0x10) = fam[k].re;
+        *(int *)(cfg + 0x14) = fam[k].cs;
+        *(int *)(cfg + 0x18) = fam[k].ce;
+        *(int *)(cfg + 0x1c) = fam[k].d;
+        *(int *)(cfg + 0x20) = fam[k].e2;
+        cfg[0x01] = 6;
+        cfg[0x02] = (u8)fam[k].dsel;
+        cfg[0x24] = 1;
+        cfg[0x25] = 0;
+        cfg[0x26] = 3;
+        cfg[0x27] = (u8)fam[k].s;
+        cfg[0x28] = (u8)fam[k].m;
+        cfg[0x29] = 0;
+
+        int lo_r = run_1ad30(cr_1ad30_win, src, W, H, cfg, 1, a5,
+                             -1.0e30f, wc);
+        int hi_r = run_1ad30(cr_1ad30_win, src, W, H, cfg, 1, a5,
+                             1.0e30f, wc);
+        if (lo_r != 100 || hi_r != 0) {
+            mismatch("geom", (u32)k, 100u, (u32)lo_r);
+            continue;
+        }
+
+        uint32_t lo = cr_f2o(-1.0e30f), hi = cr_f2o(1.0e30f);
+        while (lo < hi) {
+            uint32_t mid = lo + (hi - lo) / 2;
+            if (run_1ad30(cr_1ad30_win, src, W, H, cfg, 1, a5,
+                          cr_o2f(mid), wc) == 0)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+        float mxc  = cr_o2f(lo);
+        float prev = cr_o2f(lo - 1);
+
+        for (int p = 0; p < 2; p++) {
+            float thr = p ? mxc : prev;
+            int rv = run_1ad30(v, src, W, H, cfg, 1, a5, thr, wv);
+            int rc = run_1ad30(cr_1ad30_win, src, W, H, cfg, 1,
+                               a5, thr, wc);
+            if (rv != rc)
+                mismatch(p ? "mx-hi" : "mx-lo", (u32)k, (u32)rv, (u32)rc);
+            cmp_buf(p ? "bimg-hi" : "bimg-lo", (const u8 *)wv,
+                    (const u8 *)wc, (size_t)N * 2, (u32)k);
+            ran++;
+        }
+    }
+
+    printf("  [1ad30b] cases=%d\n", ran);
+    if (g_fail == bad) end();
+    else printf("  FAIL cr_feature_pipeline_1ad30 bounds/mx\n");
 }
 
 /* ---- batch 107: BEP block-processing front end ------------------------- */
@@ -16687,6 +16826,7 @@ int main(int argc, char **argv)
     test_block_orient_48010();
     test_orient_score_dispatch_1c220();
     test_feature_pipeline_1ad30();
+    test_feature_pipeline_1ad30_bounds();
     test_chain_stages();
     test_bep_process_1c810();
     test_bep_process_368d0();

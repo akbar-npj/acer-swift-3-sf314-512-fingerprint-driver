@@ -90,13 +90,33 @@ x64 ABI) and the clean-room implementation, and compares results bit-for-bit.
 - **`make check` is the canonical command** (non-ASan). An **ASan build** is also
   used to catch memory bugs (§4).
 
-Current baseline (2026-10-18): the suite **passes** — 369 functions `ok`, 0
+Current baseline (2026-10-18): the suite **passes** — 370 functions `ok`, 0
 `FAIL`. The last failures were vendor routines that read *uninitialised* or
 *out-of-bounds* heap memory (e.g. the streaming vertical-FIR mirror branch
 indexes `ring + rem*w` with a negative `rem`, reaching before the ring). The
 harness now gives both sides a deterministic heap — allocations are zero-filled
 and preceded by head slack (`SHIM_HEAD` in `native/win32_shims.c`, `CR_HEAD` in
 `cleanroom/src/fpc_alloc.c`) — so those reads observe identical zeros.
+
+### Capture-corpus parity (end-to-end)
+
+`difftest` only proves each function matches on *synthetic* inputs. The second
+gate is real captures: `native/fpc_recon_native <raw> <out> --dll <dll>` runs the
+vendor pipeline, and adding `--cleanroom` routes `0x18001c810` to
+`cr_bep_process_1c810`. The two output images must be byte-identical.
+
+Current baseline (2026-10-18): **37 unique captures, 37 byte-identical, 0
+failures** (the `acer_fingerprint_0*.raw` and `input_0*.raw` corpora on the
+laptop). Two real-data-only bugs were found this way that `difftest` missed
+because its fixtures always used `rs == cs == 0`:
+
+- `cr_feature_pipeline_1ad30` used `ce` instead of `f` as the centre row
+  width/stride, and
+- its mean loop used the row *count* `e` instead of the row *end* `re`.
+
+Both are now covered by `test_feature_pipeline_1ad30_bounds()`, which uses
+non-zero origins and binary-searches the clean-room `mx` flip point to compare
+the internal threshold branch directly.
 
 ---
 
@@ -196,7 +216,7 @@ The **ASan build alone** reports these three allocator tests as `FAIL` (with
 reproduces unchanged on the baseline commit — and is an artefact of the ASan
 allocator changing the descriptor-address fields those tests compare; it is not
 a regression and not a clean-room bug. The **canonical non-ASan `make check`
-passes** (369 ok / 0 FAIL as of 2026-10-18). Judge parity by the non-ASan run;
+passes** (370 ok / 0 FAIL as of 2026-10-18). Judge parity by the non-ASan run;
 use ASan only to catch heap overflows/underflows.
 
 The same `ia-fields … vendor=0 clean=0` line can also appear **rarely** (roughly

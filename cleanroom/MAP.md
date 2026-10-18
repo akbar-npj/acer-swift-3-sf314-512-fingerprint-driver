@@ -833,7 +833,23 @@ side effects, never raw pointer values.
 ## Remaining (0 of 355)
 
 All 355 reachable functions are ported and bit-exact under
-`tools/difftest.c` (`369 functions ok`, `0 mismatches`).
+`tools/difftest.c` (`370 functions ok`, `0 mismatches`).
+
+### Real-capture corrections (2026-10-18)
+
+Running the whole pipeline over the capture corpus (vendor vs `--cleanroom`,
+byte-for-byte) exposed two `cr_feature_pipeline_1ad30` bugs that the synthetic
+fixtures could not see, because they all used `rs == cs == 0`:
+
+- the `centre` matrix is `e x f` with row width **and** stride `f` (the vendor
+  compares against `[rsp+0x58]` and advances by `f*4`), not `ce`;
+- the mean loop runs rows `rs..re` (stop at `re+1`, `0x18001b1ce`), not the
+  row count `e`.
+
+With `rs == 0` the second one only added one extra row, and that row was zero
+in the harness's fresh allocation, so `sum` was unchanged. Real frames have
+`rs = 24`, which is why they diverged. `test_feature_pipeline_1ad30_bounds()`
+now uses non-zero origins and binary-searches the `mx` flip point.
 
 ## Notes on the naming
 

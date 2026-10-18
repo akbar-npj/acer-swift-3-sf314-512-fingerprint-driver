@@ -19,6 +19,7 @@
  */
 #include "pe_loader.h"
 #include "win32_shims.h"
+#include "fpc_bep.h"   /* clean-room BEP (optional --cleanroom backend) */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -96,6 +97,7 @@ typedef long long (WINAPI *fn_metaget)(void *blob, long long key, void *out);
 static void *g_base;
 static const char *g_out_path;
 static int g_dumped;
+static int g_cleanroom;
 
 /* ---- entry trampoline ---- */
 static void patch(void *addr, void *fn) {
@@ -118,14 +120,46 @@ static unsigned char g_orig_bytes[16];
 
 /* FUN_18001c810(param_1..param_6): param_1[3]=out px, +0x20 w, +0x24 h */
 static long long WINAPI hk_1c810(void *a, void *b, void *c, void *d, void *e, long long f) {
-    unpatch(g_orig_1c810, g_orig_bytes);
-    long long r = ((long long(WINAPI *)(void *, void *, void *, void *, void *, long long))
-                       g_orig_1c810)(a, b, c, d, e, f);
+    long long r;
+    /* optional threshold override for probing the internal mx value.
+     * 1c810 passes cfg+0x78 to the feature pipeline, whose cfg+4 is the
+     * branch threshold, so the override goes to outer cfg+0x7c. */
+    const char *thr = getenv("FPC_THR");
+    if (thr && e) {
+        unsigned char *cfg = *(unsigned char **)((unsigned char *)e + 0x28);
+        if (cfg) *(float *)(cfg + 0x7c) = strtof(thr, NULL);
+    }
+    if (g_cleanroom) {
+        /* Run the clean-room implementation instead of the vendor body.  The
+         * clean-room reads the static chain tables through g_cr_image_base,
+         * which must point at the mapped vendor image. */
+        g_cr_image_base = (uintptr_t)g_base;
+        r = (long long)cr_bep_process_1c810(a, b, c, (void **)d, e, (int)f);
+    } else {
+        unpatch(g_orig_1c810, g_orig_bytes);
+        r = ((long long(WINAPI *)(void *, void *, void *, void *, void *, long long))
+                 g_orig_1c810)(a, b, c, d, e, f);
+    }
     unsigned char *p = (unsigned char *)a;
     u64 pix = *(u64 *)(p + 0x18);
     int w = *(int *)(p + 0x20), h = *(int *)(p + 0x24);
-    printf("    > FUN_18001c810 -> %lld  out_img=%p %dx%d hdr=%x\n",
-           r, (void *)pix, w, h, *(unsigned int *)p);
+    {
+        unsigned char *e5 = (unsigned char *)e;
+        unsigned char *cfg = e5 ? *(unsigned char **)(e5 + 0x28) : NULL;
+        printf("    > FUN_18001c810 -> %lld  out_img=%p %dx%d hdr=%x%s\n",
+               r, (void *)pix, w, h, *(unsigned int *)p,
+               g_cleanroom ? " [clean]" : " [vendor]");
+        if (cfg)
+            printf("      cfg: s2=%u s28=%u s44=%u s78=%u s79=%u d0=%u s250=%u "
+                   "f24=%.3f f254=%.3f | out: 04=%d 08=%d 70=%d 74=%x 78=%d "
+                   "7c=%u 7e=%u\n",
+                   cfg[2], cfg[0x28], cfg[0x44], cfg[0x78], cfg[0x79],
+                   cfg[0xd0], cfg[0x250], *(float *)(cfg + 0x24),
+                   *(float *)(cfg + 0x254),
+                   *(int *)(p + 0x04), *(int *)(p + 0x08), *(int *)(p + 0x70),
+                   *(unsigned *)(p + 0x74), *(int *)(p + 0x78),
+                   *(unsigned char *)(p + 0x7c), *(unsigned short *)(p + 0x7e));
+    }
     if (pix && w > 0 && h > 0 && (long long)w * h <= 262144 && g_out_path) {
         FILE *fp = fopen(g_out_path, "wb");
         if (fp) {
@@ -137,7 +171,8 @@ static long long WINAPI hk_1c810(void *a, void *b, void *c, void *d, void *e, lo
             perror(g_out_path);
         }
     }
-    patch(g_orig_1c810, hk_1c810);
+    if (!g_cleanroom)
+        patch(g_orig_1c810, hk_1c810);
     return r;
 }
 
@@ -155,6 +190,42 @@ static long long WINAPI hk_put(void *i, long long k, long long v) {
         printf("      [meta_put] key=0x%llx val=0x%llx -> %lld\n",
                (unsigned long long)k, (unsigned long long)v, r);
     patch(g_orig_put, hk_put);
+    return r;
+}
+
+/* ---- optional 0x18001ad30 probe --------------------------------------- *
+ * Dumps the s16 image the vendor hands to the block-feature pipeline
+ * (CR_S16_OUT=<path>) and/or replaces the vendor body with the clean-room
+ * implementation (--clean-1ad30).  Running with --clean-1ad30 isolates
+ * divergence inside 1ad30 from divergence upstream of it. */
+static void *g_orig_1ad30;
+static unsigned char g_orig_1ad30_bytes[16];
+static int g_dump_s16;
+static int g_clean_1ad30;
+
+static long long WINAPI hk_1ad30(void *a1, void *a2, void *a3,
+                                 long long a4, long long a5) {
+    cr_image *im = (cr_image *)a1;
+    if (g_dump_s16 && im && im->data) {
+        const char *p = getenv("CR_S16_OUT");
+        if (p) {
+            FILE *fp = fopen(p, "wb");
+            if (fp) {
+                fwrite(im->data, 2, (size_t)im->w * im->h, fp);
+                fclose(fp);
+                fprintf(stderr, "[s16] %s %dx%d\n", p, im->w, im->h);
+            }
+        }
+    }
+    if (g_clean_1ad30) {
+        g_cr_image_base = (uintptr_t)g_base;
+        return (long long)cr_feature_pipeline_1ad30(
+            im, (int *)a2, (const uint8_t *)a3, (int)a4, (int)a5);
+    }
+    unpatch(g_orig_1ad30, g_orig_1ad30_bytes);
+    long long r = ((long long(WINAPI *)(void *, void *, void *, long long, long long))
+                       g_orig_1ad30)(a1, a2, a3, a4, a5);
+    patch(g_orig_1ad30, hk_1ad30);
     return r;
 }
 
@@ -185,13 +256,15 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--dll") == 0 && i + 1 < argc) dll_path = argv[++i];
         else if (strcmp(argv[i], "--no-dllmain") == 0) do_dllmain = 0;
+        else if (strcmp(argv[i], "--clean-1ad30") == 0) g_clean_1ad30 = 1;
         else if (!raw_path) raw_path = argv[i];
         else if (!out_path) out_path = argv[i];
+        else if (!strcmp(argv[i], "--cleanroom")) g_cleanroom = 1;
         else { fprintf(stderr, "unexpected arg: %s\n", argv[i]); return 2; }
     }
     if (!raw_path) {
         fprintf(stderr,
-                "usage: %s <raw.bin> [out.raw] [--dll fpc_enclave.dll] [--no-dllmain]\n",
+                "usage: %s <raw.bin> [out.raw] [--dll fpc_enclave.dll] [--no-dllmain] [--cleanroom]\n",
                 argv[0]);
         return 2;
     }
@@ -227,6 +300,13 @@ int main(int argc, char **argv) {
     g_orig_1c810 = (u8 *)g_base + RVA_OUT_IMAGE;
     memcpy(g_orig_bytes, g_orig_1c810, 16);
     patch(g_orig_1c810, hk_1c810);
+
+    if (getenv("CR_S16_OUT") || g_clean_1ad30) {
+        g_orig_1ad30 = (u8 *)g_base + 0x1ad30;
+        memcpy(g_orig_1ad30_bytes, g_orig_1ad30, 16);
+        g_dump_s16 = getenv("CR_S16_OUT") != NULL;
+        patch(g_orig_1ad30, hk_1ad30);
+    }
 
     g_trace = getenv("FPC_TRACE") != NULL;
     if (g_trace) {

@@ -6681,31 +6681,36 @@ int cr_feature_pipeline_1ad30(cr_image *a1, int *a2, const uint8_t *cfg,
     st = cr_malloc_aligned16(&bufD, (size_t)eb * 4);          /* 0x18001b19a */
     if (st) goto fail_all;
 
-    /* sum over img[rs..re][cs..f], divided by e*f (not the true area) */
+    /* sum over img[rs..re][cs..ce], divided by e*f (not the true area).
+     * The vendor compares the row index against re (0x18001b1c5) and stops
+     * at re+1 (0x18001b1ce/0x18001b26f) -- not against the row count e. */
     sum = 0.0f;                                               /* 0x18001b1dd */
-    if (rs <= e) {                                            /* 0x18001b1c8 */
+    if (rs <= re) {                                           /* 0x18001b1c8 */
         int row = rs * img.w;
         int i = rs;
         do {
-            if (cs <= f) {                                    /* 0x18001b21c */
+            if (cs <= ce) {                                   /* 0x18001b21c */
                 const float *p   = (const float *)img.data + row + cs;
-                const float *end = (const float *)img.data + row + f + 1;
+                const float *end = (const float *)img.data + row + ce + 1;
                 while (p != end) { sum += *p; p++; }          /* 0x18001b24e */
             }
             i++;
             row += img.w;                                     /* 0x18001b267 */
-        } while (i != e + 1);                                 /* 0x18001b26f */
+        } while (i != re + 1);                                /* 0x18001b26f */
     }
 
     mean = sum / (float)(e * f);                              /* 0x18001b2c4 */
-    {   /* centre = img[rs..][cs..] - mean; ce floats per row, e rows */
+    {   /* centre = img[rs..][cs..] - mean; f floats per row, e rows.
+         * The vendor's row count and destination stride are both `f`
+         * (0x18001b2ee compares against [rsp+0x58] = f, and 0x18001b303
+         * advances by f*4), i.e. columns cs..ce inclusive. */
         const float *sp = (const float *)img.data + (size_t)rs * img.w + cs;
         float *dp = (float *)centre;
         for (int i = 0; i < e; i++) {                         /* 0x18001b30b */
-            for (int j = 0; j < ce; j++)                      /* 0x18001b2f5 */
+            for (int j = 0; j < f; j++)                       /* 0x18001b2f5 */
                 dp[j] = sp[j] - mean;
             sp += img.w;
-            dp += ce;
+            dp += f;
         }
     }
 
