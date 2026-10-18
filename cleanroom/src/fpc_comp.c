@@ -6017,3 +6017,79 @@ int cr_orient_encode_1ba60(cr_image *a1, const cr_image *a2, int a3,
     cr_cleanup_ptr8_clear(&A);                            /* 0x18001bb9f */
     return st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180018c60 — orientation post-processing selector.
+ *
+ *   Args (ms_abi): rcx = a1 (in/out int16 image), rdx = a2 (float weights for
+ *                  the FFT path), r8 = cfg, r9 = a4 (byte mask image),
+ *                  [rsp+0x28] = a5 (and-mask), [rsp+0x30] = a6 (selector bank).
+ *
+ *   sel = a6 ? cfg[1] : cfg[0]  (a byte; >6 -> 0x69, 0 -> 0, 3 -> 0x69)
+ *       1: FFT-weighted filter (weights = a2->data, cfg+0xa4), then
+ *          cr_stretch_14bit(a1, a4, (uint8_t)a5, cfg[0xb8], cfg[0xbc], cfg[3])
+ *          -- the stretch result is returned directly, a6 is not consulted
+ *       2: cr_blur_diff_norm(a1, cfg+0xe4)
+ *       4: blur, then stretch
+ *       5: cr_orient_encode_1ba60(a1, a4, (uint8_t)a5, cfg+0xe4, cfg+0xf4),
+ *          then stretch
+ *       6: blur, then cr_blur_divnorm_stretch(a1, cfg+0x2c0)
+ *   Modes 2/4/5/6 end with `a6 ? cr_bitmap_filter_apply_s16(a1, a4, cfg) : 0`.
+ * ------------------------------------------------------------------------ */
+int cr_orient_pipeline_18c60(cr_image *a1, const cr_image *a2,
+                             const uint8_t *cfg, const cr_image *a4,
+                             int a5, int a6)
+{
+    const uint8_t *c = cfg;
+    uint8_t sel = a6 ? c[1] : c[0];
+    int st;
+
+    if (sel > 6)                                          /* 0x180018e00 */
+        return 0x69;
+    if (sel == 0)
+        return 0;
+    if (sel == 3)
+        return 0x69;
+
+    switch (sel) {
+    case 1:                                               /* 0x180018cd2 */
+        st = cr_fft_weighted_apply_32af0((int *)a1,
+                                         (const float *)a2->data, c + 0xa4);
+        if (st != 0)
+            return st;
+        return cr_stretch_14bit(a1, a4, (uint8_t)a5,
+                                *(const float *)(c + 0xb8),
+                                *(const float *)(c + 0xbc),
+                                (int8_t)c[3]);
+    case 2:                                               /* 0x180018de0 */
+        st = cr_blur_diff_norm(a1, c + 0xe4);
+        break;
+    case 4:                                               /* 0x180018d30 */
+        st = cr_blur_diff_norm(a1, c + 0xe4);
+        if (st == 0)
+            st = cr_stretch_14bit(a1, a4, (uint8_t)a5,
+                                  *(const float *)(c + 0xb8),
+                                  *(const float *)(c + 0xbc),
+                                  (int8_t)c[3]);
+        break;
+    case 5:                                               /* 0x180018d90 */
+        st = cr_orient_encode_1ba60(a1, a4, a5, c + 0xe4, c + 0xf4);
+        if (st == 0)
+            st = cr_stretch_14bit(a1, a4, (uint8_t)a5,
+                                  *(const float *)(c + 0xb8),
+                                  *(const float *)(c + 0xbc),
+                                  (int8_t)c[3]);
+        break;
+    default:                                              /* 6 — 0x180018cb0 */
+        st = cr_blur_diff_norm(a1, c + 0xe4);
+        if (st == 0)
+            st = cr_blur_divnorm_stretch(a1, c + 0x2c0);
+        break;
+    }
+
+    if (st != 0)
+        return st;
+    if (a6)                                               /* 0x180018e15 */
+        return cr_bitmap_filter_apply_s16(a1, a4, c);
+    return 0;
+}

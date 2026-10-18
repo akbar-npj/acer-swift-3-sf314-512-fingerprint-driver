@@ -14793,6 +14793,81 @@ static void test_orient_encode_1ba60(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_orient_encode_1ba60\n");
 }
 
+static void test_orient_pipeline_18c60(void)
+{
+    typedef int (WINAPI *v_t)(cr_image *, const cr_image *, const uint8_t *,
+                              const cr_image *, int, int);
+    v_t v = (v_t)fn_at(RVA(0x180018c60));
+    begin("cr_orient_pipeline_18c60");
+    int bad = g_fail;
+    enum { MAXW = 24, MAXH = 24, MAXN = MAXW * MAXH, NW = 32 * 32 };
+    static int16_t dv[MAXN], dc[MAXN];
+    static float wts[NW];
+    static uint8_t mbuf[MAXN];
+    static u8 av[0x20], ac[0x20], mv[0x20], mc[0x20], qv[0x20], qc[0x20];
+    static uint8_t cfg[0x300];
+    int ran = 0;
+
+    for (int t = 0; t < 400; t++) {
+        int w = 8 + (int)(rnd() % (MAXW - 7));
+        int h = 8 + (int)(rnd() % (MAXH - 7));   /* >= 8 for the 7-tap FIR */
+        int N = w * h;
+
+        for (int i = 0; i < N; i++) {
+            int16_t x = (int16_t)((int)(rnd() % 65536) - 32768);
+            dv[i] = x; dc[i] = x;
+            mbuf[i] = (uint8_t)rnd();
+        }
+        for (int i = 0; i < NW; i++)
+            wts[i] = (float)((int)(rnd() % 2000) - 1000) * 0.001f;
+
+        mk_img2(av, dv, w, h);
+        mk_img2(ac, dc, w, h);
+        mk_img2(mv, (int16_t *)mbuf, w, h);
+        memcpy(mc, mv, 0x20);
+        mk_img2(qv, (int16_t *)wts, w, h);
+        memcpy(qc, qv, 0x20);
+
+        memset(cfg, 0, sizeof cfg);
+        cfg[0] = (uint8_t)(t % 8);               /* sel when a6 == 0 */
+        cfg[1] = (uint8_t)((t / 8) % 8);         /* sel when a6 != 0 */
+        cfg[2] = (uint8_t)rnd();
+        cfg[3] = (uint8_t)(rnd() % 5);           /* stretch mode */
+        cfg[8] = (uint8_t)(rnd() & 1u);
+        cfg[0xa8] = (uint8_t)(rnd() % 2u);       /* fft dims selector */
+        *(float   *)(cfg + 0xb8) = (float)(rnd() % 201u) / 200.0f;
+        *(float   *)(cfg + 0xbc) = (float)(rnd() % 201u) / 200.0f;
+        *(float   *)(cfg + 0xe4) = (float)(rnd() % 220u) / 100.0f;
+        *(float   *)(cfg + 0xe8) = (float)(rnd() % 220u) / 100.0f;
+        cfg[0xf0] = (uint8_t)rnd();
+        /* 1ba60 config at +0xf4 */
+        cfg[0xf4] = (uint8_t)(rnd() % 2u);
+        *(float   *)(cfg + 0xf8) = (float)(rnd() % 220u) / 100.0f;
+        *(float   *)(cfg + 0xfc) = (float)(rnd() % 220u) / 100.0f;
+        *(int16_t *)(cfg + 0x100) = (int16_t)((int)(rnd() % 5u) - 1);
+        cfg[0x102] = (uint8_t)(rnd() % 4u);
+        cfg[0x103] = (uint8_t)(rnd() % 4u);
+        cfg[0x104] = (uint8_t)(rnd() % 2u);
+        cfg[0x105] = 0;                          /* descriptor selector */
+        /* blur_divnorm config at +0x2c0 */
+        cfg[0x2cc] = (uint8_t)(3 + (rnd() % 2u));
+        *(float *)(cfg + 0x2c4) = (float)(rnd() % 220u) / 100.0f;
+
+        int a5 = (int)rnd();
+        int a6 = t & 1;
+        int rv = v((cr_image *)av, (const cr_image *)qv, cfg,
+                   (const cr_image *)mv, a5, a6);
+        int rc = cr_orient_pipeline_18c60((cr_image *)ac, (const cr_image *)qc,
+                                          cfg, (const cr_image *)mc, a5, a6);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("img", (const u8 *)dv, (const u8 *)dc,
+                (size_t)N * sizeof(int16_t), (u32)t);
+        ran++;
+    }
+    printf("  [18c60] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_orient_pipeline_18c60\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -15224,6 +15299,7 @@ int main(int argc, char **argv)
     test_gauss_edge_pad_15540();
     test_pad_filter_12aa0();
     test_orient_encode_1ba60();
+    test_orient_pipeline_18c60();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

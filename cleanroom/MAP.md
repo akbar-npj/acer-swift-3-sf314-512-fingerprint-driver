@@ -762,6 +762,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x18001ba60` | `fpc_bio_bep_sw23_31a83e8ef6` | `cr_orient_encode_1ba60` | `int fn(cr_image *a1, const cr_image *a2, int a3, const void *a4, const uint8_t *cfg)`. Rejects an odd `w` or `h` with `0x69` (byte test on the packed `w`/`h` pair at `+0x10`). Allocates an `w x h` int16 scratch `A`, then `cfg[0]` selects: 0 — encode straight from `a1`; 1 — allocate a second scratch `B`, `cr_copy_u16_shl_guarded(B, a1, 0)`, `cr_blur_diff_norm(B, a4)`, then encode from `B`; anything else — free `A` and return `1`. The encoder is `cr_structure_orient_dispatch_2cfd0(A, src, a2, (uint8_t)a3, cfg)` (selector `cfg[0x10]`). Finally `cr_pad_filter_12aa0(a1, A, (int8_t)cfg[0x0e], (int8_t)cfg[0x11])` writes the normalised 9x9 kernel-bank correlation into `a1->data`; every path frees the scratch images in the vendor's order. |
 
+### Batch 100 — orientation post-processing selector
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180018c60` | `fpc_bio_bep_sw23_2d463ba1da` | `cr_orient_pipeline_18c60` | `int fn(cr_image *a1, const cr_image *a2, const uint8_t *cfg, const cr_image *a4, int a5, int a6)`. `sel = a6 ? cfg[1] : cfg[0]` (byte): `0` returns 0 untouched, `3` and `>6` return `0x69`. `1` runs `cr_fft_weighted_apply_32af0(a1, a2->data, cfg+0xa4)` then tail-returns `cr_stretch_14bit(a1, a4, (uint8_t)a5, cfg[0xb8], cfg[0xbc], (int8_t)cfg[3])` (a6 is not consulted). `2` runs `cr_blur_diff_norm(a1, cfg+0xe4)`. `4` runs the blur then the stretch. `5` runs `cr_orient_encode_1ba60(a1, a4, (uint8_t)a5, cfg+0xe4, cfg+0xf4)` then the stretch. `6` runs the blur then `cr_blur_divnorm_stretch(a1, cfg+0x2c0)`. Modes 2/4/5/6 finish with `a6 ? cr_bitmap_filter_apply_s16(a1, a4, cfg) : 0`. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

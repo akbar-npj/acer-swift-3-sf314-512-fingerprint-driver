@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **342** (96.3% of functions, 157,968 B = 93.2% of bytes) |
+| rewritten + parity-verified | **343** (96.6% of functions, 158,464 B = 93.5% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Ninety-three batches so far:
+Ninety-four batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -478,6 +478,12 @@ Ninety-three batches so far:
     `cr_structure_orient_dispatch_2cfd0`. The resulting orientation map is
     consumed by `cr_pad_filter_12aa0` with `cfg[0x0e]`/`cfg[0x11]` as the pad
     mode and descriptor selector (1 function).
+94. orientation post-processing selector:
+    `cr_orient_pipeline_18c60` (496 B) picks `cfg[1]` or `cfg[0]` depending on
+    `a6` and dispatches six ways: identity, FFT-weighted filtering, blurred-pair
+    difference, blur + 14-bit stretch, `cr_orient_encode_1ba60` + stretch, and
+    blur + `cr_blur_divnorm_stretch`; the non-FFT paths optionally finish with
+    `cr_bitmap_filter_apply_s16` (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
