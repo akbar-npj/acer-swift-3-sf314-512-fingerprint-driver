@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **344** (96.9% of functions, 162,272 B = 95.7% of bytes) |
+| rewritten + parity-verified | **346** (97.5% of functions, 163,136 B = 96.3% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Ninety-five batches so far:
+Ninety-seven batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -491,6 +491,16 @@ Ninety-five batches so far:
     thresholds its column profile between the local extrema means, and reports
     four run statistics plus a masked coherence score while clearing
     low-quality cells from the bitmap (1 function).
+96. five-grid block-orientation wrapper:
+    `cr_block_orient_48010` (768 B) derives the `gw`/`gh` grid size from
+    `W/X` and `H/X` (with the vendor's crossed remainder tests), allocates and
+    `-1.0f`-fills five float grids, runs `cr_block_orient_195d0` over them and
+    frees every grid on both paths (1 function).
+97. orientation-scorer selector:
+    `cr_orient_score_dispatch_1c220` (96 B) switches on `cfg[0]` (rejecting
+    `> 10`) into `cr_structure_tensor_score`, `cr_mscale_run_16d00`,
+    `cr_block_orient_48010`, or the two constant stores `*out = -1` / `1000`
+    (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

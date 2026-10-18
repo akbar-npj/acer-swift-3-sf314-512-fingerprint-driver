@@ -14,6 +14,7 @@
 #include "fpc_bep.h"
 #include <float.h>
 #include <stdio.h>
+#include <string.h>
 
 static inline void *desc_data(const void *d) {
     const unsigned char *p = (const unsigned char *)d;
@@ -6456,4 +6457,106 @@ next_x:
 
     cr_sized_free_if(&pool);                              /* 0x180019c44 */
     return 0;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x180048010 — five-grid wrapper around cr_block_orient_195d0.
+ *
+ *   int fn(int16_t *a1, const cr_image *bmp, const cr_image *src,
+ *          const cr_image *cfg):
+ *     X = cfg->w; W = src->w; H = src->h;
+ *     if (H <= X || W <= X || X <= 0) return 0x69;
+ *     gw = W / X + (X * (W / X) != H ? 2 : 0);
+ *     gh = H / X + (X * (H / X) != W ? 2 : 0);
+ *
+ *   The two remainder tests are genuinely crossed in the vendor: the width
+ *   quotient is compared against the *height* and vice versa, so any
+ *   W != H image normally gets the +2 margin on both axes.
+ *
+ *   Allocates five gw x gh float grids, fills them with -1.0f, runs
+ *   cr_block_orient_195d0(a1, g0..g4, scratch4, bmp, src, cfg) and frees
+ *   every grid on both the success and the failure paths (a partial
+ *   allocation failure frees only the grids already built).
+ * ------------------------------------------------------------------------ */
+int cr_block_orient_48010(int16_t *a1, const cr_image *bmp,
+                          const cr_image *src, const cr_image *cfg)
+{
+    int X = cfg->w;
+    int W = src->w, H = src->h;
+    int qw, qh, gw, gh;
+    cr_image g[5];
+    float scratch[4];
+    int st, i, n = 0;
+
+    if (H <= X || W <= X || X <= 0)                       /* 0x180048036 */
+        return 0x69;
+
+    qw = W / X;                                           /* 0x180048063 */
+    qh = H / X;                                           /* 0x18004806f */
+    gw = qw + (X * qw != H ? 2 : 0);                      /* 0x180048092 */
+    gh = qh + (X * qh != W ? 2 : 0);                      /* 0x18004807c */
+
+    memset(g, 0, sizeof g);
+    for (i = 0; i < 5; i++) {
+        st = cr_image_alloc_f32(&g[i], gw, gh);           /* 0x18001e8b0 */
+        if (st != 0) {
+            for (int k = 0; k < n; k++)
+                cr_cleanup_ptr8_clear_b(&g[k]);           /* 0x18003b920 */
+            return st;
+        }
+        n++;
+    }
+    for (i = 0; i < 5; i++)
+        cr_rect_fill_f32(&g[i], -1.0f);                   /* 0x18001edb0 */
+
+    st = cr_block_orient_195d0(a1, &g[0], &g[1], &g[2], &g[3], &g[4],
+                               scratch, bmp, src,
+                               (const uint8_t *)cfg);     /* 0x1800481df */
+    for (i = 0; i < 5; i++)
+        cr_cleanup_ptr8_clear_b(&g[i]);
+    return st;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001c220 — orientation-scorer selector.
+ *
+ *   int fn(int16_t *out, const cr_image *bmp, const cr_image *src,
+ *          const void *cfg):
+ *     sel = *(const uint8_t *)cfg;
+ *     if (sel > 10) return 0x69;
+ *     switch (sel) {                       // table at 0x18008c560
+ *       case 0:  tail-call 0x180029870     // cr_structure_tensor_score
+ *       case 2:  *out = -1; return 0;
+ *       case 6:  tail-call 0x180016d00     // cr_mscale_run_16d00
+ *       case 9:  tail-call 0x180048010     // cr_block_orient_48010
+ *       case 10: *out = 1000; return 0;
+ *       default: return 0x69;
+ *     }
+ *   Selectors 1, 3, 4, 5, 7 and 8 share the 0x69 default slot.
+ * ------------------------------------------------------------------------ */
+int cr_orient_score_dispatch_1c220(int16_t *out, const cr_image *bmp,
+                                   const cr_image *src, const void *cfg)
+{
+    unsigned sel = *(const uint8_t *)cfg;
+
+    if (sel > 10)                                         /* 0x18001c220 */
+        return 0x69;
+
+    switch (sel) {
+    case 0:
+        return (int)cr_structure_tensor_score(out, (const int *)bmp, src,
+                                              (const char *)cfg);
+    case 2:
+        *out = -1;                                        /* 0x18001c255 */
+        return 0;
+    case 6:
+        return cr_mscale_run_16d00((uint16_t *)out, (void *)bmp, src, cfg);
+    case 9:
+        return cr_block_orient_48010(out, bmp, src, (const cr_image *)cfg);
+    case 10:
+        *out = 1000;                                      /* 0x18001c240 */
+        return 0;
+    default:
+        return 0x69;
+    }
 }

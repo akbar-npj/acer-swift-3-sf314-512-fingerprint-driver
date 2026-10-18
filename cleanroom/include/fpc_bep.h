@@ -1165,6 +1165,12 @@ int      cr_block_orient_195d0(int16_t *a1, cr_image *a2, cr_image *a3,
                                float *out4, const void *bmp,
                                const cr_image *src,
                                const uint8_t *cfg);         /* 0x1800195d0 */
+int      cr_block_orient_48010(int16_t *a1, const cr_image *bmp,
+                               const cr_image *src,
+                               const cr_image *cfg);        /* 0x180048010 */
+int      cr_orient_score_dispatch_1c220(int16_t *out, const cr_image *bmp,
+                                        const cr_image *src,
+                                        const void *cfg);   /* 0x18001c220 */
 
 /* 0x180145240 — 501-entry bank of 9x9 int16 correlation kernels handed out by
  * cr_desc_get_tag_ptr selector 0 (tag 0x1f500000009: K=9, count=501). */
