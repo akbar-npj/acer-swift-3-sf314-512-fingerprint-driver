@@ -15347,6 +15347,12 @@ static void test_bep_process_368d0(void)
     static uint16_t idv[16], idc[16];
     static uint8_t  a1v[0x90], a1c[0x90];
     static uint8_t  a2v[0x20], a2c[0x20];
+    static uint8_t  s1v[0x90], s1c[0x90];
+    static uint8_t  simgv[MAXPIX], simgc[MAXPIX];
+    static uint32_t sbitv[MAXW32], sbitc[MAXW32];
+    static uint8_t  splv[5][MAXPIX], splc[5][MAXPIX];
+    static uint8_t  sa3v[0x100], sa3c[0x100];
+    static uint8_t  wctxv[0x30], wctxc[0x30];
     int ran = 0;
 
     {
@@ -15461,6 +15467,7 @@ static void test_bep_process_368d0(void)
         *(int32_t *)(cfgv + 0xe0) = sub; *(int32_t *)(cfgc + 0xe0) = sub;
         cfgv[0x250] = 4; cfgc[0x250] = 4;
         *(float *)(cfgv + 0x254) = 1.25f; *(float *)(cfgc + 0x254) = 1.25f;
+        cfgv[4] = 1; cfgc[4] = 1;                     /* 0x17420 dispatch */
 
         memset(a1v, 0, sizeof a1v); memset(a1c, 0, sizeof a1c);
         mk_img2(a1v + 0x10, (int16_t *)imgv, W, H);
@@ -15477,6 +15484,15 @@ static void test_bep_process_368d0(void)
         *(void **)(a2v + 0) = prmv; *(void **)(a2c + 0) = prmc;
 
         int a6 = (t & 4) ? 1 : 0;
+        memcpy(s1v, a1v, 0x90); memcpy(s1c, a1c, 0x90);
+        memcpy(simgv, imgv, (size_t)n); memcpy(simgc, imgc, (size_t)n);
+        memcpy(sbitv, bitv, (size_t)nwords * 4);
+        memcpy(sbitc, bitc, (size_t)nwords * 4);
+        memcpy(sa3v, a3v, 0x100); memcpy(sa3c, a3c, 0x100);
+        for (int k = 0; k < 5; k++) {
+            memcpy(splv[k], plv[k], (size_t)n);
+            memcpy(splc[k], plc[k], (size_t)n);
+        }
         int rv = v(a1v, a2v, a3v, slv, cfgv, a6);
         int rc = cr_bep_process_368d0(a1c, a2c, a3c, slc, cfgc, a6);
 
@@ -15494,6 +15510,40 @@ static void test_bep_process_368d0(void)
         cmp_buf("st", a3v, a3c, 0x100, seed);
         for (int k = 0; k < 5; k++)
             cmp_buf("slot", plv[k], plc[k], (size_t)n, seed);
+
+        if ((t & 1) == 0) {
+            typedef int (WINAPI *vw_t)(void *, void *, void *, void *,
+                                       void *, int);
+            vw_t vw = (vw_t)fn_at(RVA(0x180017420));
+            memcpy(a1v, s1v, 0x90); memcpy(a1c, s1c, 0x90);
+            memcpy(imgv, simgv, (size_t)n); memcpy(imgc, simgc, (size_t)n);
+            memcpy(bitv, sbitv, (size_t)nwords * 4);
+            memcpy(bitc, sbitc, (size_t)nwords * 4);
+            memcpy(a3v, sa3v, 0x100); memcpy(a3c, sa3c, 0x100);
+            for (int k = 0; k < 5; k++) {
+                memcpy(plv[k], splv[k], (size_t)n);
+                memcpy(plc[k], splc[k], (size_t)n);
+            }
+            memset(wctxv, 0, sizeof wctxv); memset(wctxc, 0, sizeof wctxc);
+            *(void **)(wctxv + 0x28) = cfgv;
+            *(void **)(wctxc + 0x28) = cfgc;
+            int wrv = vw(slv, a2v, a3v, a1v, wctxv, a6);
+            int wrc = cr_bep_dispatch_17420(slc, a2c, a3c, a1c, wctxc, a6);
+            if (wrv != wrc) mismatch("wret", seed, (u32)wrv, (u32)wrc);
+            {
+                u8 tv[0x90], tc[0x90];
+                memcpy(tv, a1v, 0x90); memcpy(tc, a1c, 0x90);
+                memset(tv + 0x18, 0, 8); memset(tc + 0x18, 0, 8);
+                memset(tv + 0x58, 0, 8); memset(tc + 0x58, 0, 8);
+                cmp_buf("wa1", tv, tc, 0x90, seed);
+            }
+            cmp_buf("wimg", imgv, imgc, (size_t)n, seed);
+            cmp_buf("wbm", (const u8 *)bitv, (const u8 *)bitc,
+                    (size_t)nwords * 4, seed);
+            cmp_buf("wst", a3v, a3c, 0x100, seed);
+            for (int k = 0; k < 5; k++)
+                cmp_buf("wslot", plv[k], plc[k], (size_t)n, seed);
+        }
         ran++;
     }
 
@@ -15544,6 +15594,13 @@ static void test_bep_process_1c810(void)
     static uint16_t idv[16], idc[16];
     static uint8_t  a2v[0x20], a2c[0x20];
     static uint8_t  pcv[0x80], pcc[0x80];
+    static uint8_t  s1v[0x90], s1c[0x90];
+    static uint8_t  spixv[MAXPIX * 2], spixc[MAXPIX * 2];
+    static int16_t  simv[MAXPIX], simc[MAXPIX];
+    static uint32_t sbmwv[MAXW32], sbmwc[MAXW32];
+    static uint8_t  sa3v[0x100], sa3c[0x100];
+    static uint8_t  sflgv[0x40], sflgc[0x40];
+    static uint8_t  sssv[5][MAXPIX], sssc[5][MAXPIX];
     int ran = 0;
 
     {
@@ -15746,6 +15803,17 @@ static void test_bep_process_1c810(void)
         *(uint32_t *)(a1c + 0x74) = *(uint32_t *)(a1v + 0x74);
 
         int a6 = (t & 4) ? 1 : 0;
+        memcpy(s1v, a1v, 0x90); memcpy(s1c, a1c, 0x90);
+        memcpy(spixv, pixv, (size_t)(aw * ah) * 2);
+        memcpy(spixc, pixc, (size_t)(aw * ah) * 2);
+        memcpy(simv, imv, (size_t)N * 2); memcpy(simc, imc, (size_t)N * 2);
+        memcpy(sbmwv, bmwv, sizeof bmwv); memcpy(sbmwc, bmwc, sizeof bmwc);
+        memcpy(sa3v, a3v, 0x100); memcpy(sa3c, a3c, 0x100);
+        memcpy(sflgv, flgv, 0x40); memcpy(sflgc, flgc, 0x40);
+        for (int k = 0; k < 5; k++) {
+            memcpy(sssv[k], ssv[k], (size_t)N);
+            memcpy(sssc[k], ssc[k], (size_t)N);
+        }
         int rv = v(a1v, a2v, a3v, (void **)a4v, ctxv, a6);
         int rc = cr_bep_process_1c810(a1c, a2c, a3c, (void **)a4c,
                                       ctxc, a6);
@@ -15766,6 +15834,44 @@ static void test_bep_process_1c810(void)
         cmp_buf("st", a3v, a3c, 0x100, seed);
         for (int k = 0; k < 5; k++)
             cmp_buf("slot", ssv[k], ssc[k], (size_t)N, seed);
+
+        if ((t & 1) == 0) {
+            typedef int (WINAPI *vw_t)(void *, void *, void *, void *,
+                                       void *, int);
+            vw_t vw = (vw_t)fn_at(RVA(0x180017420));
+            memcpy(a1v, s1v, 0x90); memcpy(a1c, s1c, 0x90);
+            memcpy(pixv, spixv, (size_t)(aw * ah) * 2);
+            memcpy(pixc, spixc, (size_t)(aw * ah) * 2);
+            memcpy(imv, simv, (size_t)N * 2);
+            memcpy(imc, simc, (size_t)N * 2);
+            memcpy(bmwv, sbmwv, sizeof bmwv);
+            memcpy(bmwc, sbmwc, sizeof bmwc);
+            memcpy(a3v, sa3v, 0x100); memcpy(a3c, sa3c, 0x100);
+            memcpy(flgv, sflgv, 0x40); memcpy(flgc, sflgc, 0x40);
+            for (int k = 0; k < 5; k++) {
+                memcpy(ssv[k], sssv[k], (size_t)N);
+                memcpy(ssc[k], sssc[k], (size_t)N);
+            }
+            int wrv = vw(a4v, a2v, a3v, a1v, ctxv, a6);
+            int wrc = cr_bep_dispatch_17420(a4c, a2c, a3c, a1c, ctxc, a6);
+            if (wrv != wrc) mismatch("wret", seed, (u32)wrv, (u32)wrc);
+            {
+                u8 tv[0x90], tc[0x90];
+                memcpy(tv, a1v, 0x90); memcpy(tc, a1c, 0x90);
+                memset(tv + 0x18, 0, 8); memset(tc + 0x18, 0, 8);
+                memset(tv + 0x38, 0, 8); memset(tc + 0x38, 0, 8);
+                memset(tv + 0x58, 0, 8); memset(tc + 0x58, 0, 8);
+                cmp_buf("wa1", tv, tc, 0x90, seed);
+            }
+            cmp_buf("wpix", pixv, pixc, (size_t)(aw * ah) * 2, seed);
+            cmp_buf("wim", (const u8 *)imv, (const u8 *)imc,
+                    (size_t)N * 2, seed);
+            cmp_buf("wbm", (const u8 *)bmwv, (const u8 *)bmwc,
+                    sizeof bmwv, seed);
+            cmp_buf("wst", a3v, a3c, 0x100, seed);
+            for (int k = 0; k < 5; k++)
+                cmp_buf("wslot", ssv[k], ssc[k], (size_t)N, seed);
+        }
         ran++;
     }
 
@@ -15908,6 +16014,109 @@ static void test_chain_stages(void)
 }
 
 /* ---- main -------------------------------------------------------------- */
+/* ---- batch 108: BEP frame dispatcher ---------------------------------- */
+static void test_bep_dispatch_17420(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *, void *, void *, int);
+    v_t v = (v_t)fn_at(RVA(0x180017420));
+    begin("cr_bep_dispatch_17420");
+    int bad = g_fail, ran = 0;
+
+    enum { W = 8, H = 8, N = W * H };
+    static uint8_t  pxv[N], pxc[N];
+    static int16_t  gsv[N], gsc[N];
+    static uint32_t bmv[4], bmc[4];
+    static uint8_t  prmv[0x80], prmc[0x80];
+    static uint8_t  a3v[0x100], a3c[0x100];
+    static uint8_t  cfgv[0x300], cfgc[0x300];
+    static uint8_t  a1v[0x10], a1c[0x10];
+    static uint8_t  a4v[0x90], a4c[0x90];
+    static uint8_t  ctxv[0x30], ctxc[0x30];
+    static uint8_t  sdv[0x20], sdc[0x20];
+    static void    *slv[16], *slc[16];
+
+    /* NULL slot array -> 0x69 before anything is dereferenced */
+    {
+        int er = v(NULL, a1v, a3v, a4v, ctxv, 0);
+        int ec = cr_bep_dispatch_17420(NULL, a1c, a3c, a4c, ctxc, 0);
+        if (er != ec) mismatch("null", 0, (u32)er, (u32)ec);
+        ran++;
+    }
+
+    for (int t = 0; t < 20; t++) {
+        int sel = (t < 8) ? (t % 4) : 1;
+        int a6 = t & 1;
+
+        for (int i = 0; i < N; i++) {
+            uint8_t b = (uint8_t)rnd();
+            pxv[i] = b; pxc[i] = b;
+            int16_t g = (int16_t)((int)(rnd() % 4096u) - 2048);
+            gsv[i] = g; gsc[i] = g;
+        }
+        for (int i = 0; i < 4; i++) {
+            uint32_t w = rnd();
+            bmv[i] = w; bmc[i] = w;
+        }
+        memset(prmv, 0, sizeof prmv); memset(prmc, 0, sizeof prmc);
+        *(int8_t *)(prmv + 8) = 1; *(int8_t *)(prmc + 8) = 1;
+        *(int32_t *)(prmv + 0x50) = W; *(int32_t *)(prmv + 0x54) = H;
+        *(int32_t *)(prmc + 0x50) = W; *(int32_t *)(prmc + 0x54) = H;
+        *(void **)(prmv + 0x58) = gsv; *(void **)(prmc + 0x58) = gsc;
+        *(int32_t *)(prmv + 0x60) = W; *(int32_t *)(prmv + 0x64) = H;
+        *(int32_t *)(prmc + 0x60) = W; *(int32_t *)(prmc + 0x64) = H;
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+        memset(sdv, 0, 0x20); memset(sdc, 0, 0x20);
+        *(int16_t *)(sdv + 0) = W; *(int16_t *)(sdv + 2) = H;
+        *(void **)(sdv + 0x10) = pxv;
+        memcpy(sdc, sdv, 0x20);
+        *(void **)(sdc + 0x10) = pxc;
+        for (int i = 0; i < 16; i++) { slv[i] = NULL; slc[i] = NULL; }
+        slv[0] = sdv; slc[0] = sdc;
+
+        memset(a1v, 0, sizeof a1v); memset(a1c, 0, sizeof a1c);
+        *(void **)(a1v + 0) = prmv; *(void **)(a1c + 0) = prmc;
+
+        memset(a4v, 0, sizeof a4v); memset(a4c, 0, sizeof a4c);
+        mk_img2(a4v + 0x10, (int16_t *)pxv, W, H);
+        mk_img2(a4c + 0x10, (int16_t *)pxc, W, H);
+        mk_bmp_desc(a4v + 0x50, W, H, bmv);
+        mk_bmp_desc(a4c + 0x50, W, H, bmc);
+        *(int32_t *)(a4v + 0x60) = W; *(int32_t *)(a4v + 0x64) = H;
+        *(int32_t *)(a4c + 0x60) = W; *(int32_t *)(a4c + 0x64) = H;
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[2] = 2; cfgc[2] = 2;
+        cfgv[4] = (uint8_t)sel; cfgc[4] = (uint8_t)sel;
+        cfgv[0x79] = 3; cfgc[0x79] = 3;
+        cfgv[0x250] = 4; cfgc[0x250] = 4;
+        *(float *)(cfgv + 0x254) = 1.25f; *(float *)(cfgc + 0x254) = 1.25f;
+        *(float *)(cfgv + 0xb0) = 0.02f; *(float *)(cfgc + 0xb0) = 0.02f;
+        *(float *)(cfgv + 0xb4) = 0.98f; *(float *)(cfgc + 0xb4) = 0.98f;
+
+        memset(ctxv, 0, sizeof ctxv); memset(ctxc, 0, sizeof ctxc);
+        *(void **)(ctxv + 0x28) = cfgv; *(void **)(ctxc + 0x28) = cfgc;
+
+        int rv = v(slv, a1v, a3v, a4v, ctxv, a6);
+        int rc = cr_bep_dispatch_17420(slc, a1c, a3c, a4c, ctxc, a6);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        {
+            u8 tv[0x90], tc[0x90];
+            memcpy(tv, a4v, 0x90); memcpy(tc, a4c, 0x90);
+            memset(tv + 0x18, 0, 8); memset(tc + 0x18, 0, 8);
+            memset(tv + 0x58, 0, 8); memset(tc + 0x58, 0, 8);
+            cmp_buf("a4", tv, tc, 0x90, (u32)t);
+        }
+        cmp_buf("px", pxv, pxc, N, (u32)t);
+        cmp_buf("bm", (const u8 *)bmv, (const u8 *)bmc, sizeof bmv, (u32)t);
+        cmp_buf("st", a3v, a3c, 0x100, (u32)t);
+        ran++;
+    }
+
+    printf("  [17420] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_bep_dispatch_17420\n");
+}
+
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
         "12b431fd-7d7e-4dd7-b87c-9ab3f9a3d01b/x64/fpc_enclave.dll";
@@ -16346,6 +16555,9 @@ int main(int argc, char **argv)
     test_chain_stages();
     test_bep_process_1c810();
     test_bep_process_368d0();
+    test_bep_dispatch_17420();
+
+
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

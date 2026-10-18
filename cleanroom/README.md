@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **352** (99.2% of functions, 168,400 B = 99.4% of bytes) |
+| rewritten + parity-verified | **353** (99.4% of functions, 168,576 B = 99.5% of bytes) |
 | deferred | 0 |
 
-One hundred and one batches so far:
+One hundred and two batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -545,6 +545,16 @@ One hundred and one batches so far:
     call only ever produced `0x82`, which is why the earlier 26a70/43020
     tests passed without exercising the success path.  Both chain tests now
     use 96×96 buffers so the centroid window actually fits (1 function).
+102. BEP frame dispatcher:
+    `cr_bep_dispatch_17420` (176 B) is the six-argument front door used by the
+    enrolment path: it reads `cfg[4]` from `ctx+0x28` and routes to
+    `cr_bep_process_1c810` (selector 0, s16) or `cr_bep_process_368d0`
+    (selector 1, u8), passing the slot array as the pipeline's fourth argument
+    and the result object as its first.  On failure it clears the result
+    image and folds the status to `0xdc` (0x3e9/0x3ec/0x3ed), `0x69`, or
+    `0xc8`.  Both existing pipeline tests now re-run their inputs through the
+    vendor and clean wrappers and compare the return code and every mutated
+    buffer (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

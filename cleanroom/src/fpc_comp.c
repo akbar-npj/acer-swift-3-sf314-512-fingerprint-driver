@@ -7262,3 +7262,48 @@ int cr_bep_process_368d0(void *a1, const void *a2, void *a3, void *a4,
     st = cr_bandpass_dispatch((cr_image *)(o + 0x10), a5);
     return st;                                             /* 0x180036b4a */
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180017420 — BEP frame dispatcher (176 bytes)
+ *               fpc_bio_bep_sw23_232010b95b
+ *
+ *   int fn(void *a1, void *a2, void *a3, void *a4, void *a5, int a6)
+ *
+ * a1 is the slot-descriptor array, a4 the 0x90-byte result object and a5 the
+ * context whose +0x28 holds the config.  `cfg[4]` selects the pipeline: 0 ->
+ * cr_bep_process_1c810(a4, a2, a3, a1, a5, a6) (the s16 front end), 1 ->
+ * cr_bep_process_368d0(a4, a2, a3, a1, cfg, a6) (the u8 front end); any
+ * other value returns 0x69.  A successful pipeline returns 0.  Otherwise the
+ * image at a4+0x10 is cleared and the status is folded: 0x3e9/0x3ec/0x3ed ->
+ * 0xdc, 0x69 -> 0x69, everything else -> 0xc8.
+ * ------------------------------------------------------------------------ */
+int cr_bep_dispatch_17420(void *a1, void *a2, void *a3, void *a4,
+                          void *a5, int a6)
+{
+    const uint8_t *cfg;
+    int st;
+
+    if (a1 == NULL)                                        /* 0x180017425 */
+        return 0x69;
+
+    cfg = *(const uint8_t *const *)((const uint8_t *)a5 + 0x28);
+    switch (cfg[4]) {                                      /* 0x180017439 */
+    case 0:
+        st = cr_bep_process_1c810(a4, a2, a3, (void **)a1, a5, a6);
+        break;
+    case 1:
+        st = cr_bep_process_368d0(a4, a2, a3, a1, cfg, a6);
+        break;
+    default:
+        return 0x69;                                       /* 0x180017490 */
+    }
+    if (st == 0)                                           /* 0x18001745c */
+        return 0;
+
+    cr_rect_fill_u8((cr_image *)((uint8_t *)a4 + 0x10), 0); /* 0x180017468 */
+    if (st == 0x3ec || st == 0x3ed || st == 0x3e9)         /* 0x180017471 */
+        return 0xdc;
+    if (st == 0x69)                                        /* 0x180017483 */
+        return 0x69;
+    return 0xc8;
+}

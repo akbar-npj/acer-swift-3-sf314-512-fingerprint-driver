@@ -812,15 +812,20 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x1800368d0` | `fpc_bio_bep_sw23_a9419e00dd.part.6` | `cr_bep_process_368d0` | `int fn(void *a1, const void *a2, void *a3, void *a4, const uint8_t *a5, int a6)` — 816 B. Works on the same 0x90-byte result object as `cr_bep_process_1c810`, but the input is a `u8` image (`a1+0x18` = source pixels, `a1+0x58` = bitmap words, `+0x20/+0x24` and `+0x60/+0x64` = their w/h). Resets the status words (`0x3e8ffff`, `+0x08`, `+0x7c`, `+0x7e`), builds `cr_image` views over the source and the bitmap (`cr_image_set_pitch`, `cr_image_set`), then `cr_slot_rank_u8_22b70(&flag, img2, img1, a3, *(void**)a2, (void**)a4, a5, a6)`; `0x3e9` records stage 1 and returns. On success stores `*(int32_t*)a3` at `+0x70`, then: optional block filter (`a5[0x78] > 0 && flag == 0`, selector `a5[0x79]` must be 3, result at `+0x04`), optional `cr_gain_normalize_u8`, optional sub-view extension at `a5+0xd4..0xe0` (also applied to the bitmap border), `cr_bitmap_mean_correct`, `cr_stretch_u8_mode(…, a5[0xb0], a5[0xb4], a5[2])`, bitmap margin extract, population `%` at `+0x78`, `cr_chain_gate_43020(a1, bitmap, img, a5+0x250)`, a `a5[0x28] != 0` → `0x69` gate, and finally `cr_bandpass_dispatch(img, a5)`. |
 
-## Remaining (3 of 355)
+### Batch 108 — BEP frame dispatcher
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180017420` | `fpc_bio_bep_sw23_232010b95b` | `cr_bep_dispatch_17420` | `int fn(void *a1, void *a2, void *a3, void *a4, void *a5, int a6)` — 176 B. `a1` is the slot-descriptor array, `a4` the 0x90-byte result object, `a5` the context whose `+0x28` is the config. NULL `a1` -> `0x69`. `cfg[4] == 0` calls `cr_bep_process_1c810(a4, a2, a3, a1, a5, a6)`; `cfg[4] == 1` calls `cr_bep_process_368d0(a4, a2, a3, a1, cfg, a6)`; anything else -> `0x69`. A zero status returns 0; otherwise the image at `a4+0x10` is zero-filled (`cr_rect_fill_u8`) and the status is folded: `0x3e9`/`0x3ec`/`0x3ed` -> `0xdc`, `0x69` -> `0x69`, all others -> `0xc8`. |
+
+## Remaining (2 of 355)
 
 | vendor RVA | vendor symbol | size | note |
 |---|---|---|---|
 | `0x180013f70` | `fpc_bio_bep_sw23_19c085d77a` | 352 B | — |
-| `0x180017420` | `fpc_bio_bep_sw23_232010b95b` | 176 B | thin wrapper around `cr_bep_process_1c810` / `0x1800368d0`. |
 | `0x1800013d0` | `FpcBioEnrolAdd` | 560 B | root entry point (11 callees). |
 
-These three are the last of the 355 reachable functions; everything else is
+These two are the last of the 355 reachable functions; everything else is
 ported and bit-exact under `tools/difftest.c`.
 
 ## Notes on the naming
