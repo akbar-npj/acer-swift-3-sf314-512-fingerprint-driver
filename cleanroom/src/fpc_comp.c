@@ -11,6 +11,7 @@
  * accesses): +0x08 data pointer, +0x10 (qword, equals +0x00; low 32 = W),
  * +0x14 int (L), +0x18 (qword == 0).
  */
+#include <stdlib.h>
 #include "fpc_bep.h"
 #include <float.h>
 #include <stdio.h>
@@ -6854,8 +6855,7 @@ int cr_chain_score_26a70(int16_t *a1, const void *bm, const void *img,
         return 1;
 
     const int32_t *cd = (const int32_t *)((const void **)chain)[1];
-    st = cr_centroid_affine(xy, bm, scale, (int)(intptr_t)img,
-                            cd[2], cd[1]);                 /* 0x180026aea */
+    st = cr_centroid_affine(xy, bm, scale, cd[2], cd[1], 2); /* 0x180026aea */
     if (st)                                                /* 0x180026af1 */
         return st;
 
@@ -7134,4 +7134,131 @@ free_both:                                                 /* 0x18001ccaf */
     cr_cleanup_ptr8_a(&u8);
     cr_cleanup_ptr8_clear(&s16);
     return st;
+}
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800368d0 — BEP block-processing front end (816 bytes)
+ *               fpc_bio_bep_sw23_a9419e00dd.part.6
+ *
+ *   int fn(void *a1, const void *a2, void *a3, void *a4,
+ *          const uint8_t *cfg, int a6)
+ *
+ * a1 is the same 0x90-byte result object as 0x18001c810 (u8 image at +0x10,
+ * s16 at +0x30, bitmap at +0x50, slot at +0x70, flags at +0x74, population
+ * at +0x78, chain score at +0x7e).  a2 is { void *params; ... }; a4 is the
+ * slot array; cfg is the config block itself (not a container).  Unlike
+ * 0x18001c810 this front end works on a bitmap already present in the result
+ * object: img1 wraps (a1+0x58, a1+0x60, a1+0x64) and img2 wraps
+ * (a1+0x18, a1+0x20, a1+0x24).
+ *
+ * Pipeline: slot ranking (cr_slot_rank_u8_22b70; 0x3e9 records stage 1),
+ * optional block filter (cfg[0x78] > 0, flag clear, cfg[0x79] == 3), optional
+ * gain normalisation (cfg[0xd0]), optional sub-view extension plus bitmap
+ * border extension, bitmap mean correction, u8 stretch, bitmap margin
+ * extraction, population percentage, chain gate (cfg+0x250), a cfg[0x28]
+ * gate that must be zero, and finally the band-pass dispatch over a1+0x10.
+ * ------------------------------------------------------------------------ */
+int cr_bep_process_368d0(void *a1, const void *a2, void *a3, void *a4,
+                         const uint8_t *a5, int a6)
+{
+    cr_image img1, img2;
+    uint8_t  flag = 0;
+    int32_t  bres = 0;
+    uint8_t *o = (uint8_t *)a1;
+    int st, pc;
+
+    if (a1 == NULL)                                        /* 0x1800368d0 */
+        return 0x69;
+
+    *(uint64_t *)o = 0x3e8ffffull;                         /* 0x180036915 */
+    *(uint32_t *)(o + 0x08) = 0;
+    *(uint16_t *)(o + 0x7e) = 0;
+    *(uint8_t  *)(o + 0x7c) = 0;
+
+    st = (int)cr_image_set_pitch(&img1, *(void **)(o + 0x58),
+                                 *(const int32_t *)(o + 0x60),
+                                 *(const int32_t *)(o + 0x64));
+    if (st != 0)                                           /* 0x18003692e */
+        return st;
+
+    st = (int)cr_image_set(&img2, *(void **)(o + 0x18),
+                           *(const int32_t *)(o + 0x20),
+                           *(const int32_t *)(o + 0x24));
+    if (st != 0)                                           /* 0x180036967 */
+        return st;
+
+    st = cr_slot_rank_u8_22b70(&flag, &img2, &img1, a3,
+                               *(void **)a2, (void **)a4, a5, a6);
+    if (st == 0x3e9) {                                     /* 0x1800369a0 */
+        *(int32_t *)(o + 0x08) = 1;
+        *(int32_t *)(o + 0x70) = *(const int32_t *)a3;
+        return st;
+    }
+    *(int32_t *)(o + 0x70) = *(const int32_t *)a3;         /* 0x1800369b1 */
+    if (st != 0)
+        return st;
+
+    if ((int8_t)a5[0x78] > 0 && flag == 0) {               /* 0x1800369ba */
+        if (a5[0x79] != 3)                                 /* 0x1800369c7 */
+            return 0x69;
+        st = cr_block_filter_222b0(&img2, &bres, a5 + 0x78,
+                                   *(const int16_t *)(a5 + 6));
+        if (st != 0)                                       /* 0x1800369e2 */
+            return st;
+        *(int32_t *)(o + 0x04) = bres;                     /* 0x1800369f3 */
+    }
+
+    if (a5[0xd0] != 0) {                                   /* 0x180036a04 */
+        st = cr_gain_normalize_u8(&img2);                  /* 0x180036bd5 */
+        if (st != 0)
+            return st;
+    }
+
+    {
+        int t = *(const int32_t *)(a5 + 0xd4);
+        int b = *(const int32_t *)(a5 + 0xd8);
+        int l = *(const int32_t *)(a5 + 0xdc);
+        int r = *(const int32_t *)(a5 + 0xe0);
+        if (t != 0 || b != 0 || l != 0 || r != 0) {
+            st = cr_subview_extend_u8(&img2, t, b, l, r);  /* 0x180036b7a */
+            if (st != 0)
+                return st;
+            cr_bitmap_extend_border((cr_image *)(o + 0x50), t, b, l, r);
+        }                                                  /* 0x180036bc8 */
+    }
+
+    st = cr_bitmap_mean_correct(&img2, (const cr_image *)(o + 0x50), a5);
+    if (st != 0)                                           /* 0x180036a63 */
+        return st;
+
+    st = cr_stretch_u8_mode(&img2, (const cr_image *)(o + 0x50),
+                            *(const float *)(a5 + 0xb0),
+                            *(const float *)(a5 + 0xb4),
+                            (int8_t)a5[2]);
+    if (st != 0)                                           /* 0x180036aa4 */
+        return st;
+
+    st = cr_bitmap_margin_extract((cr_image *)(o + 0x50),
+                                  (const cr_image *)(o + 0x50));
+    if (st != 0)                                           /* 0x180036ab7 */
+        return st;
+
+    pc = cr_bitmap_popcount((const cr_image *)(o + 0x50));
+    {
+        float v = (float)pc * 100.0f;                      /* 0x180036af0 */
+        v = v / (float)(*(const int32_t *)(o + 0x60) *
+                        *(const int32_t *)(o + 0x64));
+        *(int32_t *)(o + 0x78) = (int)v;                   /* 0x180036b00 */
+    }
+
+    st = cr_chain_gate_43020((int16_t *)a1, (const void *)(o + 0x50),
+                             (const void *)(o + 0x10), a5 + 0x250);
+    if (st != 0)                                           /* 0x180036b0e */
+        return st;
+
+    if (a5[0x28] != 0)                                     /* 0x180036b1f */
+        return 0x69;                                       /* 0x180036b36 */
+
+    st = cr_bandpass_dispatch((cr_image *)(o + 0x10), a5);
+    return st;                                             /* 0x180036b4a */
 }

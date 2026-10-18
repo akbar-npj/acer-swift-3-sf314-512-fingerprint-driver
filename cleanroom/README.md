@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **351** (98.9% of functions, 167,584 B = 98.9% of bytes) |
+| rewritten + parity-verified | **352** (99.2% of functions, 168,400 B = 99.4% of bytes) |
 | deferred | 0 |
 
-One hundred batches so far:
+One hundred and one batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -533,6 +533,18 @@ One hundred batches so far:
     slot selector's fourth argument is `*(void**)a2` (the mask/params block)
     and its fifth is the slot array `a4` — the two were swapped in the first
     draft, which made the vendor dereference a NULL mask (1 function).
+101. BEP frame pipeline (u8 path):
+    `cr_bep_process_368d0` (816 B) is the byte-image twin of `1c810`: it views
+    the caller's u8 plane and bitmap, ranks/selects a slot, then runs the
+    optional block filter, gain normalisation, sub-view extension, mean
+    correction, stretch, margin extract, population count, the selector-4
+    chain gate and the bandpass dispatch.  This batch also fixed
+    `cr_chain_score_26a70`, which was calling `cr_centroid_affine` with the
+    image pointer in the `win_w` slot and omitting the vendor's `margin = 2`
+    (visible in the disassembly as `mov dword ptr [rsp+0x28], 2`); the old
+    call only ever produced `0x82`, which is why the earlier 26a70/43020
+    tests passed without exercising the success path.  Both chain tests now
+    use 96×96 buffers so the centroid window actually fits (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

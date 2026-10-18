@@ -15323,6 +15323,184 @@ static void test_feature_pipeline_1ad30(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_feature_pipeline_1ad30\n");
 }
 
+/* ---- batch 107: BEP block-processing front end ------------------------- */
+static void test_bep_process_368d0(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, void *, void *,
+                              const void *, int);
+    v_t v = (v_t)fn_at(RVA(0x1800368d0));
+    begin("cr_bep_process_368d0");
+    int bad = g_fail;
+
+    enum { MAXW = 96, MAXH = 80, MAXPIX = MAXW * MAXH,
+           MAXW32 = MAXH * ((MAXW + 31) / 32) };
+    static uint8_t  imgv[MAXPIX], imgc[MAXPIX];
+    static uint32_t bitv[MAXW32], bitc[MAXW32];
+    static uint8_t  plv[5][MAXPIX], plc[5][MAXPIX];
+    static int16_t  gsv[MAXPIX], gsc[MAXPIX];
+    static uint8_t  prmv[0x80], prmc[0x80];
+    static uint8_t  a3v[0x100], a3c[0x100];
+    static uint8_t  cfgv[0x300], cfgc[0x300];
+    static void    *slv[16], *slc[16];
+    static uint8_t  sdv[5][0x20], sdc[5][0x20];
+    static uint8_t  ilv[0x20], ilc[0x20];
+    static uint16_t idv[16], idc[16];
+    static uint8_t  a1v[0x90], a1c[0x90];
+    static uint8_t  a2v[0x20], a2c[0x20];
+    int ran = 0;
+
+    {
+        int er = v(NULL, a2v, a3v, slv, cfgv, 0);
+        int ec = cr_bep_process_368d0(NULL, a2c, a3c, slc, cfgc, 0);
+        if (er != ec) mismatch("null", 0, (u32)er, (u32)ec);
+        ran++;
+    }
+
+    for (int t = 0; t < 60; t++) {
+        int fam = t % 5;
+        int W = 80 + (int)(rnd() % 17u);
+        int H = 72 + (int)(rnd() % 9u);
+        int n = W * H;
+        int astride = ((W + 31) / 32) * 32;
+        int nwords  = astride / 32 * H;
+        int cnt = 1 + (t % 4);
+        int style = t % 4;
+        int pipe = (fam == 1 || fam == 3);
+        int gain = (fam == 1);
+        int sub  = (fam == 1) ? 3 : 0;
+        int bsel = (fam == 3) ? 2 : 3;
+        int gate = (fam == 2) ? 1 : 0;
+        u32 seed = (u32)t;
+
+        for (int i = 0; i < n; i++) {
+            uint8_t b = (uint8_t)rnd();
+            imgv[i] = b; imgc[i] = b;
+            int16_t g = (int16_t)((int)(rnd() % 4096u) - 2048);
+            gsv[i] = g; gsc[i] = g;
+        }
+        for (int i = 0; i < nwords; i++) {
+            uint32_t w = rnd();
+            bitv[i] = w; bitc[i] = w;
+        }
+        for (int k = 0; k < 5; k++) {
+            for (int i = 0; i < n; i++) {
+                uint8_t x;
+                if (style == 1)      x = (uint8_t)(10 + k * 40);
+                else if (style == 2) x = 0xff;
+                else if (style == 3) x = (i < n / 2) ? 0x00 : 0xff;
+                else                 x = (uint8_t)rnd();
+                plv[k][i] = x; plc[k][i] = x;
+            }
+        }
+        for (int i = 0; i < 8; i++) {
+            idv[i] = (uint16_t)(rnd() % (unsigned)n);
+            idc[i] = idv[i];
+        }
+
+        memset(prmv, 0, sizeof prmv); memset(prmc, 0, sizeof prmc);
+        *(int8_t *)(prmv + 8) = (int8_t)((t & 2) ? 1 : -1);
+        *(int8_t *)(prmc + 8) = *(int8_t *)(prmv + 8);
+        *(int32_t *)(prmv + 0x50) = W; *(int32_t *)(prmv + 0x54) = H;
+        *(int32_t *)(prmc + 0x50) = W; *(int32_t *)(prmc + 0x54) = H;
+        *(void **)(prmv + 0x58) = gsv; *(void **)(prmc + 0x58) = gsc;
+        *(int32_t *)(prmv + 0x60) = W; *(int32_t *)(prmv + 0x64) = H;
+        *(int32_t *)(prmc + 0x60) = W; *(int32_t *)(prmc + 0x64) = H;
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+
+        for (int k = 0; k < 5; k++) {
+            memset(sdv[k], 0, 0x20); memset(sdc[k], 0, 0x20);
+            *(int16_t *)(sdv[k] + 0) = (int16_t)W;
+            *(int16_t *)(sdv[k] + 2) = (int16_t)H;
+            *(int16_t *)(sdc[k] + 0) = (int16_t)W;
+            *(int16_t *)(sdc[k] + 2) = (int16_t)H;
+            *(void **)(sdv[k] + 0x10) = plv[k];
+            *(void **)(sdc[k] + 0x10) = plc[k];
+        }
+        memset(ilv, 0, 0x20); memset(ilc, 0, 0x20);
+        *(uint16_t *)(ilv + 0) = 8; *(uint16_t *)(ilc + 0) = 8;
+        *(void **)(ilv + 8) = idv; *(void **)(ilc + 8) = idc;
+
+        for (int i = 0; i < 16; i++) { slv[i] = NULL; slc[i] = NULL; }
+        for (int k = 0; k < cnt; k++) { slv[k] = sdv[k]; slc[k] = sdc[k]; }
+        slv[5] = ilv; slc[5] = ilc;
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[0x44] = 0; cfgc[0x44] = 0;              /* skip sharp gate */
+        cfgv[0xc0] = 5; cfgc[0xc0] = 5;              /* inpaint percentile */
+        cfgv[0xc1] = (uint8_t)(t & 1); cfgc[0xc1] = cfgv[0xc1];
+        *(uint16_t *)(cfgv + 0xc2) = 8; *(uint16_t *)(cfgc + 0xc2) = 8;
+        cfgv[0x108] = 2; cfgc[0x108] = 2;
+        *(uint16_t *)(cfgv + 0x10a) = (uint16_t)(rnd() % 2001u);
+        *(uint16_t *)(cfgc + 0x10a) = *(uint16_t *)(cfgv + 0x10a);
+        *(int32_t *)(cfgv + 0x110) = 50; *(int32_t *)(cfgc + 0x110) = 50;
+
+        cfgv[2] = (uint8_t)((fam == 4) ? 1 : 2);
+        cfgc[2] = cfgv[2];
+        *(int16_t *)(cfgv + 6) = (int16_t)((W * W) / 256);
+        *(int16_t *)(cfgc + 6) = *(int16_t *)(cfgv + 6);
+        *(int16_t *)(cfgv + 0x1e) = 0; *(int16_t *)(cfgc + 0x1e) = 0;
+        cfgv[0x28] = (uint8_t)gate; cfgc[0x28] = (uint8_t)gate;
+        cfgv[0x78] = (uint8_t)pipe; cfgc[0x78] = (uint8_t)pipe;
+        cfgv[0x79] = (uint8_t)bsel; cfgc[0x79] = (uint8_t)bsel;
+        cfgv[0x7a] = 4; cfgc[0x7a] = 4;               /* block filter mode */
+        *(float *)(cfgv + 0x7c) = 0.5f; *(float *)(cfgc + 0x7c) = 0.5f;
+        cfgv[0x80] = 4; cfgc[0x80] = 4;               /* step */
+        cfgv[0x81] = 4; cfgc[0x81] = 4;
+        cfgv[0x82] = 4; cfgc[0x82] = 4;
+        *(int32_t *)(cfgv + 0x84) = 0; *(int32_t *)(cfgc + 0x84) = 0;
+        *(int32_t *)(cfgv + 0x88) = H - 1; *(int32_t *)(cfgc + 0x88) = H - 1;
+        *(int32_t *)(cfgv + 0x8c) = 0; *(int32_t *)(cfgc + 0x8c) = 0;
+        *(int32_t *)(cfgv + 0x90) = W - 1; *(int32_t *)(cfgc + 0x90) = W - 1;
+        *(float *)(cfgv + 0xb0) = 0.02f; *(float *)(cfgc + 0xb0) = 0.02f;
+        *(float *)(cfgv + 0xb4) = 0.98f; *(float *)(cfgc + 0xb4) = 0.98f;
+        cfgv[0xd0] = (uint8_t)gain; cfgc[0xd0] = (uint8_t)gain;
+        *(int32_t *)(cfgv + 0xd4) = sub; *(int32_t *)(cfgc + 0xd4) = sub;
+        *(int32_t *)(cfgv + 0xd8) = sub; *(int32_t *)(cfgc + 0xd8) = sub;
+        *(int32_t *)(cfgv + 0xdc) = sub; *(int32_t *)(cfgc + 0xdc) = sub;
+        *(int32_t *)(cfgv + 0xe0) = sub; *(int32_t *)(cfgc + 0xe0) = sub;
+        cfgv[0x250] = 4; cfgc[0x250] = 4;
+        *(float *)(cfgv + 0x254) = 1.25f; *(float *)(cfgc + 0x254) = 1.25f;
+
+        memset(a1v, 0, sizeof a1v); memset(a1c, 0, sizeof a1c);
+        mk_img2(a1v + 0x10, (int16_t *)imgv, W, H);
+        mk_img2(a1c + 0x10, (int16_t *)imgc, W, H);
+        memset(a1v + 0x50, 0, 0x20); memset(a1c + 0x50, 0, 0x20);
+        *(int32_t *)(a1v + 0x50) = astride; *(int32_t *)(a1c + 0x50) = astride;
+        *(int32_t *)(a1v + 0x54) = H;       *(int32_t *)(a1c + 0x54) = H;
+        *(void **)(a1v + 0x58) = bitv;      *(void **)(a1c + 0x58) = bitc;
+        *(int32_t *)(a1v + 0x60) = W;       *(int32_t *)(a1c + 0x60) = W;
+        *(int32_t *)(a1v + 0x64) = H;       *(int32_t *)(a1c + 0x64) = H;
+        *(uint32_t *)(a1v + 0x74) = 0;      *(uint32_t *)(a1c + 0x74) = 0;
+
+        memset(a2v, 0, sizeof a2v); memset(a2c, 0, sizeof a2c);
+        *(void **)(a2v + 0) = prmv; *(void **)(a2c + 0) = prmc;
+
+        int a6 = (t & 4) ? 1 : 0;
+        int rv = v(a1v, a2v, a3v, slv, cfgv, a6);
+        int rc = cr_bep_process_368d0(a1c, a2c, a3c, slc, cfgc, a6);
+
+        if (rv != rc) mismatch("ret", seed, (u32)rv, (u32)rc);
+        {
+            u8 tv[0x90], tc[0x90];
+            memcpy(tv, a1v, 0x90); memcpy(tc, a1c, 0x90);
+            memset(tv + 0x18, 0, 8); memset(tc + 0x18, 0, 8);
+            memset(tv + 0x58, 0, 8); memset(tc + 0x58, 0, 8);
+            cmp_buf("a1", tv, tc, 0x90, seed);
+        }
+        cmp_buf("img", imgv, imgc, (size_t)n, seed);
+        cmp_buf("bm", (const u8 *)bitv, (const u8 *)bitc,
+                (size_t)nwords * 4, seed);
+        cmp_buf("st", a3v, a3c, 0x100, seed);
+        for (int k = 0; k < 5; k++)
+            cmp_buf("slot", plv[k], plc[k], (size_t)n, seed);
+        ran++;
+    }
+
+    printf("  [368d0] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_bep_process_368d0\n");
+}
+
 /* ---- batch 106: BEP image front end ----------------------------------- */
 static void mk_bmp_desc(u8 *d, int w, int h, void *words)
 {
@@ -15598,7 +15776,7 @@ static void test_bep_process_1c810(void)
 /* ---- batch 105: chain stages ------------------------------------------ */
 static void test_chain_stages(void)
 {
-    enum { MAXW = 64, MAXH = 64, MAXN = MAXW * MAXH };
+    enum { MAXW = 96, MAXH = 96, MAXN = MAXW * MAXH };
     static int16_t sv[MAXN];
     static uint32_t bits[MAXH * 4];
     static u8 bdv[0x20], bdc[0x20], imv[0x20], imc[0x20];
@@ -15614,8 +15792,8 @@ static void test_chain_stages(void)
         int bad = g_fail, ran = 0;
 
         for (int t = 0; t < 40; t++) {
-            int w = 8 + (int)(rnd() % 56);
-            int h = 8 + (int)(rnd() % 56);
+            int w = 52 + (int)(rnd() % 45);
+            int h = 76 + (int)(rnd() % 21);
             int sw = (w + 31) / 32;
             for (int i = 0; i < h * sw; i++) bits[i] = rnd();
             for (int i = 0; i < w * h; i++)
@@ -15657,8 +15835,8 @@ static void test_chain_stages(void)
         int bad = g_fail, ran = 0;
 
         for (int t = 0; t < 40; t++) {
-            int w = 8 + (int)(rnd() % 56);
-            int h = 8 + (int)(rnd() % 56);
+            int w = 52 + (int)(rnd() % 45);
+            int h = 76 + (int)(rnd() % 21);
             int sw = (w + 31) / 32;
             for (int i = 0; i < h * sw; i++) bits[i] = rnd();
             for (int i = 0; i < w * h; i++)
@@ -16167,6 +16345,7 @@ int main(int argc, char **argv)
     test_feature_pipeline_1ad30();
     test_chain_stages();
     test_bep_process_1c810();
+    test_bep_process_368d0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

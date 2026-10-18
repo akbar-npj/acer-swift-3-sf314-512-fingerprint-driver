@@ -796,7 +796,7 @@ side effects, never raw pointer values.
 
 | vendor RVA | vendor symbol | clean-room name | behaviour |
 |---|---|---|---|
-| `0x180026a70` | `fpc_bio_bep_sw23_63b79ffea2` | `cr_chain_score_26a70` | `int fn(int16_t *a1, const void *bm, const void *img, float scale)` — the float arrives in `xmm3` (the only caller, `0x180043020`, sets it explicitly before tail-jumping). `cr_desc_get_ptr1(&chain, 4)` yields the static trained-model chain at `image+0x159ea0`; the node descriptor at `chain+8` supplies `cd[1]` (72) and `cd[2]` (48). `cr_centroid_affine(xy, bm, scale, (int)(intptr_t)img, cd[2], cd[1])` fills a 24-byte `cr_sampler`, `cr_stage_run_273a0(&f, chain, img, sampler)` scores it, and `*a1 = (int16_t)(int)(100.0f * f)`. Any status is returned unchanged. |
+| `0x180026a70` | `fpc_bio_bep_sw23_63b79ffea2` | `cr_chain_score_26a70` | `int fn(int16_t *a1, const void *bm, const void *img, float scale)` — the float arrives in `xmm3` (the only caller, `0x180043020`, sets it explicitly before tail-jumping). `cr_desc_get_ptr1(&chain, 4)` yields the static trained-model chain at `image+0x159ea0`; the node descriptor at `chain+8` supplies `cd[1]` (72) and `cd[2]` (48). `cr_centroid_affine(xy, bm, scale, cd[2], cd[1], 2)` fills a 24-byte `cr_sampler`, `cr_stage_run_273a0(&f, chain, img, sampler)` scores it, and `*a1 = (int16_t)(int)(100.0f * f)`. Any status is returned unchanged. |
 | `0x180043020` | `fpc_bio_bep_sw23_e617d5a6b0` | `cr_chain_gate_43020` | `int fn(int16_t *a1, const void *bm, const void *img, const void *cfg)`. `cfg[0]` must be 4 (else `0x69`); `*(float *)(cfg+4)` is loaded into `xmm3` and the call tail-jumps to `cr_chain_score_26a70`. |
 | `0x180043040` | `fpc_bio_bep_sw23_e6767afcb6` | `cr_chain_stage_43040` | `int fn(void *ctx, const void *bm, uint8_t sel, int margin)`. `sel > 0xd` -> `0x69`; the bitmask `0x3540` admits only {6, 8, 10, 12, 13} and every other rejected selector returns `0x69` while `sel == 0` returns 0. `cr_desc_get_ptr2(&chain, sel)` yields the static chain (`image+0x122980` for 12, `image+0x1598e0` for 13); the bitmap descriptor lives at `ctx+0x50` and the window fields are `cd[1]`/`cd[2]`. `cr_bitmap_centroid(ctx+0x50, cd[1], cd[2], &y, &x, margin)` then `cr_chain_classify_i16(&v, chain, bm, x, y)`, and `*(int16_t *)(ctx+0x7e) = (int16_t)(int)(1000.0f * v)`. Both helpers were previously unreachable because `cr_desc_get_ptr1`/`cr_desc_get_ptr2` returned NULL for every selector; they now hand out the `g_cr_image_base`-relative chain addresses, matching the vendor. |
 
@@ -805,30 +805,23 @@ side effects, never raw pointer values.
 | vendor RVA | vendor symbol | clean-room name | behaviour |
 |---|---|---|---|
 | `0x18001c810` | `fpc_bio_bep_sw23_33da9c9eac` | `cr_bep_process_1c810` | `int fn(void *a1, const void *a2, void *a3, void **a4, void *a5, int a6)` — 1408 B. `a1` is the 0x90-byte result object (`cr_obj_init_12fe0` layout: u8 image at +0x10, s16 at +0x30, bitmap at +0x50, slot at +0x70, flags at +0x74, population at +0x78, chain score at +0x7e, status at +0x00/0x08/0x04). `a2` is `{void *params; void *f32data; …}` — `*(void**)a2` is the mask/params block handed to the slot selector; `a4` is the slot-descriptor array (`a4[0]` supplies w/h); `a5+0x28` is the config and `a5+0x10` the flag object. Pipeline: alloc s16+u8 at the descriptor size, `cr_slot_select_11170(s16, u8, a3, *(void**)a2, a4, cfg, a6)` (0x3e9/0x3ec/0x3ed map to stage 1/2/3 and return the status), `cr_grad_score_from_desc`, then either `cr_feature_pipeline_1ad30(s16, &v6c, cfg+0x78, a6, *(int16_t*)(cfg+6))` (when `cfg[0x78] > 0`) or `cr_gain_normalize_s16` (when `cfg[0xd0] != 0`); optional `cr_subview_extend_s16`/`_u8` (t/b/l/r at cfg+0xd4..0xe0), optional `cr_resize_pair_18000` (cfg[5] == 1), `cr_norm_2bd60`, `cr_stretch_14bit(s16, u8, 0xe, cfg[0xb0], cfg[0xb4], cfg[2])`, bitmap build + margin, population `%` = `popcount*100/(w*h)`, `cr_orient_score_dispatch_1c220(a1, bitmap, s16, cfg+0x250)`, `cr_struct_tensor_dispatch(a1+0x30, s16, *(void**)(a5+0x10))`, optional chain stage (`v6c == 100 && cfg[0x1c] == 1` → score 1000, else `cr_chain_stage_43040(a1, s16, cfg[0x28], *(int16_t*)(cfg+0x1e))` and zero the score when `cfg.f32[0x24] > score`), `cr_orient_pipeline_18c60(s16, a2, cfg, u8, 0xe, a6)`, then `u8[i] = (s16[i] + 0x20) >> 6` over `w*h` and, for `cfg[0x250] == 2`, `cr_structure_tensor_score_img`. `*a1+0x04 = v6c` on success. |
-## Remaining (4 of 355)
+
+### Batch 107 — BEP frame pipeline (u8 path)
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x1800368d0` | `fpc_bio_bep_sw23_a9419e00dd.part.6` | `cr_bep_process_368d0` | `int fn(void *a1, const void *a2, void *a3, void *a4, const uint8_t *a5, int a6)` — 816 B. Works on the same 0x90-byte result object as `cr_bep_process_1c810`, but the input is a `u8` image (`a1+0x18` = source pixels, `a1+0x58` = bitmap words, `+0x20/+0x24` and `+0x60/+0x64` = their w/h). Resets the status words (`0x3e8ffff`, `+0x08`, `+0x7c`, `+0x7e`), builds `cr_image` views over the source and the bitmap (`cr_image_set_pitch`, `cr_image_set`), then `cr_slot_rank_u8_22b70(&flag, img2, img1, a3, *(void**)a2, (void**)a4, a5, a6)`; `0x3e9` records stage 1 and returns. On success stores `*(int32_t*)a3` at `+0x70`, then: optional block filter (`a5[0x78] > 0 && flag == 0`, selector `a5[0x79]` must be 3, result at `+0x04`), optional `cr_gain_normalize_u8`, optional sub-view extension at `a5+0xd4..0xe0` (also applied to the bitmap border), `cr_bitmap_mean_correct`, `cr_stretch_u8_mode(…, a5[0xb0], a5[0xb4], a5[2])`, bitmap margin extract, population `%` at `+0x78`, `cr_chain_gate_43020(a1, bitmap, img, a5+0x250)`, a `a5[0x28] != 0` → `0x69` gate, and finally `cr_bandpass_dispatch(img, a5)`. |
+
+## Remaining (3 of 355)
 
 | vendor RVA | vendor symbol | size | note |
 |---|---|---|---|
-| `0x1800368d0` | `fpc_bio_bep_sw23_a9419e00dd.part.6` | 816 B | calls the finished `cr_chain_gate_43020` at `0x180036b0e`. |
 | `0x180013f70` | `fpc_bio_bep_sw23_19c085d77a` | 352 B | — |
 | `0x180017420` | `fpc_bio_bep_sw23_232010b95b` | 176 B | thin wrapper around `cr_bep_process_1c810` / `0x1800368d0`. |
 | `0x1800013d0` | `FpcBioEnrolAdd` | 560 B | root entry point (11 callees). |
 
-These four are the last of the 355 reachable functions; everything else is
+These three are the last of the 355 reachable functions; everything else is
 ported and bit-exact under `tools/difftest.c`.
-
-| vendor RVA | vendor symbol | why deferred |
-|---|---|---|
-| `0x180030340` | `fpc_bio_bep_sw23_8d79fe3601` | returns static table pointers — needs the table contents. |
-| `0x18004a680` | `fpc_bio_bep_sw23_...` | 176 B `fpc_image_data_dump`: calls `cr_buf_is_metadata_class` (`0x180049120`) *before* its NULL check — needs the metadata-class predicate first. |
-| `0x180048d40` | `fpc_bio_init` | returns `*(void**)0x18016f4c8 + 8` — a global-context getter (pointer-valued, out-of-tree). |
-| `0x18002ba80` | `fpc_bio_bep_sw23_7861b9e0de` | 624 B CORDIC/rotation: uses the u16 coefficient table at `0x180117120` (12 B/entry) and the `cr_clz` helper (`0x1800393b0`). |
-| `0x18001fd10` | `fpc_bio_bep_sw23_444798a52f` | 672 B fixed-point Q15 bilinear warp with `cr_ldexpf`-scaled step increments. |
-| `0x180043040` | `fpc_bio_bep_sw23_e6767afcb6` | 224 B entry point: guards on a byte selector (`>0xd` → 0x69; `sel==0` → 0; mask `0x3540` allows only {6,8,10,12,13}), then `cr_desc_get_ptr2(&chain, sel)` and, on success, `cr_bitmap_centroid`, `cr_chain_classify_i16` and a `(short)(p*1000.0)` store at ctx+0x7e. For `sel ∈ {12,13}` the vendor's `cr_desc_get_ptr2` hands back real chain descriptors (`&DAT_180122980` / `DAT_1801598e0`) that the clean-room returns as NULL, so this path dereferences a null pointer — deferred until the chain tables are reconstructed. |
-| `0x180026a70` | `fpc_bio_bep_sw23_63b79ffea2` | 192 B wrapper: `cr_desc_get_ptr1(&p, 4)` (always sel 4 → the static trained-model chain `DAT_180159ea0`), then `cr_centroid_affine` and `cr_stage_run_273a0` over that chain, storing `(short)(100.0f * result)`. The chain's convolution-kernel tables are part of the trained model, so the clean-room (which returns NULL for sel 4) cannot dereference it — deferred until the chain tables are reconstructed. |
-
-These are pointer/table-valued, so bit-exact comparison needs a structural (not
-address) check; they will be handled once the referenced tables are established.
 
 ## Notes on the naming
 
