@@ -7307,3 +7307,74 @@ int cr_bep_dispatch_17420(void *a1, void *a2, void *a3, void *a4,
         return 0x69;
     return 0xc8;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180013f70 — BEP enrolment frame entry (352 bytes)
+ *               fpc_bio_bep_sw23_19c085d77a
+ *
+ *   int fn(void *a1, void *a2, void *a3, void *a4, void *a5)
+ *
+ * a1 is the 0x90-byte result record, a4 the definition/slot table and a5 the
+ * context ({void *obj @8; void *cfg @0x28}).  The record's byte +0x30 and
+ * dword +0x24 are cleared first.  cr_obj_init_13340(a4, ctx, cfg[0x44] == 1)
+ * builds a 0x80-byte slot context; failure returns its status after freeing
+ * the context.  The result object is then initialised with
+ * cr_obj_init_12fe0(obj, *(void**)ctx, a5) — or a NULL seed when
+ * ((uint8_t*)a5->obj)[1] == 1 — and cr_bep_dispatch_17420(ctx, a2, a3, obj,
+ * a5, 0) runs the selected pipeline.  Whatever the outcome, six fields are
+ * copied back into a1:
+ *   a1[0x14] = obj[0x08]      a1[0x18] = obj[0x04]
+ *   a1[0x1c] = (int16)obj[0]  a1[0x28] = obj[0x7c]
+ *   a1[0x00] = obj[0x02]      a1[0x02] = obj[0x7e]
+ * the context is freed, and on success cr_feature_run_28bc0(a1, obj, a5)
+ * runs followed by a zero fill of the image at obj+0x10.  The result object
+ * is always released with cr_free_obj_flags.
+ * ------------------------------------------------------------------------ */
+int cr_bep_frame_13f70(void *a1, void *a2, void *a3, void *a4, void *a5)
+{
+    uint8_t ctx[0x80];
+    uint8_t obj[0x90];
+    uint8_t *o = (uint8_t *)a1;
+    const uint8_t *c5 = (const uint8_t *)a5;
+    uint32_t st;
+
+    o[0x30] = 0;                                           /* 0x180013f9a */
+    *(uint32_t *)(o + 0x24) = 0;                           /* 0x180013f9e */
+
+    st = cr_obj_init_13340(a4, ctx,
+                           *(const uint8_t *)(*(const void *const *)
+                               (c5 + 0x28) + 0x44) == 1);   /* 0x180013fbc */
+    if (st != 0) {
+        cr_free_ptr_struct(ctx);                           /* 0x1800140c5 */
+        return (int)st;
+    }
+
+    void *seed = NULL;
+    if (*(const uint8_t *)(*(const void *const *)(c5 + 8) + 1) != 1)
+        seed = *(void **)ctx;                              /* 0x180013fe2 */
+    st = (uint32_t)cr_obj_init_12fe0(obj, seed, a5);       /* 0x180013fea */
+    if (st != 0) {
+        cr_free_ptr_struct(ctx);                           /* 0x1800140b7 */
+        return (int)st;
+    }
+
+    st = (uint32_t)cr_bep_dispatch_17420(ctx, a2, a3, obj, a5, 0);
+                                                           /* 0x180014012 */
+    *(uint32_t *)(o + 0x14) = *(const uint32_t *)(obj + 0x08);
+    *(uint32_t *)(o + 0x18) = *(const uint32_t *)(obj + 0x04);
+    *(uint32_t *)(o + 0x1c) = (uint32_t)(int32_t)*(const int16_t *)obj;
+    o[0x28] = obj[0x7c];
+    *(uint16_t *)o = *(const uint16_t *)(obj + 0x02);
+    *(uint16_t *)(o + 0x02) = *(const uint16_t *)(obj + 0x7e);
+
+    cr_free_ptr_struct(ctx);                               /* 0x18001405d */
+
+    if (st == 0) {
+        st = (uint32_t)cr_feature_run_28bc0(a1, obj, a5);  /* 0x18001406f */
+        if (st == 0)
+            cr_rect_fill_u8((cr_image *)(obj + 0x10), 0);  /* 0x180014080 */
+    }
+
+    cr_free_obj_flags(obj);                                /* 0x180014088 */
+    return (int)st;
+}

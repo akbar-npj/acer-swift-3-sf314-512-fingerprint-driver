@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **353** (99.4% of functions, 168,576 B = 99.5% of bytes) |
+| rewritten + parity-verified | **354** (99.7% of functions, 168,928 B = 99.7% of bytes) |
 | deferred | 0 |
 
-One hundred and two batches so far:
+One hundred and three batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -555,6 +555,15 @@ One hundred and two batches so far:
     `0xc8`.  Both existing pipeline tests now re-run their inputs through the
     vendor and clean wrappers and compare the return code and every mutated
     buffer (1 function).
+103. BEP enrolment frame entry:
+    `cr_bep_frame_13f70` (352 B) builds the 0x80-byte slot context with
+    `cr_obj_init_13340`, initialises the 0x90-byte result object from the
+    first slot block (or a NULL seed when the context's selector byte is 1),
+    dispatches through `cr_bep_dispatch_17420`, copies six status fields back
+    into the caller's record, frees the context, and on success runs
+    `cr_feature_run_28bc0` before zeroing the result image.  The new test
+    covers the zero-definition failure, both seed modes, and the
+    post-dispatch copy path (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

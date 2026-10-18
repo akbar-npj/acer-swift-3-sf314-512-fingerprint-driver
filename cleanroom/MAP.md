@@ -818,14 +818,19 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x180017420` | `fpc_bio_bep_sw23_232010b95b` | `cr_bep_dispatch_17420` | `int fn(void *a1, void *a2, void *a3, void *a4, void *a5, int a6)` — 176 B. `a1` is the slot-descriptor array, `a4` the 0x90-byte result object, `a5` the context whose `+0x28` is the config. NULL `a1` -> `0x69`. `cfg[4] == 0` calls `cr_bep_process_1c810(a4, a2, a3, a1, a5, a6)`; `cfg[4] == 1` calls `cr_bep_process_368d0(a4, a2, a3, a1, cfg, a6)`; anything else -> `0x69`. A zero status returns 0; otherwise the image at `a4+0x10` is zero-filled (`cr_rect_fill_u8`) and the status is folded: `0x3e9`/`0x3ec`/`0x3ed` -> `0xdc`, `0x69` -> `0x69`, all others -> `0xc8`. |
 
-## Remaining (2 of 355)
+### Batch 109 — BEP enrolment frame entry
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180013f70` | `fpc_bio_bep_sw23_19c085d77a` | `cr_bep_frame_13f70` | `int fn(void *a1, void *a2, void *a3, void *a4, void *a5)` — 352 B. Clears `a1[0x30]` and `a1[0x24]`, then `cr_obj_init_13340(a4, ctx, cfg[0x44] == 1)` builds a 0x80-byte slot context (`ctx[i]` = 0x38-byte blocks for slots 0xc..0x15, `ctx[7+i]` = their dp pointers). The result object is initialised by `cr_obj_init_12fe0(obj, seed, a5)` where `seed` is `*(void**)ctx` unless `((uint8_t*)a5->obj)[1] == 1` (then NULL), and `cr_bep_dispatch_17420(ctx, a2, a3, obj, a5, 0)` runs the pipeline. Six fields are copied back into `a1` (`+0x14`=obj+8, `+0x18`=obj+4, `+0x1c`=(int16)obj, `+0x28`=obj+0x7c, `+0x00`=obj+2, `+0x02`=obj+0x7e), the context is freed, and on success `cr_feature_run_28bc0(a1, obj, a5)` runs followed by a zero fill of `obj+0x10`. `cr_free_obj_flags(obj)` always runs. Failure before the dispatch frees only the context (the partially built object owns nothing). |
+
+## Remaining (1 of 355)
 
 | vendor RVA | vendor symbol | size | note |
 |---|---|---|---|
-| `0x180013f70` | `fpc_bio_bep_sw23_19c085d77a` | 352 B | — |
 | `0x1800013d0` | `FpcBioEnrolAdd` | 560 B | root entry point (11 callees). |
 
-These two are the last of the 355 reachable functions; everything else is
+This is the last of the 355 reachable functions; everything else is
 ported and bit-exact under `tools/difftest.c`.
 
 ## Notes on the naming

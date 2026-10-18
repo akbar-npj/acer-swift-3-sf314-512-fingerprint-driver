@@ -16117,6 +16117,86 @@ static void test_bep_dispatch_17420(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bep_dispatch_17420\n");
 }
 
+/* ---- batch 109: BEP enrolment frame entry ----------------------------- */
+static void test_bep_frame_13f70(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *, void *, void *);
+    v_t v = (v_t)fn_at(RVA(0x180013f70));
+    begin("cr_bep_frame_13f70");
+    int bad = g_fail, ran = 0;
+
+    static u8 defs[0x10 + 22 * 8];
+    static u8 meta[22][0x40];
+    static u8 pristine[22][0x40], postv[22][0x40], postc[22][0x40];
+    static u8 a1v[0x90], a1c[0x90];
+    static u8 ctxv[0x40], ctxc[0x40];
+    static u8 flgv[0x40], flgc[0x40];
+    static u8 objv[0x20], objc[0x20];
+    static u8 cfgv[0x300], cfgc[0x300];
+    static u8 a2v[0x40], a2c[0x40];
+    static u8 a3v[0x40], a3c[0x40];
+
+    for (int t = 0; t < 24; t++) {
+        int zero_defs = (t == 0);
+        int seed_flag = t & 1;
+
+        memset(defs, 0, sizeof defs);
+        for (int i = 0; i < 22; i++) {
+            memset(meta[i], 0, sizeof meta[i]);
+            /* Only 0xc..0xe are populated: 13340 stores one dp pointer per
+             * non-empty slot at o[7+i], and the vendor's context is 0x80
+             * bytes, so a full 10-slot table would overrun it. */
+            if (zero_defs || i < 0xc || i > 0xe)
+                continue;
+            *(u32 *)meta[i]          = 8u + 2u * (rnd() % 8u);
+            *(u32 *)(meta[i] + 4)    = 0x30u + (rnd() % 0x20u);
+            *(u32 *)(meta[i] + 8)    = 4u;        /* used -> slot defined */
+            *(u32 *)(meta[i] + 0x0c) = 2u;        /* rows */
+            *(u32 *)(meta[i] + 0x10) = 2u;        /* cols */
+            *(u32 *)(meta[i] + 0x14) = rnd();
+            *(u32 *)(meta[i] + 0x18) = rnd();
+            *(void **)(defs + 0x10 + (size_t)i * 8) = meta[i];
+        }
+
+        memset(objv, 0, sizeof objv); memset(objc, 0, sizeof objc);
+        *(u32 *)(objv + 0x0c) = 0x00020002u;   /* rows = cols = 2 */
+        *(u32 *)(objc + 0x0c) = 0x00020002u;
+        objv[1] = (u8)seed_flag; objc[1] = (u8)seed_flag;
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[4] = 2; cfgc[4] = 2;              /* invalid pipeline selector */
+        cfgv[0x44] = (u8)(t & 2 ? 1 : 0);
+        cfgc[0x44] = cfgv[0x44];
+
+        memset(flgv, 0, sizeof flgv); memset(flgc, 0, sizeof flgc);
+        memset(ctxv, 0, sizeof ctxv); memset(ctxc, 0, sizeof ctxc);
+        *(void **)(ctxv + 8) = objv; *(void **)(ctxc + 8) = objc;
+        *(void **)(ctxv + 0x10) = flgv; *(void **)(ctxc + 0x10) = flgc;
+        *(void **)(ctxv + 0x28) = cfgv; *(void **)(ctxc + 0x28) = cfgc;
+
+        memset(a2v, 0, sizeof a2v); memset(a2c, 0, sizeof a2c);
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+        memset(a1v, 0xA5, sizeof a1v); memset(a1c, 0xA5, sizeof a1c);
+
+        memcpy(pristine, meta, sizeof meta);
+        int rv = v(a1v, a2v, a3v, defs, ctxv);
+        memcpy(postv, meta, sizeof meta);
+        memcpy(meta, pristine, sizeof meta);
+        int rc = cr_bep_frame_13f70(a1c, a2c, a3c, defs, ctxc);
+        memcpy(postc, meta, sizeof meta);
+        memcpy(meta, pristine, sizeof meta);
+
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("a1", a1v, a1c, 0x90, (u32)t);
+        cmp_buf("meta", (const u8 *)postv, (const u8 *)postc,
+                sizeof postv, (u32)t);
+        ran++;
+    }
+
+    printf("  [13f70] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_bep_frame_13f70\n");
+}
+
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
         "12b431fd-7d7e-4dd7-b87c-9ab3f9a3d01b/x64/fpc_enclave.dll";
@@ -16556,6 +16636,7 @@ int main(int argc, char **argv)
     test_bep_process_1c810();
     test_bep_process_368d0();
     test_bep_dispatch_17420();
+    test_bep_frame_13f70();
 
 
 
