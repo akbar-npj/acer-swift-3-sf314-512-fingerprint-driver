@@ -756,6 +756,12 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x180012aa0` | `fpc_bio_bep_sw23_169fb12e6f` | `cr_pad_filter_12aa0` | `int fn(cr_image *a1, const cr_image *a2, int mode, int8_t sel)`. `cr_desc_get_tag_ptr(sel)` must return 0 and yield an odd kernel size `K` (tag[0] low dword; selector 0 gives `K=9` with `count=501` and the 81-entry kernel bank at `0x180145240` in tag[1]); otherwise `1`/`0x69`. Allocates a `w*h*4` int32 scratch with `cr_malloc_aligned16` and an `((w+K+2)&~3) x (h+K-1)` int16 image with `cr_image_alloc_s16`, then blits the source in with a margin `m=(K-1)/2` on every side: mode 0 extends and then runs `cr_gauss_edge_pad_15540` (sigma 8) on the `w x h` subview, mode 1 fills the border with 0, mode 2 extends, mode 3 mirrors; any other mode (only the low byte is compared) frees both and returns `0x69`. The `a2` orientation map is rescaled in place by `(v + 0x5a00) * (count-1)/46080`, mapping -90..+90 degrees*256 onto kernel indices 0..count-1, and `cr_corr_kbank` correlates the padded image with `kbank[map[i]]` (9x9). The int32 results are normalised to int16 by `range = max-min; scale = range/16384 + 1; out = (v - min + scale/2)/scale` (vendor magic `0x80020009`). Every failure frees the scratch and the image and returns the status. |
 
+### Batch 99 — orientation-encode front end
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18001ba60` | `fpc_bio_bep_sw23_31a83e8ef6` | `cr_orient_encode_1ba60` | `int fn(cr_image *a1, const cr_image *a2, int a3, const void *a4, const uint8_t *cfg)`. Rejects an odd `w` or `h` with `0x69` (byte test on the packed `w`/`h` pair at `+0x10`). Allocates an `w x h` int16 scratch `A`, then `cfg[0]` selects: 0 — encode straight from `a1`; 1 — allocate a second scratch `B`, `cr_copy_u16_shl_guarded(B, a1, 0)`, `cr_blur_diff_norm(B, a4)`, then encode from `B`; anything else — free `A` and return `1`. The encoder is `cr_structure_orient_dispatch_2cfd0(A, src, a2, (uint8_t)a3, cfg)` (selector `cfg[0x10]`). Finally `cr_pad_filter_12aa0(a1, A, (int8_t)cfg[0x0e], (int8_t)cfg[0x11])` writes the normalised 9x9 kernel-bank correlation into `a1->data`; every path frees the scratch images in the vendor's order. |
+
 ## Deferred (identified, not yet rewritten)
 
 | vendor RVA | vendor symbol | why deferred |

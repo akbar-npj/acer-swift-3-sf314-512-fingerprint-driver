@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **341** (96.1% of functions, 157,568 B = 93.0% of bytes) |
+| rewritten + parity-verified | **342** (96.3% of functions, 157,968 B = 93.2% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Ninety-two batches so far:
+Ninety-three batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -470,6 +470,14 @@ Ninety-two batches so far:
     int32 results are min/max-normalised to int16 with `scale = range/16384+1`
     (1 function). It also fixed `cr_desc_get_tag_ptr` to hand out the embedded
     501x81 kernel bank at `0x180145240` (new `src/fpc_kbank.c`).
+93. orientation-encode front end:
+    `cr_orient_encode_1ba60` (400 B) rejects odd dimensions, allocates a
+    same-size int16 scratch, then either encodes the source directly
+    (`cfg[0] == 0`) or first copies it, runs `cr_blur_diff_norm` on the copy
+    with the caller's float pair (`cfg[0] == 1`), and hands the result to
+    `cr_structure_orient_dispatch_2cfd0`. The resulting orientation map is
+    consumed by `cr_pad_filter_12aa0` with `cfg[0x0e]`/`cfg[0x11]` as the pad
+    mode and descriptor selector (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

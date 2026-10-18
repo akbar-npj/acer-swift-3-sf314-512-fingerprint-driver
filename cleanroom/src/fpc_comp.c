@@ -5950,3 +5950,70 @@ fail_img_slot:
     cr_sized_free(&slot);
     return (int)st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001ba60 — orientation-encode front end: structure tensor, then the
+ * kernel-bank pad/correlate stage.
+ *
+ *   Args (ms_abi): rcx = a1 (in/out image, even w/h), rdx = a2 (byte mask),
+ *                  r8d = a3 (and-mask, only the low byte used),
+ *                  r9 = a4 (float pair + byte selector object for the blur),
+ *                  [rsp+0x28] = cfg.
+ *
+ *   Odd width or height is rejected with 0x69 before anything is allocated.
+ *   A scratch image of the same size is always allocated; then cfg[0] picks:
+ *       0: encode straight from a1
+ *       1: copy a1 into a second scratch image (shift 0), run the blurred-pair
+ *          difference normaliser on it with a4, then encode from that copy
+ *       else: free and return 1
+ *   The encoder is cr_structure_orient_dispatch_2cfd0, driven by cfg[0x10].
+ *   Finally cr_pad_filter_12aa0(a1, scratch, (int8_t)cfg[0x0e],
+ *   (int8_t)cfg[0x11]) writes the normalised correlation into a1->data.
+ * ------------------------------------------------------------------------ */
+int cr_orient_encode_1ba60(cr_image *a1, const cr_image *a2, int a3,
+                           const void *a4, const uint8_t *cfg)
+{
+    cr_image A, B;
+    int st;
+
+    if ((a1->w & 1) || (a1->h & 1))                      /* 0x18001ba6a */
+        return 0x69;
+
+    st = cr_image_alloc_s16((int *)&A, a1->w, a1->h);     /* 0x18001baaf */
+    if (st != 0)
+        return st;
+
+    if (cfg[0] == 0) {                                    /* 0x18001bb60 */
+        st = cr_structure_orient_dispatch_2cfd0(&A, a1, a2, (uint8_t)a3, cfg);
+        if (st != 0) {
+            cr_cleanup_ptr8_clear(&A);
+            return st;
+        }
+    } else if (cfg[0] == 1) {                             /* 0x18001bad3 */
+        st = cr_image_alloc_s16((int *)&B, a1->w, a1->h);
+        if (st != 0) {                                    /* 0x18001bb9c */
+            cr_cleanup_ptr8_clear(&A);
+            return st;
+        }
+        st = cr_copy_u16_shl_guarded(&B, a1, 0);
+        if (st == 0)
+            st = cr_blur_diff_norm(&B, a4);
+        if (st == 0)
+            st = cr_structure_orient_dispatch_2cfd0(&A, &B, a2,
+                                                    (uint8_t)a3, cfg);
+        if (st != 0) {                                    /* 0x18001bbd1 */
+            cr_cleanup_ptr8_clear(&A);
+            cr_cleanup_ptr8_clear(&B);
+            return st;
+        }
+        cr_cleanup_ptr8_clear(&B);                        /* 0x18001bb54 */
+    } else {
+        cr_cleanup_ptr8_clear(&A);                        /* 0x18001bbc2 */
+        return 1;
+    }
+
+    st = cr_pad_filter_12aa0(a1, &A, (int8_t)cfg[0x0e],
+                             (int8_t)cfg[0x11]);          /* 0x18001bb93 */
+    cr_cleanup_ptr8_clear(&A);                            /* 0x18001bb9f */
+    return st;
+}

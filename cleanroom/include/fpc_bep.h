@@ -1154,6 +1154,9 @@ int      cr_gauss_edge_pad_15540(cr_image *a1, const cr_image *a2,
                                  float sigma);               /* 0x180015540 */
 int      cr_pad_filter_12aa0(cr_image *a1, const cr_image *a2, int mode,
                              int8_t sel);                   /* 0x180012aa0 */
+int      cr_orient_encode_1ba60(cr_image *a1, const cr_image *a2, int a3,
+                                const void *a4,
+                                const uint8_t *cfg);        /* 0x18001ba60 */
 
 /* 0x180145240 — 501-entry bank of 9x9 int16 correlation kernels handed out by
  * cr_desc_get_tag_ptr selector 0 (tag 0x1f500000009: K=9, count=501). */

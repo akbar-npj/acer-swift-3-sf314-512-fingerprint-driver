@@ -14731,6 +14731,68 @@ static void test_pad_filter_12aa0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_pad_filter_12aa0\n");
 }
 
+static void test_orient_encode_1ba60(void)
+{
+    typedef int (WINAPI *v_t)(cr_image *, const cr_image *, int, const void *,
+                              const uint8_t *);
+    v_t v = (v_t)fn_at(RVA(0x18001ba60));
+    begin("cr_orient_encode_1ba60");
+    int bad = g_fail;
+    enum { MAXW = 40, MAXH = 40, MAXN = MAXW * MAXH };
+    static int16_t srcd[MAXN], sv[MAXN], sc[MAXN];
+    static uint8_t mskv[MAXN], mskc[MAXN];
+    static u8 av[0x20], ac[0x20], mv[0x20], mc[0x20];
+    static u8 obj[0x20], cfg[0x20];
+    int ran = 0;
+
+    for (int t = 0; t < 400; t++) {
+        int w = 16 + 2 * (int)(rnd() % 12u);
+        int h = 16 + 2 * (int)(rnd() % 12u);
+        if (t % 29 == 0) w |= 1;                 /* odd -> 0x69 */
+        if (t % 31 == 0) h |= 1;
+        int N = w * h;
+        if (N > MAXN) continue;
+
+        for (int i = 0; i < N; i++) srcd[i] = (int16_t)rnd();
+        for (int i = 0; i < N; i++) {
+            mskv[i] = (uint8_t)rnd();
+            mskc[i] = mskv[i];
+        }
+
+        memcpy(sv, srcd, (size_t)N * sizeof(int16_t));
+        memcpy(sc, srcd, (size_t)N * sizeof(int16_t));
+        mk_img2(av, sv, w, h);
+        mk_img2(ac, sc, w, h);
+        mk_img2(mv, (int16_t *)mskv, w, h);
+        mk_img2(mc, (int16_t *)mskc, w, h);
+
+        memset(cfg, 0, 0x20);
+        memset(obj, 0, 0x20);
+        *(float   *)(cfg + 0x04) = (float)(rnd() % 220u) / 100.0f;
+        *(float   *)(cfg + 0x08) = (float)(rnd() % 220u) / 100.0f;
+        *(int16_t *)(cfg + 0x0c) = (int16_t)((int)(rnd() % 5u) - 1);
+        cfg[0x0e] = (uint8_t)(rnd() % 4u);       /* 12aa0 pad mode */
+        cfg[0x0f] = (uint8_t)(rnd() % 4u);
+        cfg[0x10] = (uint8_t)(rnd() % 3u);       /* 2cfd0 selector */
+        cfg[0x11] = (t % 47 == 0) ? 1 : 0;       /* 12aa0 desc selector */
+        cfg[0]    = (uint8_t)(rnd() % 3u);       /* 0 / 1 / other */
+        *(float *)(obj + 0x00) = (float)(rnd() % 220u) / 100.0f;
+        *(float *)(obj + 0x04) = (float)(rnd() % 220u) / 100.0f;
+        obj[12] = (uint8_t)rnd();
+
+        int and_mask = (int)rnd();
+        int rv = v((cr_image *)av, (const cr_image *)mv, and_mask, obj, cfg);
+        int rc = cr_orient_encode_1ba60((cr_image *)ac, (const cr_image *)mc,
+                                        and_mask, obj, cfg);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("img", (const u8 *)sv, (const u8 *)sc,
+                (size_t)N * sizeof(int16_t), (u32)t);
+        ran++;
+    }
+    printf("  [1ba60] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_orient_encode_1ba60\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -15161,6 +15223,7 @@ int main(int argc, char **argv)
     test_block_filter_222b0();
     test_gauss_edge_pad_15540();
     test_pad_filter_12aa0();
+    test_orient_encode_1ba60();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);
