@@ -14486,6 +14486,77 @@ static void test_slot_rank_u8_22b70(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_slot_rank_u8_22b70\n");
 }
 
+/* ---- 0x1800222b0: block texture search + 64-tap kernel filter ---------- */
+static void test_block_filter_222b0(void)
+{
+    typedef int (WINAPI *v_t)(void *, int32_t *, const void *, int);
+    v_t v = (v_t)fn_at(RVA(0x1800222b0));
+    begin("cr_block_filter_222b0");
+    int bad = g_fail;
+
+    enum { MAXW = 96, MAXH = 60, MAXPIX = MAXW * MAXH, PAD = 1024 };
+    static uint8_t iv[MAXPIX + PAD], ic[MAXPIX + PAD];
+    static uint8_t cfgv[0x40], cfgc[0x40];
+
+    for (int t = 0; t < 900; t++) {
+        int W = 48 + (int)(rnd() % 49u);
+        int H = 32 + (int)(rnd() % 25u);
+        int n = W * H;
+        int style = t % 4;
+        int mode = (t % 7 == 0) ? 3 : ((t % 3 == 0) ? 0 : 6);
+
+        memset(iv, 0, sizeof iv); memset(ic, 0, sizeof ic);
+        for (int i = 0; i < n; i++) {
+            uint8_t b;
+            if (style == 0)
+                b = (uint8_t)rnd();
+            else if (style == 1)
+                b = (uint8_t)((i % W) * 3 + (i / W) * 5);
+            else if (style == 2)
+                b = (uint8_t)(((i % W) / 3 + (i / W) / 3) & 1 ? 220 : 20);
+            else
+                b = (uint8_t)(128 + (int)(rnd() % 5u));
+            iv[i] = b; ic[i] = b;
+        }
+
+        int a4 = (mode == 6) ? 16 : (int)(1u << (2 + (rnd() % 3u)));
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[2] = (uint8_t)mode; cfgc[2] = (uint8_t)mode;
+        float thr = (float)(rnd() % 40u) / 10.0f;
+        *(float *)(cfgv + 4) = thr; *(float *)(cfgc + 4) = thr;
+        int step = 2 + (int)(rnd() % 6u);
+        cfgv[8] = (uint8_t)step; cfgc[8] = (uint8_t)step;
+        cfgv[9] = 4; cfgc[9] = 4;
+        cfgv[0xa] = 4; cfgc[0xa] = 4;
+
+        int rl = (int)(rnd() % (unsigned)(H / 2));
+        int rh = rl + 2 + (int)(rnd() % (unsigned)(H - rl - 2));
+        int cl = (int)(rnd() % (unsigned)(W / 2));
+        int ch = cl + 2 + (int)(rnd() % (unsigned)(W - cl - 2));
+        if (rh > H) rh = H;
+        if (ch > W) ch = W;
+        *(int32_t *)(cfgv + 0x0c) = rl; *(int32_t *)(cfgc + 0x0c) = rl;
+        *(int32_t *)(cfgv + 0x10) = rh; *(int32_t *)(cfgc + 0x10) = rh;
+        *(int32_t *)(cfgv + 0x14) = cl; *(int32_t *)(cfgc + 0x14) = cl;
+        *(int32_t *)(cfgv + 0x18) = ch; *(int32_t *)(cfgc + 0x18) = ch;
+
+        cr_image av, ac;
+        memset(&av, 0, sizeof av); memset(&ac, 0, sizeof ac);
+        av.a = av.w = W; av.b = av.h = H; av.data = iv;
+        ac.a = ac.w = W; ac.b = ac.h = H; ac.data = ic;
+
+        int32_t ov = -7, oc = -7;
+        int rv = v(&av, &ov, cfgv, a4);
+        int rc = cr_block_filter_222b0(&ac, &oc, cfgc, a4);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (ov != oc) mismatch("out", (u32)t, (u32)ov, (u32)oc);
+        cmp_buf("img", (const u8 *)iv, (const u8 *)ic, (size_t)(n + PAD),
+                (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_block_filter_222b0\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -14913,6 +14984,7 @@ int main(int argc, char **argv)
     test_mask_dispatch_39820();
     test_slot_select_11170();
     test_slot_rank_u8_22b70();
+    test_block_filter_222b0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -5272,3 +5272,287 @@ int cr_slot_rank_u8_22b70(void *a1, const cr_image *a2, void *a3,
     }
     return 0;
 }
+
+/* 0x1800222b0 — block texture search + 64-tap 8x8 kernel filter.
+ *
+ * int cr_block_filter_222b0(cr_image *a1, int32_t *out, const uint8_t *cfg,
+ *                           int a4);
+ *
+ * Two phases.  Phase 1 validates the geometry (h/w against the int32 range
+ * fields at cfg+0xc/+0x10/+0x14/+0x18) and scans a `cfg[8]`-step grid of
+ * `row_steps`-tall blocks, scoring each by sum((I[x-1]-I[x])^2) over
+ * sum((I[x-2]-I[x-1])^2) and stopping at the first block whose ratio exceeds
+ * the float at cfg+4; `*out` is set to 100 when one is found.  Phase 2
+ * (cfg[2] == 6 only) builds a Q6 mean-subtracted copy of each row, mirrors the
+ * right edge, and runs four 64-tap convolutions per block against the 8x8
+ * kernel table from 0x180012f30, writing the clamped `(32 + mean + v - conv)
+ * >> 6` result back into the image.  Verified by difftest. */
+int cr_block_filter_222b0(cr_image *a1, int32_t *out, const uint8_t *cfg,
+                          int a4)
+{
+    const uint8_t *data = (const uint8_t *)a1->data;
+    int w = a1->a;
+    int h = a1->b;
+    int b2  = cfg[2];
+    int b10 = cfg[0xa];
+    int A   = a4;
+
+    int rl, rh, cl, ch, step;
+    int row_lo, row_hi, col_start, col_end, row_steps, rem;
+    int s24 = b10, s28 = b10;
+    int s2c = 0, s30 = 0, s34 = 0, s38 = 0, s40 = 0, s48 = 0, s50 = 0, s54 = 0;
+    int s58 = 0, s74 = 0, s78 = 0, s7c = 0;
+    int s8c = 0, s90 = 0, s94 = 0, s98 = 0, sa0 = 0, sa4 = 0;
+    int sa8 = 0, sac = 0, sc0 = 0, sc8 = 0, sd0 = 0;
+    int mean = 0;
+    uint8_t *buf = NULL;
+    int16_t *b16 = NULL;
+    const int16_t *tab16 = NULL;
+    int r14b, r15d, rdi = 0, esi = 0;
+    uint8_t al;
+
+    if (b2 != 0) {
+        if (b2 != 6 || cfg[9] != 4 || a4 != 0x10 || b10 != 4)
+            return 0x69;                        /* 0x1800222e6 */
+    }
+
+    rl   = *(const int32_t *)(cfg + 0x0c);
+    rh   = *(const int32_t *)(cfg + 0x10);
+    cl   = *(const int32_t *)(cfg + 0x14);
+    ch   = *(const int32_t *)(cfg + 0x18);
+    step = cfg[8];
+
+    if (h < rl || h < rh || w < cl || w < ch)
+        return 0x69;
+    if (rl >= rh || cl >= ch)
+        return 0x69;
+    if (step == 0) {                            /* 0x1800223f8 */
+        *out = 0;
+        return 0;
+    }
+
+    row_lo    = rl < 0 ? 0 : rl;
+    row_hi    = rh > h - 1 ? h - 1 : rh;
+    col_start = ((cl + A - 1) / A) * A;
+    if (col_start < A)
+        col_start = A;
+    col_end   = (ch / A) * A;
+    if (col_end > w - A)
+        col_end = w - A;
+    row_steps = (row_hi - row_lo) / step;
+    rem       = (int)((uint8_t)(row_hi + 1 - row_lo) % (uint8_t)step);
+
+    s38 = row_lo;
+    s40 = row_lo - row_steps;
+    s30 = row_steps;
+    s34 = (uint16_t)(w * row_lo);
+    s54 = (uint16_t)(w * row_steps);
+    s48 = step;
+    s2c = 0;
+    r14b = (uint8_t)col_start;
+    r15d = col_start;
+    al   = (uint8_t)rem;
+
+    for (;;) {                                  /* 0x180022460 */
+        int edi = (int)al + s38;
+        int rowend = s40 + s30;
+
+        s2c++;
+        edi += s30;
+        if (edi >= rowend) {
+            int rowoff = (uint16_t)s34;
+            int yend1  = edi + 1;
+            int s9 = 0, s10 = 0;
+            int y = rowend;
+
+            for (;;) {
+                if (col_end >= r14b) {
+                    int edx = r15d;
+                    do {
+                        int idx = (uint16_t)((uint8_t)edx + rowoff);
+                        uint8_t c1 = data[idx - 1];
+                        int8_t d2 = (int8_t)(uint8_t)(c1 - data[idx]);
+                        int8_t d1 = (int8_t)(uint8_t)(data[idx - 2] - c1);
+                        s9  += (int)d1 * (int)d1;
+                        s10 += (int)d2 * (int)d2;
+                        edx += A;
+                    } while (col_end >= (int)(uint8_t)edx);
+                }
+                y++;
+                rowoff += w;
+                if (y == yend1)
+                    break;
+            }
+
+            if (s9 != 0 &&
+                (float)s10 / (float)s9 > *(const float *)(cfg + 4))
+                goto found;
+        }
+
+        s30 += row_steps;
+        al = 0;
+        s34 = (uint16_t)(s34 + s54);
+        if (s48 != s2c)
+            continue;
+        break;
+    }
+
+    *out = 0;                                   /* 0x180022537 */
+    return 0;
+
+found:
+    *out = 100;                                 /* 0x180022562 */
+    if (b2 == 0)
+        return 0;                               /* 0x180022b5a */
+
+    {                                           /* 0x180022576 */
+        int n = h * w;
+        int32_t sum = 0;
+
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+                sum += data[y * w + x];
+        mean = (int)((int32_t)((uint32_t)sum << 6) / n);
+    }
+
+    {
+        uint8_t *tab = NULL;
+        uint32_t tsz = 0;
+
+        if (cr_desc_get_ptr_size(&tab, &tsz, (char)b2) != 0)
+            return 0x69;                        /* 0x180022600 */
+        if (tab == NULL)
+            return 0x69;
+
+        {
+            int r   = a4 % b10;
+            int half = (cfg[9] - b10) / 2;
+            int bb  = (uint8_t)(b10 - r);
+            int total = (bb + half * 2) * a4 + w;
+
+            total *= 2;
+            if (cr_malloc_aligned16((void **)&buf, (size_t)total) != 0)
+                return 1;                       /* 0x180022680: eax */
+            b16 = (int16_t *)buf;
+            tab16 = (const int16_t *)tab;
+
+            s94 = 0;
+            sa0 = 0;
+            s8c = 0;
+            s30 = w / a4;                       /* 0x1800226c4 */
+            s34 = a4;                           /* 0x180022625 */
+            s28 = (int)cfg[9] * a4;
+            s90 = a4 * half;
+            s50 = b10 * a4;
+            sac = (bb + half) * a4 + w;
+            s98 = 2 * s90;
+            sa8 = w - 1;
+            sd0 = 2 * (w - 1 + s90);
+            sc8 = 2 * (w + s90);
+            sc0 = 2 * ((~w) + sac);
+            s40 = 2 * s50;
+            s74 = 0;
+            s78 = s90;
+            s7c = sa0;
+            s58 = 0;
+            sa4 = h;
+        }
+    }
+
+    for (;;) {                                  /* 0x1800227be */
+        if (w > 0) {
+            int cnt = sa8 + 1;
+            const uint8_t *src = data + s94;
+            int16_t *dst = b16 + (s98 >> 1);
+
+            for (int i = 0; i < cnt; i++)
+                dst[i] = (int16_t)(((int)src[i] << 6) - mean);
+        }
+
+        if (s90 > 0) {                          /* 0x180022818 */
+            for (int k = 0; k < s90; k++)
+                b16[s90 - 1 - k] = b16[s90 + k];
+        }
+
+        if (w < sac) {                          /* 0x180022868 */
+            int i = sd0 >> 1;
+            int j = sc8 >> 1;
+            int stop = (sd0 - 2 - sc0) >> 1;
+
+            while (i != stop) {
+                b16[j] = b16[i];
+                i--;
+                j++;
+            }
+        }
+
+        if (b10 != 0) {                         /* 0x1800228bb */
+            s74 = 0;
+            s58 = 0;
+            s78 = s90;
+            s7c = sa0;
+            rdi = 0;
+
+            for (;;) {                          /* 0x1800228f2 */
+                if (s58 >= s30)
+                    break;
+                s24 = s58;
+                s54 = s7c - s78;
+                esi = s78;
+                rdi = 0;
+
+                for (;;) {                      /* 0x180022940 */
+                    const int16_t *tp = tab16 + s74;
+                    int eax = 0;
+
+                    /* the vendor splits this into 8-tap groups plus a
+                     * remainder, but it is one ascending 64-tap dot
+                     * product (s28 = cfg[9] * a4). */
+                    for (int k = 0; k < s28; k++)
+                        eax += (int)tp[k] * (int)b16[(rdi >> 1) + k];
+
+                    eax >>= 15;
+
+                    if (s34 > 0) {              /* 0x180022a66 */
+                        int off = s54 + esi;
+                        for (int j = 0; j < s34; j++) {
+                            int v = (int)b16[esi + j] - eax;
+                            v = 0x20 + mean + v;
+                            if (v < 0)
+                                v = 0;
+                            if (v > 0x3fc0)
+                                v = 0x3fc0;
+                            ((uint8_t *)a1->data)[off + j] =
+                                (uint8_t)(v >> 6);
+                        }
+                    }
+
+                    s24 += b10;
+                    rdi += s40;
+                    esi += s50;
+                    if (s30 > s24)
+                        continue;
+                    break;
+                }
+
+                s58++;
+                s7c += s34;
+                s78 += s34;
+                s74 += s28;
+                if (b10 != s58)
+                    continue;
+                break;
+            }
+        }
+
+        s8c++;
+        sa0 += w;
+        s94 += w;
+        if (sa4 != s8c)
+            continue;
+        break;
+    }
+
+    cr_sized_free((void **)&buf);               /* 0x180022b38 */
+    return 0;
+}
