@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **346** (97.5% of functions, 163,136 B = 96.3% of bytes) |
+| rewritten + parity-verified | **347** (97.7% of functions, 165,728 B = 97.8% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Ninety-seven batches so far:
+Ninety-eight batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -501,6 +501,17 @@ Ninety-seven batches so far:
     `> 10`) into `cr_structure_tensor_score`, `cr_mscale_run_16d00`,
     `cr_block_orient_48010`, or the two constant stores `*out = -1` / `1000`
     (1 function).
+98. block feature pipeline:
+    `cr_feature_pipeline_1ad30` (3168 B) validates a descriptor/calibration
+    pair and a block grid (`m`, `s`, `d`, `e2`, `n`, `mn`, `q`, with `a5` as
+    the block row stride), centres the float image, runs a calibration matmul
+    plus a row-dot reduction, gates on the max of a box-mean edge pass against
+    `cfg.f32[4]`, and — when the gate fails — builds a second mean-subtracted
+    plane, multiplies it by the descriptor chain, subtracts the per-block
+    result from the image and finishes with the block-variance and box-mean
+    stages (1 function).  This batch also fixed `cr_desc_get_ptr_size_69`,
+    which was not storing the `image+0x1229e0` / `image+0xa0c80` pointers for
+    selectors 15/16.
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

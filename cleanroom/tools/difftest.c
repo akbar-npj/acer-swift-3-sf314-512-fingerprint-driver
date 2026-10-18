@@ -9807,6 +9807,7 @@ static void test_desc_getters(void)
             uint8_t rc = cr_desc_get_ptr_size_69(&cv, &cs, (char)s);
             if (rv != rc) mismatch("ret", (u32)s, (u64)rv, (u64)rc);
             if (vs != cs) mismatch("size", (u32)s, (u64)vs, (u64)cs);
+            if (vv != cv) mismatch("ptr", (u32)s, vv, cv);
         }
         if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_ptr_size_69\n");
     }
@@ -15194,6 +15195,134 @@ static void test_orient_score_dispatch_1c220(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_orient_score_dispatch_1c220\n");
 }
 
+/* ---- batch 104: block feature pipeline -------------------------------- */
+static void test_feature_pipeline_1ad30(void)
+{
+    typedef int (WINAPI *v_t)(cr_image *, int *, const u8 *, int, int);
+    v_t v = (v_t)fn_at(RVA(0x18001ad30));
+    begin("cr_feature_pipeline_1ad30");
+    int bad = g_fail;
+    enum { MAXW = 80, MAXH = 64, MAXN = MAXW * MAXH };
+    static int16_t sv[MAXN], sc[MAXN];
+    static u8 cfg[0x40];
+    static u8 av[0x20], ac[0x20];
+    int ran = 0;
+
+    /* Four geometry families that satisfy every guard:
+     *   A: W=H=64, m=1 s=1, desc 16 (0x100), calib 6 (0x1000), a5 = 16
+     *   B: W=H=64, m=2 s=2, desc 16,          calib 6,          a5 = 64
+     *   C: W=16 H=14, m=7 s=4, desc 15 (0x620), calib 6,        a5 = 8
+     *   D: W=80 H=64, m=2 s=2, desc 16,       calib 6,          a5 = 80
+     * A exercises the valid 42150 block path (64 % 16 == 0), B the
+     * "block_w >= w" rejection (a5 == W), C the odd m / stride path and D
+     * the W != n branch (q == n == 64, W == 80). */
+    static const int famW[4]    = { 64, 64, 16, 80 };
+    static const int famH[4]    = { 64, 64, 14, 64 };
+    static const int famM[4]    = {  1,  2,  7,  2 };
+    static const int famS[4]    = {  1,  2,  4,  2 };
+    static const int famDsel[4] = { 16, 16, 15, 16 };
+    static const int famA5[4]   = { 16, 64,  8, 80 };
+    static const int famCemax[4]= { 63, 31, 15, 31 };
+    static const int famRemax[4]= { 63, 63, 11, 63 };
+    static const u8  modes[4]   = {  3,  5,  4,  6 };
+
+    for (int fam = 0; fam < 4; fam++) {
+        int W   = famW[fam];
+        int H   = famH[fam];
+        int m   = famM[fam];
+        int s   = famS[fam];
+        int dsel= famDsel[fam];
+        int a5  = famA5[fam];
+        int cemax = famCemax[fam];
+        int remax = famRemax[fam];
+        int N   = W * H;
+
+        for (int t = 0; t < 20; t++) {
+            u32 seed = (u32)(fam * 100 + t);
+            for (int i = 0; i < N; i++) {
+                int16_t x = (int16_t)((int)(rnd() % 65536) - 32768);
+                sv[i] = x; sc[i] = x;
+            }
+            memset(cfg, 0, sizeof cfg);
+            *(int *)(cfg + 0x0c) = 0;
+            *(int *)(cfg + 0x10) = remax;
+            *(int *)(cfg + 0x14) = 0;
+            *(int *)(cfg + 0x18) = cemax;
+            *(int *)(cfg + 0x1c) = 0;
+            *(int *)(cfg + 0x20) = W - 1;
+            cfg[0x01] = 6;
+            cfg[0x02] = (u8)dsel;
+            cfg[0x24] = 1;
+            cfg[0x25] = (t & 1) ? 1 : 0;
+            cfg[0x26] = modes[t & 3];   /* 4 and 6 -> 0x69 */
+            cfg[0x27] = (u8)s;
+            cfg[0x28] = (u8)m;
+            cfg[0x29] = (t & 4) ? 1 : 0;
+            /* first half takes the "passed" early return, second half the
+             * full pipeline */
+            *(float *)(cfg + 0x04) = (t < 10) ? 1.0e30f : -1.0e30f;
+
+            mk_img2(av, sv, W, H);
+            mk_img2(ac, sc, W, H);
+
+            int rv = 0x1234, rc = 0x1234;
+            int a4 = (t & 8) ? 1 : 0;
+            int er = v((cr_image *)av, &rv, cfg, a4, a5);
+            int ec = cr_feature_pipeline_1ad30((cr_image *)ac, &rc, cfg,
+                                               a4, a5);
+            if (er != ec) mismatch("ret", seed, (u32)er, (u32)ec);
+            if (rv != rc) mismatch("a2", seed, (u32)rv, (u32)rc);
+            cmp_buf("img", (const u8 *)sv, (const u8 *)sc,
+                    (size_t)N * 2, seed);
+            ran++;
+        }
+    }
+
+    /* guard paths: all of these bail out before the heavy pipeline */
+    for (int t = 0; t < 16; t++) {
+        static const int a5s[8] = { 1, 0, 2, 16, -1, 3, 1, 1 };
+        static const u8  sels[8] = { 16, 16, 16, 16, 16, 3, 16, 16 };
+        static const u8  cals[8] = { 6, 6, 6, 6, 6, 6, 7, 0 };
+        int W = 16, H = 16, N = W * H;
+        int k = t & 7;
+        u32 seed = (u32)(900 + t);
+        for (int i = 0; i < N; i++) {
+            int16_t x = (int16_t)((int)(rnd() % 65536) - 32768);
+            sv[i] = x; sc[i] = x;
+        }
+        memset(cfg, 0, sizeof cfg);
+        *(int *)(cfg + 0x0c) = 0;
+        *(int *)(cfg + 0x10) = H - 1;
+        *(int *)(cfg + 0x14) = 0;
+        *(int *)(cfg + 0x18) = W - 1;
+        *(int *)(cfg + 0x1c) = 0;
+        *(int *)(cfg + 0x20) = W - 1;
+        cfg[0x01] = cals[k];
+        cfg[0x02] = sels[k];
+        cfg[0x24] = 1;
+        cfg[0x25] = 1;
+        cfg[0x26] = 3;
+        cfg[0x27] = 1;
+        cfg[0x28] = 1;
+        *(float *)(cfg + 0x04) = 1.0e30f;
+
+        mk_img2(av, sv, W, H);
+        mk_img2(ac, sc, W, H);
+
+        int rv = 0x55, rc = 0x55;
+        int er = v((cr_image *)av, &rv, cfg, 1, a5s[k]);
+        int ec = cr_feature_pipeline_1ad30((cr_image *)ac, &rc, cfg, 1,
+                                           a5s[k]);
+        if (er != ec) mismatch("gret", seed, (u32)er, (u32)ec);
+        if (rv != rc) mismatch("ga2", seed, (u32)rv, (u32)rc);
+        cmp_buf("gimg", (const u8 *)sv, (const u8 *)sc, (size_t)N * 2, seed);
+        ran++;
+    }
+
+    printf("  [1ad30] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_feature_pipeline_1ad30\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -15629,6 +15758,7 @@ int main(int argc, char **argv)
     test_block_orient_195d0();
     test_block_orient_48010();
     test_orient_score_dispatch_1c220();
+    test_feature_pipeline_1ad30();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

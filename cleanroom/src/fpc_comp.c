@@ -6560,3 +6560,270 @@ int cr_orient_score_dispatch_1c220(int16_t *out, const cr_image *bmp,
         return 0x69;
     }
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001ad30 — block feature pipeline (3168 bytes)
+ *               fpc_bio_bep_sw23_3121da2208.constprop.6
+ *
+ *   int fn(cr_image *a1, int *a2, const uint8_t *cfg, int a4, int a5)
+ *
+ * Guard sequence (any failure returns 0x69 before anything is allocated):
+ *
+ *   desc = cr_desc_get_ptr_size_69(&dptr, &dsz, cfg[2])
+ *   m  = (int8_t)cfg[0x28]      s = (int8_t)cfg[0x27]
+ *   d  = max(0, cfg[0x1c])      e2 = max(1, min(W-1, cfg[0x20]))
+ *   n  = e2 - d + 1             mn = m * n
+ *   q  = mn*mn / dsz            require W - n + q == a5
+ *   hb = H / m                  require H % m == 0 and mn*mn == q*dsz
+ *   if (W != n) require W > n and W - n + q == W
+ *
+ * so a5 is always the vendor's "row stride in blocks": q when W == n, W
+ * otherwise.  The image is converted to float (shift 6) and the block grid
+ * geometry is validated the same way for the row axis (rs/re/e/eb, with
+ * eb = e/s) and the column axis (cs/ce/f/fs = s*f).  The calibration blob
+ * selector cfg[1] must return exactly fs*fs bytes (sel 6 -> 64, sel 5 -> 80)
+ * and the descriptor selector cfg[2] must be 15 (0x620) or 16 (0x100).
+ *
+ * Pipeline:
+ *   centre  = img[rs..][cs..] - mean(img[rs..re][cs..f] / (e*f))
+ *   bufA    = matmul_nt(centre, eb, fs, calib, fs, fs)
+ *   bufC[i] = dot(bufA + i*fs, centre + i*fs, fs)
+ *   bufD    = box_mean_edge(bufC, eb, cfg[0x24]);  mx = max(bufD)
+ *   free(bufA, centre, bufC, bufD)
+ *   if (cfg.f32[4] >= mx)  ->  *a2 = 0, skip to the 42150 hook
+ *   else                   ->  *a2 = 100 and continue:
+ *     bufF  = malloc(hb * (mn/q))
+ *     bufE  = malloc(H * n)
+ *     bufE  = img[0..H)[d..e2] - mean(img[0..H)[d..e2] / (H*n))
+ *     bufF  = matmul_nt(bufE, hb, mn, dptr, mn/q, mn)
+ *     free(bufE); img[i] -= bufF[i / a5] for i in [0, H*W); free(bufF)
+ *
+ * Finally, when a4 != 0 and cfg[0x29] != 0, cr_block_variance_run_42150 is
+ * run on the image with block_w = a5 and a private cfg {enable 0,
+ * threshold 100.0f, mode 1, sigma 0}; its result slot is dead in the vendor
+ * (it aliases the already-freed bufC pointer) and is unobservable.
+ *
+ * The "passed" branch (cfg.f32[4] >= mx) returns immediately after cleanup:
+ * a1 is left untouched and the box-mean / f32->i16 tail is not run.
+ * ------------------------------------------------------------------------ */
+int cr_feature_pipeline_1ad30(cr_image *a1, int *a2, const uint8_t *cfg,
+                              int a4, int a5)
+{
+    const int32_t *ci = (const int32_t *)cfg;
+    const int W = a1->w, H = a1->h;
+    const int m = (int8_t)cfg[0x28];
+    const int s = (int8_t)cfg[0x27];
+    void *dptr = NULL;
+    uint32_t dsz = 0;
+    cr_image img;
+    uint64_t calib = 0;
+    uint32_t calibsz = 0;
+    void *bufA = NULL, *centre = NULL, *bufC = NULL, *bufD = NULL;
+    void *bufE = NULL, *bufF = NULL;
+    int d, e2, n, mn, q, hb, rs, re, e, eb, cs, ce, f, fs;
+    int st;
+    float sum, mean, mx, vres = 0.0f;
+
+    if (cr_desc_get_ptr_size_69(&dptr, &dsz, (char)cfg[2]))   /* 0x18001ada4 */
+        return 0x69;
+
+    d  = (ci[0x1c / 4] >= 0) ? ci[0x1c / 4] : 0;              /* 0x18001adc4 */
+    e2 = W - 1;                                               /* 0x18001adc8 */
+    if (e2 > ci[0x20 / 4]) e2 = ci[0x20 / 4];                 /* 0x18001addb */
+    if (e2 <= 0) e2 = 1;                                      /* 0x18001ade5 */
+    n  = e2 - d + 1;                                          /* 0x18001adec */
+    mn = m * n;                                               /* 0x18001adf7 */
+    q  = (mn * mn) / (int)dsz;                                /* 0x18001ae06 */
+    if (W - n + q != a5) return 0x69;                         /* 0x18001ae20 */
+    hb = H / m;                                               /* 0x18001ae2a */
+    if (H % m != 0) return 0x69;                              /* 0x18001ae2d */
+    if (mn * mn != q * (int)dsz) return 0x69;                 /* 0x18001ae40 */
+    if (W != n) {                                             /* 0x18001ae45 */
+        if (W <= n) return 0x69;                              /* 0x18001ae4a */
+        if (W - n + q != W) return 0x69;                      /* 0x18001ae53 */
+    }
+
+    st = cr_image_alloc_f32(&img, W, H);                      /* 0x18001ae82 */
+    if (st) return st;
+    cr_i16_to_f32_scaled(&img, a1, 6);                        /* 0x18001aec1 */
+
+    if (cr_get_calib_blob(&calib, &calibsz, (uint8_t)cfg[1])) { /* 0x18001af42 */
+        cr_cleanup_ptr8_clear_b(&img);                        /* 0x18001b090 */
+        return 1;                                             /* 0x18001b0c0 */
+    }
+
+    rs = (ci[0x0c / 4] >= 0) ? ci[0x0c / 4] : 0;              /* 0x18001af8b */
+    re = img.h - 1;                                           /* 0x18001af90 */
+    if (re > ci[0x10 / 4]) re = ci[0x10 / 4];                 /* 0x18001aff4 */
+    if (re <= 0) re = 1;                                      /* 0x18001af9d */
+    e  = re - rs + 1;                                         /* 0x18001afb4 */
+    if (e % s != 0) return 0x69;                              /* 0x18001afc7 */
+    eb = e / s;                                               /* 0x18001afc5 */
+
+    cs = (ci[0x14 / 4] >= 0) ? ci[0x14 / 4] : 0;              /* 0x18001afed */
+    ce = img.w - 1;                                           /* 0x18001afe1 */
+    if (ce > ci[0x18 / 4]) ce = ci[0x18 / 4];                 /* 0x18001aff4 */
+    if (ce <= 0) ce = 1;                                      /* 0x18001b001 */
+    f  = ce - cs + 1;                                         /* 0x18001b00c */
+    fs = s * f;                                               /* 0x18001b013 */
+    if (fs * f * s != (int)calibsz) return 0x69;              /* 0x18001b022 */
+    if (f <= 2) return 0x69;                                  /* 0x18001b02f */
+    if (e <= 2) return 0x69;                                  /* 0x18001b035 */
+    if (eb < (int8_t)cfg[0x24]) return 0x69;                  /* 0x18001b03f */
+
+    st = cr_malloc_aligned16(&bufA, (size_t)(e * f) * 4);     /* 0x18001b06e */
+    if (st) { cr_cleanup_ptr8_clear_b(&img); return st; }
+    st = cr_malloc_aligned16(&centre, (size_t)(e * f) * 4);   /* 0x18001b0e7 */
+    if (st) goto fail_all;
+    st = cr_malloc_aligned16(&bufC, (size_t)eb * 4);          /* 0x18001b14a */
+    if (st) goto fail_all;
+    st = cr_malloc_aligned16(&bufD, (size_t)eb * 4);          /* 0x18001b19a */
+    if (st) goto fail_all;
+
+    /* sum over img[rs..re][cs..f], divided by e*f (not the true area) */
+    sum = 0.0f;                                               /* 0x18001b1dd */
+    if (rs <= e) {                                            /* 0x18001b1c8 */
+        int row = rs * img.w;
+        int i = rs;
+        do {
+            if (cs <= f) {                                    /* 0x18001b21c */
+                const float *p   = (const float *)img.data + row + cs;
+                const float *end = (const float *)img.data + row + f + 1;
+                while (p != end) { sum += *p; p++; }          /* 0x18001b24e */
+            }
+            i++;
+            row += img.w;                                     /* 0x18001b267 */
+        } while (i != e + 1);                                 /* 0x18001b26f */
+    }
+
+    mean = sum / (float)(e * f);                              /* 0x18001b2c4 */
+    {   /* centre = img[rs..][cs..] - mean; ce floats per row, e rows */
+        const float *sp = (const float *)img.data + (size_t)rs * img.w + cs;
+        float *dp = (float *)centre;
+        for (int i = 0; i < e; i++) {                         /* 0x18001b30b */
+            for (int j = 0; j < ce; j++)                      /* 0x18001b2f5 */
+                dp[j] = sp[j] - mean;
+            sp += img.w;
+            dp += ce;
+        }
+    }
+
+    st = cr_matmul_nt((const float *)centre, eb, fs,
+                      (const float *)calib, fs, fs, (float *)bufA);
+    if (st) goto fail_all;                                    /* 0x18001b35d */
+
+    if (eb > 0) {                                             /* 0x18001b37b */
+        for (int i = 0; i < eb; i++)
+            ((float *)bufC)[i] =
+                cr_dot_f32((const float *)bufA + (size_t)i * fs,
+                           (const float *)centre + (size_t)i * fs, fs);
+    }
+
+    cr_box_mean_edge((float *)bufD, (const float *)bufC, eb,
+                     (uint32_t)(int8_t)cfg[0x24]);            /* 0x18001b456 */
+    mx = -1.0e20f;                                            /* 0x18001b475 */
+    for (int i = 0; i < eb; i++) {                            /* 0x18001b48b */
+        float v = ((const float *)bufD)[i];
+        mx = (v > mx) ? v : mx;
+    }
+    cr_free_4args(bufA, centre, bufC, bufD);                  /* 0x18001b4bf */
+
+    if (*(const float *)(cfg + 4) >= mx) {                    /* 0x18001b4cc */
+        *a2 = 0;                                              /* 0x18001b7f9 */
+        if (a4 != 0 && cfg[0x29] != 0) {                      /* 0x18001b805 */
+            uint8_t vc[16];
+            vc[0] = 0;
+            *(float *)(vc + 4) = 100.0f;
+            vc[8] = 1;
+            *(uint32_t *)(vc + 12) = 0;
+            st = cr_block_variance_run_42150(&img, vc, a5, &vres);
+            if (st) { cr_cleanup_ptr8_clear_b(&img); return st; }
+        }
+        cr_cleanup_ptr8_clear_b(&img);                        /* 0x18001b090 */
+        return 0;
+    }
+
+    *a2 = 100;                                                /* 0x18001b4e1 */
+    st = cr_malloc_aligned16(&bufF, (size_t)(hb * (mn / q)) * 4);
+    if (st) { cr_cleanup_ptr8_clear_b(&img); return st; }      /* 0x18001b51a */
+    st = cr_malloc_aligned16(&bufE, (size_t)(H * n) * 4);      /* 0x18001b572 */
+    if (st) {                                                 /* 0x18001b87a */
+        cr_sized_free(&bufF);
+        cr_cleanup_ptr8_clear_b(&img);
+        return st;
+    }
+
+    /* sum over img[0..H)[d..e2], divided by H*n */
+    sum = 0.0f;                                               /* 0x18001b5b5 */
+    if (H > 0) {                                              /* 0x18001b58a */
+        for (int y = 0; y < H; y++) {                         /* 0x18001b60c */
+            if (d <= e2) {                                    /* 0x18001b5d5 */
+                const float *p = (const float *)img.data
+                               + (size_t)y * img.w + d;
+                const float *end = p + (e2 - d + 1);
+                while (p != end) { sum += *p; p++; }          /* 0x18001b5f5 */
+            }
+        }
+    }
+
+    mean = sum / (float)(H * n);                              /* 0x18001b66e */
+    for (int y = 0; y < H; y++) {                             /* 0x18001b6b3 */
+        if (n > 0) {                                          /* 0x18001b675 */
+            const float *sp = (const float *)img.data
+                            + (size_t)y * img.w + d;
+            float *dp = (float *)bufE + (size_t)y * n;
+            for (int j = 0; j <= e2 - d; j++)                 /* 0x18001b6a4 */
+                dp[j] = sp[j] - mean;
+        }
+    }
+
+    st = cr_matmul_nt((const float *)bufE, hb, mn,
+                      (const float *)dptr, mn / q, mn, (float *)bufF);
+    cr_sized_free(&bufE);                                     /* 0x18001b713 */
+    if (st) {                                                 /* 0x18001b87a */
+        cr_sized_free(&bufF);
+        cr_cleanup_ptr8_clear_b(&img);
+        return st;
+    }
+
+    if (H * W > 0) {                                          /* 0x18001b728 */
+        float *p = (float *)img.data;
+        const float *ff = (const float *)bufF;
+        int row = 0, col = 0;
+        int total = H * W;
+        for (int i = 0; i < total; i++) {                     /* 0x18001b77b */
+            p[i] -= ff[row];
+            col++;
+            if (col == a5) { row++; col = 0; }                /* 0x18001b76d */
+        }
+    }
+    cr_sized_free(&bufF);                                     /* 0x18001b785 */
+
+    if (a4 != 0 && cfg[0x29] != 0) {                          /* 0x18001b78a */
+        uint8_t vc[16];
+        vc[0] = 0;
+        *(float *)(vc + 4) = 100.0f;
+        vc[8] = 1;
+        *(uint32_t *)(vc + 12) = 0;
+        st = cr_block_variance_run_42150(&img, vc, a5, &vres);
+        if (st) { cr_cleanup_ptr8_clear_b(&img); return st; }  /* 0x18001b8b6 */
+    }
+
+    if ((int8_t)cfg[0x25] > 0) {                              /* 0x18001b79b */
+        int mode = (int8_t)cfg[0x26];
+        if (((mode - 3) & 0xfd) != 0) {                       /* 0x18001b7aa */
+            cr_cleanup_ptr8_clear_b(&img);                    /* 0x18001b0b0 */
+            return 0x69;
+        }
+        st = cr_box_mean_f32(&img, &img, mode);               /* 0x18001b7bd */
+        if (st) { cr_cleanup_ptr8_clear_b(&img); return st; }
+    }
+    cr_f32_to_i16_scaled(a1, &img, 6);                        /* 0x18001b7de */
+    cr_cleanup_ptr8_clear_b(&img);                            /* 0x18001b7e6 */
+    return 0;
+
+fail_all:                                                     /* 0x18001b88c */
+    cr_free_4args(bufA, centre, bufC, bufD);
+    cr_cleanup_ptr8_clear_b(&img);
+    return st;
+}

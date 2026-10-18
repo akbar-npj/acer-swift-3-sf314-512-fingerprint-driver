@@ -1171,6 +1171,9 @@ int      cr_block_orient_48010(int16_t *a1, const cr_image *bmp,
 int      cr_orient_score_dispatch_1c220(int16_t *out, const cr_image *bmp,
                                         const cr_image *src,
                                         const void *cfg);   /* 0x18001c220 */
+int      cr_feature_pipeline_1ad30(cr_image *a1, int *a2,
+                                   const uint8_t *cfg, int a4,
+                                   int a5);                 /* 0x18001ad30 */
 
 /* 0x180145240 — 501-entry bank of 9x9 int16 correlation kernels handed out by
  * cr_desc_get_tag_ptr selector 0 (tag 0x1f500000009: K=9, count=501). */

@@ -131,17 +131,20 @@ uint64_t cr_desc_get_ptr_ints(void *p1, uint32_t *p2, uint32_t *p3, char sel)
     return 1;
 }
 
-/* 0x180017960 — pointer + size, selectors 15 and 16; sel 0 returns 0, rest 0x69. */
+/* 0x180017960 — pointer + size, selectors 15 and 16; sel 0 returns 0, rest 0x69.
+ * Sel 15 -> image+0x1229e0 (0x620 bytes), sel 16 -> image+0xa0c80 (0x100). */
 uint8_t cr_desc_get_ptr_size_69(void *p1, uint32_t *p2, char sel)
 {
     void **q1 = (void **)p1;
     *q1 = NULL;
     *p2 = 0;
-    if (sel == 15) {
+    if (sel == 15) {                                      /* 0x180017985 */
+        *q1 = (void *)(g_cr_image_base + 0x1229e0u);
         *p2 = 0x620;
         return 0;
     }
-    if (sel == 16) {
+    if (sel == 16) {                                      /* 0x1800179a0 */
+        *q1 = (void *)(g_cr_image_base + 0xa0c80u);
         *p2 = 0x100;
         return 0;
     }
