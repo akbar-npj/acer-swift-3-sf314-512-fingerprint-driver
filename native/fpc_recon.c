@@ -160,6 +160,57 @@ static long long WINAPI hk_1c810(void *a, void *b, void *c, void *d, void *e, lo
                    *(unsigned *)(p + 0x74), *(int *)(p + 0x78),
                    *(unsigned char *)(p + 0x7c), *(unsigned short *)(p + 0x7e));
     }
+    /* FPC_BEP_DUMP=<prefix>: one-shot dump of the exact input buffers the
+     * enclave hands to the BEP.  Used to build a standalone (DLL-free) BEP
+     * runner: the control buffers are constant per sensor, only the pixels
+     * change, so we capture them once and replay them against libfpcbep. */
+    {
+        const char *dump = getenv("FPC_BEP_DUMP");
+        static int dumped;
+        if (dump && !dumped) {
+            char path[512];
+            FILE *fp;
+            unsigned char *e5 = (unsigned char *)e;
+            unsigned char *cfg2 = e5 ? *(unsigned char **)(e5 + 0x28) : NULL;
+            unsigned char *flg2 = e5 ? *(unsigned char **)(e5 + 0x10) : NULL;
+            unsigned char *a2p0 = b ? *(unsigned char **)b : NULL;
+            unsigned char *a2p8 = b ? *(unsigned char **)((unsigned char *)b + 8) : NULL;
+            unsigned char *a4p0 = d ? *(unsigned char **)d : NULL;
+            int i;
+            dumped = 1;
+#define DUMPBUF(tag, ptr, n) do {                                    \
+                snprintf(path, sizeof path, "%s.%s", dump, tag);     \
+                fp = (ptr) ? fopen(path, "wb") : NULL;               \
+                if (fp) { fwrite((ptr), 1, (n), fp); fclose(fp); }   \
+            } while (0)
+            DUMPBUF("a2", b, 0x20);
+            DUMPBUF("a3", c, 0x100);
+            DUMPBUF("a4", d, 0x80);
+            DUMPBUF("a5", e, 0x40);
+            DUMPBUF("cfg", cfg2, 0x300);
+            DUMPBUF("flg", flg2, 0x40);
+            DUMPBUF("a2p0", a2p0, 0x80);
+            DUMPBUF("a2p8", a2p8, 0x80);
+            DUMPBUF("a4p0", a4p0, 0x40);
+#undef DUMPBUF
+            printf("      [dump] a2=%p a2p0=%p a2p8=%p a4=%p a4p0=%p cfg=%p flg=%p a6=%lld\n",
+                   b, a2p0, a2p8, d, a4p0, cfg2, flg2, f);
+            if (a2p0) {
+                printf("      [dump] a2p0[0..15]=");
+                for (i = 0; i < 16; i++) printf("%02x", a2p0[i]);
+                printf("\n");
+            }
+            if (a4p0) {
+                printf("      [dump] a4p0 i16[0..3]=%d %d %d %d\n",
+                       *(int16_t *)(a4p0 + 0), *(int16_t *)(a4p0 + 2),
+                       *(int16_t *)(a4p0 + 4), *(int16_t *)(a4p0 + 6));
+            }
+            for (i = 0; i < 8; i++) {
+                unsigned char *p = d ? *(unsigned char **)((unsigned char *)d + i * 8) : NULL;
+                if (p) printf("      [dump] a4[%d]=%p\n", i, p);
+            }
+        }
+    }
     if (pix && w > 0 && h > 0 && (long long)w * h <= 262144 && g_out_path) {
         FILE *fp = fopen(g_out_path, "wb");
         if (fp) {

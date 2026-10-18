@@ -3,6 +3,7 @@ fpc_disum_tool
 linux-driver/fpc_disum_tool
 native/fpc_recon_native
 native/*.o
+matcher/fpc_match_tool
 cleanroom/*.o
 cleanroom/libfpcbep.a
 cleanroom/difftest
