@@ -14557,6 +14557,95 @@ static void test_block_filter_222b0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_block_filter_222b0\n");
 }
 
+/* ---- 0x180015540 — edge-oriented Gaussian padding ----------------------- *
+ * W/H stay small so the four border passes finish quickly; the padded buffer
+ * (stride a > w, b > h) is compared in full, margins included. */
+static void test_gauss_edge_pad_15540(void)
+{
+    typedef int (WINAPI *v_t)(cr_image *, const cr_image *, float);
+    v_t v = (v_t)fn_at(RVA(0x180015540));
+    begin("cr_gauss_edge_pad_15540");
+    int bad = g_fail;
+    static int16_t bv[64 * 64], bc[64 * 64], org[64 * 64];
+    static int16_t gv[32 * 32], gc[32 * 32];
+    int found = 0, rows_written = 0, cols_written = 0;
+
+    for (int t = 0; t < 500; t++) {
+        int W = 9 + (int)(rnd() % 18u);   /* tri9 needs n >= 9 */
+        int H = 9 + (int)(rnd() % 13u);
+        int ox = (int)(rnd() % 4u);
+        int oy = (int)(rnd() % 4u);
+        int a = W + ox + 2 + (int)(rnd() % 3u);
+        int b = H + 2 * oy + 1 + (int)(rnd() % 3u);
+        int n = a * b;
+        int style = t % 5;
+
+        if (n > (int)(sizeof bv / sizeof bv[0]))
+            continue;
+
+        for (int i = 0; i < n; i++) {
+            int16_t p;
+            if (style == 0)
+                p = (int16_t)(int)(rnd() % 65536u) - 32768;
+            else if (style == 1)
+                p = (int16_t)((int)(rnd() % 2001u) - 1000);
+            else if (style == 2)
+                p = (int16_t)((i % a) * 512 + (i / a) * 64);
+            else if (style == 3)
+                p = (int16_t)(((i % a) / 2 + (i / a) / 2) & 1 ? 8000 : -8000);
+            else
+                p = (int16_t)(((int)(rnd() % 9u) - 4) * 256);
+            bv[i] = p; bc[i] = p;
+        }
+        for (int i = 0; i < W * H; i++) {
+            int16_t p;
+            if (style == 2)
+                p = (int16_t)((i % W) * 700);
+            else if (style == 4)
+                p = (int16_t)(((i / W) & 1) ? 12345 : -12345);
+            else
+                p = (int16_t)(int)(rnd() % 65536u) - 32768;
+            gv[i] = p; gc[i] = p;
+        }
+
+        cr_image av, ac, qv, qc;
+        memset(&av, 0, sizeof av); memset(&ac, 0, sizeof ac);
+        memset(&qv, 0, sizeof qv); memset(&qc, 0, sizeof qc);
+        av.a = ac.a = a; av.b = ac.b = b;
+        av.w = ac.w = W; av.h = ac.h = H;
+        av.offx = ac.offx = ox; av.offy = ac.offy = oy;
+        av.data = bv; ac.data = bc;
+        qv.a = qc.a = qv.w = qc.w = W;
+        qv.b = qc.b = qv.h = qc.h = H;
+        qv.data = gv; qc.data = gc;
+
+        float sg = 0.5f + (float)(rnd() % 32u) * 0.25f;
+        memcpy(org, bv, (size_t)n * sizeof(int16_t));
+
+        int rv = v(&av, &qv, sg);
+        int rc = cr_gauss_edge_pad_15540(&ac, &qc, sg);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+
+        /* coverage: did any margin pixel change? */
+        for (int r = 0; r < b; r++) {
+            for (int c = 0; c < a; c++) {
+                if (bc[r * a + c] != org[r * a + c]) {
+                    found++;
+                    if (r < oy || r >= oy + H) rows_written++;
+                    if (c < ox || c >= ox + W) cols_written++;
+                }
+            }
+        }
+        cmp_buf("img", (const u8 *)bv, (const u8 *)bc,
+                (size_t)n * sizeof(int16_t), (u32)t);
+        cmp_buf("ang", (const u8 *)gv, (const u8 *)gc,
+                (size_t)W * H * sizeof(int16_t), (u32)t);
+    }
+    printf("  [15540] margin pixels changed=%d (top/bottom=%d left/right=%d)\n",
+           found, rows_written, cols_written);
+    if (g_fail == bad) end(); else printf("  FAIL cr_gauss_edge_pad_15540\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -14985,6 +15074,7 @@ int main(int argc, char **argv)
     test_slot_select_11170();
     test_slot_rank_u8_22b70();
     test_block_filter_222b0();
+    test_gauss_edge_pad_15540();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

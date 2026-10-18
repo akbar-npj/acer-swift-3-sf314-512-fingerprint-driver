@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **339** (95.5% of functions, 151,856 B = 89.6% of bytes) |
+| rewritten + parity-verified | **340** (95.8% of functions, 156,432 B = 92.3% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Ninety batches so far:
+Ninety-one batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -449,6 +449,16 @@ Ninety batches so far:
     100), then builds a Q6 mean-subtracted row buffer with mirrored edges and
     runs four 64-tap convolutions against the embedded 8x8 kernel table,
     writing the clamped `(32 + mean + v - conv) >> 6` result back (1 function).
+91. edge-oriented Gaussian padding:
+    `cr_gauss_edge_pad_15540` (4576 B) builds a 17-tap Gaussian window from
+    `sigma`, allocates five float planes (`17*dim`, `17*dim`, `9*dim`, `9*dim`,
+    `27*dim`), then fits nine orientation hypotheses along each of the four
+    image borders (top/bottom rows and left/right columns of `a2`), smooths the
+    nine scores with `cr_tri9_filter`, projects the winner through
+    `cr_affine_transform`, and splats the border pixels along the fitted
+    direction with `cr_splat_accum16`. Two division passes per axis write the
+    padded margin rows (`a1->a` stride, `offy` rows above and below) and
+    columns (`offx` columns left and right) of `a1` (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

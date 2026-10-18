@@ -5556,3 +5556,250 @@ found:
     cr_sized_free((void **)&buf);               /* 0x180022b38 */
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180015540 — edge-oriented Gaussian padding.
+ *
+ *   int fn(cr_image *a1, const cr_image *a2, float sigma)
+ *
+ * `a2` supplies the orientation field (int16 angles) and `a1` the pixels.
+ * The function builds a 17-tap Gaussian from `sigma`, allocates five float
+ * planes (17*dim, 17*dim, 9*dim, 9*dim, 27*dim floats, dim = max(w,h)+0x22),
+ * then runs four edge passes.  Each pass fits nine orientation hypotheses
+ * along one border (top / bottom / left / right), smooths the nine scores with
+ * the triangular 9-tap filter, projects the winning hypothesis through the
+ * affine basis, and splats the border pixels along the fitted direction with
+ * the Gaussian window.  Two division passes per axis then write the padded
+ * margin rows / columns of `a1`.
+ *
+ * The geometry the vendor assumes: the valid region is rows offy..offy+h-1 and
+ * columns offx..offx+w-1 of a stride-`a`, `b`-row buffer.  The orientation
+ * reads, oddly, use the unpadded coordinates while the pixel reads apply the
+ * offsets; both are transcribed verbatim.
+ *
+ * Float order is load-bearing: the vendor's "pi" is 0x1.921ff2p+1 (thirty
+ * ulps above the correctly rounded pi) and every division / negation is kept
+ * in the same order.
+ * ------------------------------------------------------------------------ */
+static const float cr_c15540_pi = 0x1.921ff2p+1f;   /* 3.1415998935699463 */
+
+/* angle = int16 * 1/256, wrapped by +180 when negative, then scaled to
+ * radians with the vendor's slightly-off pi. */
+static float cr_c15540_angle(int16_t px)
+{
+    float v = (float)px * 0.00390625f;
+    if (0.0f > v)
+        v += 180.0f;
+    v = v * cr_c15540_pi / 180.0f;
+    return v;
+}
+
+/* out = clamp(num/den) with the vendor's exact NaN / zero behaviour. */
+static int16_t cr_c15540_divclamp(float num, float den)
+{
+    float q = num / den;
+    int32_t v = -32768;
+    if (q > -32768.0f) {
+        v = 32767;
+        if (32767.0f > q)
+            v = (int32_t)q;
+    }
+    return (int16_t)v;
+}
+
+int cr_gauss_edge_pad_15540(cr_image *a1, const cr_image *a2, float sigma)
+{
+    float wnd[17];
+    float smp[16];
+    float cs, sn;
+    void *hdr = NULL, *p0 = NULL, *p1 = NULL, *p2 = NULL, *p3 = NULL,
+         *p4 = NULL;
+    int status;
+
+    if (a1->a <= a1->w)                     /* 0x180015561 */
+        return 0x69;
+    if (a1->b <= a1->h)                     /* 0x180015591 */
+        return 0x69;
+
+    {                                       /* 0x18001559a: 17-tap window */
+        float sg2 = sigma * sigma;
+        float g = -0.5f / sg2;
+        float sum = 0.0f;
+        for (int i = 0; i < 17; i++) {
+            float t = (float)i - 8.0f;
+            float e = cr_expf(t * (g * t));
+            wnd[i] = e;
+            sum += e;
+        }
+        for (int i = 0; i < 17; i++)
+            wnd[i] = wnd[i] / sum;
+    }
+
+    const int w = a1->w, h = a1->h, ox = a1->offx, oy = a1->offy;
+    const int b = a1->b, as = a1->a;
+    const int dim = (w > h ? w : h) + 0x22;
+    const int s17 = 17 * dim, s9 = 9 * dim, s27 = 27 * dim;
+    float *f0, *f1, *f2, *f3, *f4;
+    int16_t *d1 = (int16_t *)a1->data;
+    const int16_t *d2 = (const int16_t *)a2->data;
+
+    status = cr_pool_alloc5(&hdr, &p0, (uint32_t)s17 * 4,
+                            &p1, (uint32_t)s17 * 4,
+                            &p2, (uint32_t)s9 * 4,
+                            &p3, (uint32_t)s9 * 4,
+                            &p4, (uint32_t)s27 * 4);    /* 0x1800156cf */
+    if (status != 0)
+        return status;                      /* vendor skips the free */
+
+    f0 = (float *)p0; f1 = (float *)p1; f2 = (float *)p2;
+    f3 = (float *)p3; f4 = (float *)p4;
+
+    for (int i = 0; i < s17; i++) {         /* 0x1800156e3 */
+        f0[i] = 0.0f;
+        f1[i] = 0.0f;
+    }
+
+    /* ---- pass 1: fit along the top row, splat, write the top margin ---- */
+    for (int col = 0; col < w; col++) {     /* 0x180015732 */
+        float v = cr_c15540_angle(d2[col]);
+        cr_sincos_f32(&cs, &sn, v);
+        if (cs > 0.0f)
+            cr_line_orient_fit(smp, col, 0, -sn, cs, a1,
+                               f4 + 27 * col, f2 + 9 * col);
+        else
+            cr_line_orient_fit(smp, col, 0, sn, -cs, a1,
+                               f4 + 27 * col, f2 + 9 * col);
+    }
+    cr_tri9_filter(f2, f3, w);              /* 0x1800159b3 */
+
+    for (int col = 0; col < w; col++) {     /* 0x1800159b8 */
+        float v;
+        cr_affine_transform(smp, f4 + 27 * col, f3 + 9 * col);
+        v = cr_c15540_angle(d2[col]);
+        cr_sincos_f32(&cs, &sn, v);
+        cr_splat_accum16(wnd, smp, -cs, sn, f0, f1,
+                         (float)d1[as * oy + ox + col], col);
+    }
+
+    for (int col = 0; col < as; col++) {    /* 0x180015b07 */
+        const float *q0 = f0 + 17 * (col + 17 - oy);
+        const float *q1 = f1 + 17 * (col + 17 - oy);
+        for (int k = 0; k < oy; k++) {
+            if (q1[k] != 0.0f)
+                d1[(oy - 1 - k) * as + col] =
+                    cr_c15540_divclamp(q0[k], q1[k]);
+        }
+    }
+    for (int i = 0; i < s17; i++) {         /* 0x180015c00 */
+        f0[i] = 0.0f;
+        f1[i] = 0.0f;
+    }
+
+    /* ---- pass 2: fit along the bottom row, write the bottom margin ---- */
+    for (int col = 0; col < w; col++) {     /* 0x180015c52 */
+        float v = cr_c15540_angle(d2[a2->w * (h - 1) + col]);
+        cr_sincos_f32(&cs, &sn, v);
+        if (cs < 0.0f)
+            cr_line_orient_fit(smp, col, h - 1, -sn, cs, a1,
+                               f4 + 27 * col, f2 + 9 * col);
+        else
+            cr_line_orient_fit(smp, col, h - 1, sn, -cs, a1,
+                               f4 + 27 * col, f2 + 9 * col);
+    }
+    cr_tri9_filter(f2, f3, w);              /* 0x180015dc3 */
+
+    for (int col = 0; col < w; col++) {     /* 0x180015dc8 */
+        float v;
+        cr_affine_transform(smp, f4 + 27 * col, f3 + 9 * col);
+        v = cr_c15540_angle(d2[a2->w * (h - 1) + col]);
+        cr_sincos_f32(&cs, &sn, v);
+        cr_splat_accum16(wnd, smp, cs, sn, f0, f1,
+                         (float)d1[as * (oy + h - 1) + ox + col], col);
+    }
+
+    for (int col = 0; col < as; col++) {    /* 0x180015efe */
+        const float *q0 = f0 + 17 * (col + 17 - oy);
+        const float *q1 = f1 + 17 * (col + 17 - oy);
+        for (int k = 0; k < oy; k++) {
+            if (q1[k] != 0.0f)
+                d1[(oy + h + k) * as + col] =
+                    cr_c15540_divclamp(q0[k], q1[k]);
+        }
+    }
+    for (int i = 0; i < s17; i++) {         /* 0x180015ff0 */
+        f0[i] = 0.0f;
+        f1[i] = 0.0f;
+    }
+
+    /* ---- pass 3: fit along the left column, write the left margin ----- */
+    for (int row = 0; row < h; row++) {     /* 0x180016047 */
+        float v = cr_c15540_angle(d2[a2->w * row]);
+        cr_sincos_f32(&cs, &sn, v);
+        cr_line_orient_fit(smp, 0, row, sn, -cs, a1,
+                           f4 + 27 * row, f2 + 9 * row);
+    }
+    cr_tri9_filter(f2, f3, h);              /* 0x180016140 */
+
+    for (int row = 0; row < h; row++) {     /* 0x180016145 */
+        float v;
+        cr_affine_transform(smp, f4 + 27 * row, f3 + 9 * row);
+        v = cr_c15540_angle(d2[a2->w * row]);
+        cr_sincos_f32(&cs, &sn, v);
+        if (cs > 0.0f)
+            cr_splat_accum16(wnd, smp, -sn, cs, f0, f1,
+                             (float)d1[as * (oy + row) + ox], row);
+        else
+            cr_splat_accum16(wnd, smp, sn, -cs, f0, f1,
+                             (float)d1[as * (oy + row) + ox], row);
+    }
+
+    for (int row = 0; row < b; row++) {     /* 0x1800162e1 */
+        const float *q0 = f0 + 17 * (row + 17 - ox);
+        const float *q1 = f1 + 17 * (row + 17 - ox);
+        for (int k = 1; k <= ox; k++) {
+            if (q1[k - 1] != 0.0f)
+                d1[(ox - k) + as * row] =
+                    cr_c15540_divclamp(q0[k - 1], q1[k - 1]);
+        }
+    }
+    for (int i = 0; i < s17; i++) {         /* 0x1800163d7 */
+        f0[i] = 0.0f;
+        f1[i] = 0.0f;
+    }
+
+    /* ---- pass 4: fit along the right column, write the right margin --- */
+    for (int row = 0; row < h; row++) {     /* 0x180016424 */
+        float v = cr_c15540_angle(d2[a2->w * row + (w - 1)]);
+        cr_sincos_f32(&cs, &sn, v);
+        cr_line_orient_fit(smp, w - 1, row, -sn, cs, a1,
+                           f4 + 27 * row, f2 + 9 * row);
+    }
+    cr_tri9_filter(f2, f3, h);              /* 0x18001654a */
+
+    for (int row = 0; row < h; row++) {     /* 0x18001655b */
+        float v;
+        cr_affine_transform(smp, f4 + 27 * row, f3 + 9 * row);
+        v = cr_c15540_angle(d2[a2->w * row + (w - 1)]);
+        cr_sincos_f32(&cs, &sn, v);
+        /* the vendor's jbe takes the >= branch for NaN, hence !(cs < 0) */
+        if (!(cs < 0.0f))
+            cr_splat_accum16(wnd, smp, sn, cs, f0, f1,
+                             (float)d1[as * (oy + row) + ox + (w - 1)], row);
+        else
+            cr_splat_accum16(wnd, smp, -sn, -cs, f0, f1,
+                             (float)d1[as * (oy + row) + ox + (w - 1)], row);
+    }
+
+    for (int row = 0; row < b; row++) {     /* 0x180015880 */
+        const float *q0 = f0 + 17 * (row + 17 - ox);
+        const float *q1 = f1 + 17 * (row + 17 - ox);
+        for (int k = 0; k < ox; k++) {
+            if (q1[k] != 0.0f)
+                d1[(w + ox + k) + as * row] =
+                    cr_c15540_divclamp(q0[k], q1[k]);
+        }
+    }
+
+    cr_sized_free_if(&hdr);                 /* 0x18001596c */
+    return status;                          /* 0 */
+}

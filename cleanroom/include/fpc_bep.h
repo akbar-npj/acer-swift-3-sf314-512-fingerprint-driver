@@ -1149,5 +1149,7 @@ int      cr_slot_rank_u8_22b70(void *a1, const cr_image *a2, void *a3,
                                 const uint8_t *cfg, int flag); /* 0x180022b70 */
 int      cr_block_filter_222b0(cr_image *a1, int32_t *out,
                                const uint8_t *cfg, int a4);  /* 0x1800222b0 */
+int      cr_gauss_edge_pad_15540(cr_image *a1, const cr_image *a2,
+                                 float sigma);               /* 0x180015540 */
 
 #endif /* FPC_BEP_H */
