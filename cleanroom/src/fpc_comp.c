@@ -4541,3 +4541,280 @@ fail:
     cr_wrap_destroy((void **)(b + 8));
     return e;
 }
+
+/* 0x180039820 — multi-slot mask fusion driver.
+ *
+ * int cr_mask_dispatch_39820(void *a1, void *a2, void *a3, void *a4,
+ *                            void **slots, const void *cfg, int flag);
+ *
+ * Counts the non-NULL run slots[0..4] (slots[0] is dereferenced up front for
+ * the pixel geometry).  A single populated slot is a straight
+ * cr_mask_stage_208a0(a1, a2, ..., idx 0) passthrough.  Otherwise three
+ * saturation scores gate a selector (0.9*sc1 > sc0 and sc0 < sc2 -> 2), a
+ * 4-descriptor block is allocated (f32 dst + three u8 planes), two mask
+ * stages run (idx = selector, then idx = 1), two boxmax/FIR bitmaps are built
+ * from img[1] and a2, and two blurred-difference images are compared over the
+ * pixels both bitmaps cover.  When >74% of those pixels disagree and
+ * sc0 > sc1, a second pass stretches and refines the planes and blends them
+ * per pixel with a weighted mean; otherwise img[0]/img[1] are copied out
+ * verbatim.  Verified by difftest. */
+int cr_mask_dispatch_39820(void *a1, void *a2, void *a3, void *a4,
+                           void **slots, const void *cfg, int flag)
+{
+    const cr_pixbuf *s0 = (const cr_pixbuf *)slots[0];
+    int w = s0->w;                       /* 0x180039870 (sign-extended 16) */
+    int h = s0->h;                       /* 0x18003986b */
+    int cnt = 0;
+    int sel = 0;
+    int ret = 0;
+    int e;
+
+    if (slots[0] != NULL) {
+        cnt = 1;
+        while (cnt < 5 && slots[cnt] != NULL)
+            cnt++;
+    }
+
+    if (cnt == 1)
+        return cr_mask_stage_208a0((cr_image *)a1, (cr_image *)a2, a3, a4,
+                                   slots, (const uint8_t *)cfg, 0, flag);
+
+    {
+        int sc0 = 0, sc1 = 0, sc2 = 0;
+        cr_saturation_score(&sc0, (const cr_pixbuf *)slots[0]);
+        cr_saturation_score(&sc1, (const cr_pixbuf *)slots[1]);
+        if (cnt != 2) {
+            cr_saturation_score(&sc2, (const cr_pixbuf *)slots[2]);
+            if ((float)sc1 * 0.9f > (float)sc0) {          /* 0x18008c6d0 */
+                sel = 2;
+                if (!(sc0 < sc2))
+                    sel = 0;
+            }
+        }
+
+        cr_image img[4];
+        cr_image imga, imgb;
+        int npix = 0;
+
+        e = cr_image_alloc_f32(&img[0], w, h);
+        if (e != 0)
+            return e;
+        e = cr_image_alloc_u8((int *)&img[1], w, h);
+        if (e != 0) {
+            cr_cleanup_ptr8_clear_b(&img[0]);              /* 0x180039e60 */
+            return e;
+        }
+        e = cr_image_alloc_u8((int *)&img[2], w, h);
+        if (e != 0) {
+            cr_cleanup_ptr8_clear_b(&img[0]);              /* 0x180039e90 */
+            cr_cleanup_ptr8_a(&img[1]);
+            return e;
+        }
+        e = cr_image_alloc_u8((int *)&img[3], w, h);
+        if (e != 0) {
+            cr_cleanup_ptr8_clear_b(&img[0]);              /* 0x180039ea7 */
+            cr_cleanup_ptr8_a(&img[1]);
+            cr_cleanup_ptr8_a(&img[2]);
+            return e;
+        }
+
+        e = cr_mask_stage_208a0(&img[0], &img[1], a3, a4, slots,
+                                (const uint8_t *)cfg, sel, flag);
+        if (e != 0)
+            goto fail4;
+        e = cr_mask_stage_208a0((cr_image *)a1, (cr_image *)a2, a3, a4, slots,
+                                (const uint8_t *)cfg, 1, flag);
+        if (e != 0)
+            goto fail4;
+
+        /* 0x180023900(out, src, maskbyte, k, niter=0, sigma unused) */
+        e = cr_mask_boxmax_fir_clear(&img[2], &img[1], 0x0e, 0x0b, 0, 0.0f);
+        if (e != 0)
+            goto fail4;
+        e = cr_mask_boxmax_fir_clear(&img[3], (const cr_image *)a2,
+                                     0x0e, 0x07, 0, 0.0f);
+        if (e != 0)
+            goto fail4;
+
+        e = cr_image_alloc_u8((int *)&imga, img[0].w, img[0].h);
+        if (e != 0)
+            goto fail4;
+        e = cr_image_alloc_u8((int *)&imgb, img[0].w, img[0].h);
+        if (e != 0) {
+            cr_cleanup_ptr8_a(&imga);                      /* 0x180039f42 */
+            goto fail4;
+        }
+
+        {
+            uint8_t prm[16];
+            cr_fill(prm, 0, 0x10);
+            *(float *)(prm + 0) = 1.0f;                    /* 0x3f800000 */
+            *(float *)(prm + 4) = 1.5f;                    /* 0x3fc00000 */
+            prm[0xc] = 0;
+
+            e = cr_blur_diff_norm_u8(&imga, &img[0], prm);
+            if (e != 0)
+                goto failab;
+            e = cr_blur_diff_norm_u8(&imgb, (const cr_image *)a1, prm);
+            if (e != 0)
+                goto failab;
+        }
+
+        /* agreement over the pixels both bitmaps cover */
+        {
+            const uint8_t *d2 = (const uint8_t *)img[2].data;
+            const uint8_t *d3 = (const uint8_t *)img[3].data;
+            const uint8_t *da = (const uint8_t *)imga.data;
+            const uint8_t *db = (const uint8_t *)imgb.data;
+            int agree = 0, total = 0, pct;
+
+            npix = h * w;
+            for (int i = 0; i < npix; i++) {
+                if (d2[i] == 0)
+                    continue;
+                if (d3[i] == 0)
+                    continue;
+                {
+                    int a7b = da[i] >> 7;
+                    int b7b = (uint8_t)(~(uint32_t)db[i]) >> 7;
+                    if (a7b != b7b)
+                        agree++;
+                }
+                total++;
+            }
+
+            if (total <= 100)
+                goto freeab;                               /* 0x180039ec8 */
+            pct = (100 * agree) / total;
+            cr_cleanup_ptr8_a(&imga);
+            cr_cleanup_ptr8_a(&imgb);
+            if (pct <= 0x4a)
+                goto post;                                 /* 0x180039edc */
+
+            /* second pass: refine the two bitmap planes, stretch, blend */
+            e = cr_fir7_image_u8(&img[2], &img[2], 4.0f);  /* 0x18008c6d4 */
+            if (e != 0) {
+                ret = e;
+                goto fail4;
+            }
+            e = cr_fir7_image_u8(&img[2], &img[2], 4.0f);
+            if (e != 0) {
+                ret = e;
+                goto fail4;
+            }
+            e = cr_fir7_image_u8(&img[3], &img[3], 4.0f);
+            if (e != 0) {
+                ret = e;
+                goto fail4;
+            }
+            e = cr_fir7_image_u8(&img[3], &img[3], 4.0f);
+            if (e != 0) {
+                ret = e;
+                goto fail4;
+            }
+
+            e = cr_stretch_f32(&img[0], &img[1], 0x0e, 0.0f, 0.0f, 1);
+            if (e != 0) {
+                ret = e;
+                goto fail4;
+            }
+            e = cr_stretch_f32((cr_image *)a1, (const cr_image *)a2, 0x0e,
+                               0.0f, 0.0f, 1);
+            if (e != 0) {
+                ret = e;
+                goto fail4;
+            }
+
+            {
+                float       *f0 = (float *)img[0].data;
+                uint8_t     *m1 = (uint8_t *)img[1].data;
+                const uint8_t *p2 = (const uint8_t *)img[2].data;
+                const uint8_t *p3 = (const uint8_t *)img[3].data;
+                float       *o0 = (float *)((cr_image *)a1)->data;
+                uint8_t     *o1 = (uint8_t *)((cr_image *)a2)->data;
+
+                for (int i = 0; i < npix; i++) {
+                    uint8_t mb = m1[i];
+                    float   f2 = (float)p2[i];
+                    float   v0 = f0[i];
+                    uint8_t ob = o1[i];
+                    float   f3 = (float)p3[i];
+                    float   v1 = o0[i];
+                    float   sum = f2 + f3;
+
+                    if ((mb & 0x10) != 0) {
+                        if ((ob & 0x10) == 0 && sum != 0.0f) {
+                            /* fall through to the weighted mean */
+                        } else {
+                            o0[i] = 255.0f;            /* 0x18008c6d8 */
+                            m1[i] = 0x10;
+                            continue;
+                        }
+                    } else if (sum == 0.0f) {
+                        if ((ob & 0x10) != 0) {
+                            o0[i] = 255.0f;
+                            m1[i] = 0x10;
+                            continue;
+                        }
+                        if (v0 != 0.0f && v1 != 0.0f)
+                            o0[i] = (v0 + v1) * 0.5f;  /* 0x18008c6dc */
+                        else
+                            o0[i] = 0.0f;
+                        goto tag;
+                    }
+
+                    if (!(sum > 0.0f)) {               /* NaN takes this too */
+                        o0[i] = 0.0f;
+                    } else {
+                        o0[i] = (v0 * f2 + v1 * f3) / sum;
+                    }
+                tag:
+                    if ((mb & 0x04) != 0)
+                        m1[i] = 0x04;
+                    else if ((mb & 0x11) != 0 && (ob & 0x11) != 0)
+                        m1[i] = 0x01;
+                    else
+                        m1[i] = 0x02;
+                }
+            }
+            goto done;
+        }
+
+    freeab:
+        cr_cleanup_ptr8_a(&imga);
+        cr_cleanup_ptr8_a(&imgb);
+
+    post:
+        if (sc0 <= sc1)                                    /* 0x180039edc */
+            goto done;
+        if (sel != 0) {
+            e = cr_mask_stage_208a0((cr_image *)a1, (cr_image *)a2, a3, a4,
+                                    slots, (const uint8_t *)cfg, 0, flag);
+            if (e != 0) {
+                ret = e;
+                goto fail4;
+            }
+            goto done;
+        }
+        if (npix > 0) {
+            const float   *sf = (const float *)img[0].data;
+            const uint8_t *sb = (const uint8_t *)img[1].data;
+            float         *df = (float *)((cr_image *)a1)->data;
+            uint8_t       *db2 = (uint8_t *)((cr_image *)a2)->data;
+            for (int i = 0; i < npix; i++) {
+                df[i] = sf[i];
+                db2[i] = sb[i];
+            }
+        }
+        goto done;
+
+    failab:
+        cr_cleanup_ptr8_a(&imga);                          /* 0x180039e6d */
+        cr_cleanup_ptr8_a(&imgb);
+    fail4:
+        ret = e;
+    done:
+        cr_free_4slot_clear1(img);                         /* 0x180039e81 */
+        return ret;
+    }
+}

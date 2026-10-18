@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **335** (94.4% of functions, 144,080 B = 85.0% of bytes) |
+| rewritten + parity-verified | **336** (94.6% of functions, 146,192 B = 86.3% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Eighty-six batches so far:
+Eighty-seven batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -419,6 +419,12 @@ Eighty-six batches so far:
     (1 function). Also fixed three `cr_obj_ctor_20aa0` transcription errors
     found while wiring it up (fill target, sel-5 buffer fields, sel-2 first
     allocation status).
+87. multi-slot mask fusion driver:
+    `cr_mask_dispatch_39820` (2112 B) counts the populated slots, short-circuits
+    a single slot to one mask stage, and otherwise runs the five-slot fusion:
+    saturation-gated selector, two mask stages, two boxmax/FIR bitmaps, an
+    agreement score over the covered pixels, then either a stretch + per-pixel
+    weighted blend or a straight copy-out (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
