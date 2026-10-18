@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **340** (95.8% of functions, 156,432 B = 92.3% of bytes) |
+| rewritten + parity-verified | **341** (96.1% of functions, 157,568 B = 93.0% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Ninety-one batches so far:
+Ninety-two batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -459,6 +459,17 @@ Ninety-one batches so far:
     direction with `cr_splat_accum16`. Two division passes per axis write the
     padded margin rows (`a1->a` stride, `offy` rows above and below) and
     columns (`offx` columns left and right) of `a1` (1 function).
+92. orientation-mapped kernel-bank padding + correlation:
+    `cr_pad_filter_12aa0` (1136 B) pulls the descriptor tag (`K=9`, 501-kernel
+    bank) from `cr_desc_get_tag_ptr`, allocates a `w*h*4` int32 scratch and an
+    `((w+K+2)&~3) x (h+K-1)` padded image, and blits the source in with a
+    `(K-1)/2` margin using extend / fill-zero / extend / mirror for modes 0-3
+    (mode 0 also edge-pads the subview with `cr_gauss_edge_pad_15540`). The
+    orientation map is rescaled in place from degrees*256 to kernel indices,
+    `cr_corr_kbank` correlates the padded image with `kbank[map[i]]`, and the
+    int32 results are min/max-normalised to int16 with `scale = range/16384+1`
+    (1 function). It also fixed `cr_desc_get_tag_ptr` to hand out the embedded
+    501x81 kernel bank at `0x180145240` (new `src/fpc_kbank.c`).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

@@ -579,7 +579,8 @@ int      cr_bitmap_centroid(const cr_bitmap_desc *bm, int win_h, int win_w,
 
 /* ---- batch 36: small descriptor / table-pointer getters ------------------- */
 /* These dispatch on a byte selector; pointer stores from the vendor's
- * read-only data section are zeroed (cleanroom has no vendor tables).
+ * read-only data section are zeroed (cleanroom has no vendor tables) except
+ * the plain data tables at 0x1801174e0 and 0x180145240, which are embedded.
  * The difftest compares status + scalar fields + pointer NULL-ness. */
 uint64_t cr_desc_get_ptr1(void *p, char sel);                            /* 0x18002aeb0 */
 uint64_t cr_desc_get_ptr_size(void *p1, uint32_t *p2, char sel);          /* 0x180012f30 */
@@ -1151,5 +1152,11 @@ int      cr_block_filter_222b0(cr_image *a1, int32_t *out,
                                const uint8_t *cfg, int a4);  /* 0x1800222b0 */
 int      cr_gauss_edge_pad_15540(cr_image *a1, const cr_image *a2,
                                  float sigma);               /* 0x180015540 */
+int      cr_pad_filter_12aa0(cr_image *a1, const cr_image *a2, int mode,
+                             int8_t sel);                   /* 0x180012aa0 */
+
+/* 0x180145240 — 501-entry bank of 9x9 int16 correlation kernels handed out by
+ * cr_desc_get_tag_ptr selector 0 (tag 0x1f500000009: K=9, count=501). */
+extern const int16_t cr_kbank_145240[501 * 81];
 
 #endif /* FPC_BEP_H */

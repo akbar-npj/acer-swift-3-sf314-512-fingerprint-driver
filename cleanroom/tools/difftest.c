@@ -9755,8 +9755,11 @@ static void test_desc_getters(void)
             uint64_t rv = v(vb, (char)s);
             uint64_t rc = cr_desc_get_tag_ptr(cb, (char)s);
             if (rv != rc) mismatch("ret", (u32)s, rv, rc);
-            /* q[0] is a scalar tag; q[1] is a pointer (skip) */
+            /* q[0] is a scalar tag; q[1] is the kernel-bank pointer, which we
+             * embed, so only NULL-ness can be compared */
             if (vb[0] != cb[0]) mismatch("tag", (u32)s, vb[0], cb[0]);
+            if ((vb[1] != 0) != (cb[1] != 0))
+                mismatch("tagptr", (u32)s, vb[1], cb[1]);
         }
         if (g_fail == bad) end(); else printf("  FAIL cr_desc_get_tag_ptr\n");
     }
@@ -14646,6 +14649,88 @@ static void test_gauss_edge_pad_15540(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_gauss_edge_pad_15540\n");
 }
 
+static void test_pad_filter_12aa0(void)
+{
+    typedef int (WINAPI *v_t)(cr_image *, const cr_image *, int, int8_t);
+    v_t v = (v_t)fn_at(RVA(0x180012aa0));
+    begin("cr_pad_filter_12aa0");
+    int bad = g_fail;
+    static int16_t srcv[64 * 64], srcc[64 * 64];
+    static int16_t outv[64 * 64], outc[64 * 64];
+    static int16_t angv[64 * 64], angc[64 * 64], angorg[64 * 64];
+    int nonzero = 0, angchanged = 0;
+
+    for (int t = 0; t < 400; t++) {
+        int W = 9 + (int)(rnd() % 24u);
+        int H = 9 + (int)(rnd() % 24u);
+        int n = W * H;
+        int mode = (int)(rnd() % 5u);           /* 4 => invalid mode */
+        int sel  = (t % 41 == 0) ? 1 : 0;       /* occasionally invalid */
+        int style = t % 4;
+
+        if (t % 53 == 0) mode = 256;            /* low byte is what matters */
+        if (t % 67 == 0) mode = -1;
+
+        for (int i = 0; i < n; i++) {
+            int16_t p;
+            if (style == 0)
+                p = (int16_t)(int)(rnd() % 65536u) - 32768;
+            else if (style == 1)
+                p = (int16_t)((int)(rnd() % 2001u) - 1000);
+            else if (style == 2)
+                p = (int16_t)((i % W) * 400 - 8000);
+            else
+                p = (int16_t)(((i / W) & 1) ? 9000 : -9000);
+            srcv[i] = srcc[i] = p;
+        }
+        /* orientation map: stay inside -20000..20000 so the vendor's
+         * (v + 0x5a00) * 500/46080 rescale lands in the 0..500 kernel range */
+        for (int i = 0; i < n; i++) {
+            int16_t p;
+            if (style == 0)
+                p = (int16_t)((int)(rnd() % 40001u) - 20000);
+            else if (style == 1)
+                p = (int16_t)((i % W) * 1200 - 20000);
+            else if (style == 2)
+                p = (int16_t)(((i / W) * 1500) % 40001 - 20000);
+            else
+                p = (int16_t)(((i % W) / 3 + (i / W) / 3) & 1 ? 15000 : -15000);
+            angv[i] = angc[i] = p;
+        }
+
+        cr_image av, ac, qv, qc;
+        memset(&av, 0, sizeof av); memset(&ac, 0, sizeof ac);
+        memset(&qv, 0, sizeof qv); memset(&qc, 0, sizeof qc);
+        av.a = ac.a = av.w = ac.w = W;
+        av.b = ac.b = av.h = ac.h = H;
+        qv.a = qc.a = qv.w = qc.w = W;
+        qv.b = qc.b = qv.h = qc.h = H;
+        qv.data = angv; qc.data = angc;
+
+        /* a1 is in/out: the source pixels are overwritten by the result */
+        memcpy(outv, srcv, (size_t)n * sizeof(int16_t));
+        memcpy(outc, srcc, (size_t)n * sizeof(int16_t));
+        memcpy(angorg, angv, (size_t)n * sizeof(int16_t));
+        av.data = outv; ac.data = outc;
+
+        int rv = v(&av, &qv, mode, (int8_t)sel);
+        int rc = cr_pad_filter_12aa0(&ac, &qc, mode, (int8_t)sel);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+
+        cmp_buf("out", (const u8 *)outv, (const u8 *)outc,
+                (size_t)n * sizeof(int16_t), (u32)t);
+        cmp_buf("ang", (const u8 *)angv, (const u8 *)angc,
+                (size_t)n * sizeof(int16_t), (u32)t);
+
+        for (int i = 0; i < n; i++) {
+            if (outc[i] != srcv[i]) nonzero++;
+            if (angc[i] != angorg[i]) angchanged++;
+        }
+    }
+    printf("  [12aa0] output written=%d, map rescaled=%d\n", nonzero, angchanged);
+    if (g_fail == bad) end(); else printf("  FAIL cr_pad_filter_12aa0\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -15075,6 +15160,7 @@ int main(int argc, char **argv)
     test_slot_rank_u8_22b70();
     test_block_filter_222b0();
     test_gauss_edge_pad_15540();
+    test_pad_filter_12aa0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -5803,3 +5803,150 @@ int cr_gauss_edge_pad_15540(cr_image *a1, const cr_image *a2, float sigma)
     cr_sized_free_if(&hdr);                 /* 0x18001596c */
     return status;                          /* 0 */
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x180012aa0 — pad an image to a kernel-sized border, then correlate it with
+ * the descriptor's 9x9 kernel bank under a per-pixel orientation map.
+ *
+ *   Args (ms_abi): rcx = a1 (in/out image; its pixels are the correlation
+ *                  source and its data receives the normalised int16 result),
+ *                  rdx = a2 (orientation map, int16 degrees*256, rescaled in
+ *                  place), r8d = mode (only the low byte is compared),
+ *                  r9b = descriptor selector.
+ *
+ *   cr_desc_get_tag_ptr(sel) must succeed and yield an odd kernel size K
+ *   (tag[0] low dword; selector 0 gives 9 with a 501-kernel bank in tag[1]).
+ *
+ *   The padded image is allocated as ((w + K + 2) & ~3) x (h + K - 1) and the
+ *   source is blitted into it with a margin of m = (K-1)/2 on every side:
+ *       mode 0: extend, then the (w x h) subview is edge-padded by the
+ *               orientation-aware Gaussian (sigma 8) driven by a2
+ *       mode 1: fill border with 0
+ *       mode 2: extend
+ *       mode 3: mirror
+ *   a2's map is then rescaled in place by (v + 0x5a00) * (count-1)/46080,
+ *   which maps the -90..+90 degree range onto kernel indices 0..count-1, and
+ *   cr_corr_kbank correlates the padded image with kernel[map[i]].
+ *
+ *   The int32 correlations are normalised to int16 by
+ *       range = max - min;  scale = range/16384 + 1;
+ *       a1->data[i] = (corr[i] - min + scale/2) / scale.
+ *
+ *   Every failure after the two allocations frees both and returns the status
+ *   (the descriptor failure returns immediately, the bad-mode path frees the
+ *   image before the scratch buffer).
+ * ------------------------------------------------------------------------ */
+int cr_pad_filter_12aa0(cr_image *a1, const cr_image *a2, int mode, int8_t sel)
+{
+    uint64_t tag[2] = { 0, 0 };
+    void    *slot = NULL;
+    cr_image img;
+    cr_image sub;
+    uint32_t st;
+    int      K, m, w, h, npix;
+
+    st = (uint32_t)cr_desc_get_tag_ptr(tag, sel);         /* 0x180012acf */
+    if (st != 0)
+        return (int)st;
+
+    K = (int)(uint32_t)tag[0];
+    if (!(K & 1))
+        return 0x69;                                      /* 0x180012ae2 */
+
+    w    = a1->w;
+    h    = a1->h;
+    npix = w * h;
+
+    st = (uint32_t)cr_malloc_aligned16(&slot, (size_t)((int64_t)npix * 4));
+    if (st != 0)
+        return (int)st;                                   /* 0x180012b25 */
+
+    st = (uint32_t)cr_image_alloc_s16((int *)&img, (w + K + 2) & ~3,
+                                      h + K - 1);
+    if (st != 0) {                                        /* 0x180012d2b */
+        cr_sized_free(&slot);
+        return (int)st;
+    }
+
+    m = (K - 1) >> 1;                                     /* 0x180012b7b */
+    switch ((int8_t)mode) {
+    case 0:                                               /* 0x180012d49 */
+        st = cr_blit_extend_s16(&img, a1, m, m, m, img.w - w - m);
+        if (st != 0) goto fail_slot_img;
+        cr_image_subview(&sub, &img, m, m, w, h);
+        st = (uint32_t)cr_gauss_edge_pad_15540(&sub, a2, 8.0f);
+        if (st != 0) goto fail_slot_img;
+        break;
+    case 1:                                               /* 0x180012e10 */
+        st = cr_blit_fillborder_s16(&img, a1, m, m, m, img.w - w - m, 0);
+        if (st != 0) goto fail_slot_img;
+        break;
+    case 2:                                               /* 0x180012e70 */
+        st = cr_blit_extend_s16(&img, a1, m, m, m, img.w - w - m);
+        if (st != 0) goto fail_slot_img;
+        break;
+    case 3:                                               /* 0x180012ba6 */
+        st = cr_blit_mirror_s16(&img, a1, m, m, m, img.w - w - m);
+        if (st != 0) goto fail_slot_img;
+        break;
+    default:                                              /* 0x180012e50 */
+        st = 0x69;
+        goto fail_img_slot;
+    }
+
+    /* 0x180012bd7 — rescale the orientation map in place */
+    if (npix > 0) {
+        float scale = ((float)(int32_t)(tag[0] >> 32) - 1.0f) / 46080.0f;
+        int16_t *p = (int16_t *)a2->data;
+        for (int i = 0; i < npix; i++) {
+            float f = (float)((int32_t)p[i] + 0x5a00);
+            f = f * scale;
+            p[i] = (int16_t)(int32_t)f;
+        }
+    }
+
+    st = (uint32_t)cr_corr_kbank((int32_t *)slot, (const int16_t *)img.data,
+                                 (const int16_t *)tag[1],
+                                 (const int16_t *)a2->data,
+                                 (long long)(int32_t)(tag[0] >> 32),
+                                 w, h, img.w, img.h, K);
+    if (st != 0) goto fail_slot_img;                      /* 0x180012df1 */
+
+    cr_cleanup_ptr8_clear(&img);                          /* 0x180012c9c */
+
+    if (npix > 0) {
+        const int32_t *c = (const int32_t *)slot;
+        int32_t max = (int32_t)0x80000000, min = 0x7fffffff;
+        int32_t range, sc, half;
+        int16_t *o = (int16_t *)a1->data;
+
+        for (int i = 0; i < npix; i++) {                  /* 0x180012cc0 */
+            if (max < c[i]) max = c[i];
+            if (min > c[i]) min = c[i];
+        }
+        range = (int32_t)((uint32_t)max - (uint32_t)min);
+        /* 0x180012ce7 — vendor magic-multiply sequence (0x80020009); it is a
+         * signed division by 16384 with the +1 folded in, kept verbatim here */
+        {
+            int64_t  prod = (int64_t)range * (-2147352567LL);
+            uint32_t acc  = (uint32_t)((uint64_t)prod >> 32) + (uint32_t)range;
+            sc = ((int32_t)acc >> 13) - (range >> 31) + 1;
+        }
+        half  = (sc + (sc < 0 ? 1 : 0)) >> 1;             /* 0x180012d03 */
+        for (int i = 0; i < npix; i++)                    /* 0x180012d10 */
+            o[i] = (int16_t)((c[i] - min + half) / sc);
+    }
+
+    cr_sized_free(&slot);                                 /* 0x180012d2b */
+    return 0;
+
+fail_slot_img:                                            /* 0x180012dd0 */
+    cr_sized_free(&slot);
+    cr_cleanup_ptr8_clear(&img);
+    return (int)st;
+
+fail_img_slot:
+    cr_cleanup_ptr8_clear(&img);
+    cr_sized_free(&slot);
+    return (int)st;
+}

@@ -100,7 +100,8 @@ uint64_t cr_desc_get_tag_ptr(void *p, char sel)
     q[0] = 0;
     q[1] = 0;
     if (sel == 0) {
-        q[0] = 0x1f500000009ULL;
+        q[0] = 0x1f500000009ULL;          /* K = 9, kernel count = 501 */
+        q[1] = (uint64_t)(uintptr_t)cr_kbank_145240;
         return 0;
     }
     return 1;
