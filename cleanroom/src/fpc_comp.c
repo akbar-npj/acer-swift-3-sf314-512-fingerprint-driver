@@ -13,6 +13,7 @@
  */
 #include "fpc_bep.h"
 #include <float.h>
+#include <stdio.h>
 
 static inline void *desc_data(const void *d) {
     const unsigned char *p = (const unsigned char *)d;
@@ -3974,4 +3975,362 @@ fir7:
 cleanup:
     cr_free_9slot_clear6(im);
     return rc;
+}
+
+/* 0x180026410 — masked contrast/sharpness normalisation of a byte image.
+ *
+ * int cr_masked_contrast_norm_26410(int *out1, int *out2, cr_image *mask,
+ *                                  const cr_image *src, const void *ctx);
+ *
+ * The vendor reads TWO stack slots, arg5 ([RBP+0x30]) and arg6 ([RBP+0x38]),
+ * both pointing at the same context blob; the difftest passes one ctx for both.
+ * Layout of that blob:
+ *   +0x04 float  sigma0            (boxmax blur sigma, used for img1)
+ *   +0x08 int8   flag              (>0 -> refptr = ref; <=0 -> refptr = img2)
+ *   +0x50 embedded cr_image gsrc   (gauss source; its .data at +0x58 == ref)
+ *   +0x58 int16* ref               (== gsrc.data; the reference row)
+ * img1 = boxmax(src, sigma0); out1 = sharpness(img1,mask).  img2 = gauss(gsrc,
+ * 0.7); img2 -= ref -> residual.  A row-FIR over the masked image yields a
+ * regression (cov/denom) -> sharpness.  Finally, for every pixel,
+ *   v = (mask - (refptr-mean)*sharpness)*img1 + (255-img1)*max_mask,
+ *   v = v/255 + 0.5, then clamp: v<=0 -> img1[i]; v>=255 -> 0xff; else trunc.
+ * out2 = sharpness(img1,mask) after the rewrite.  Verified by difftest. */
+int cr_masked_contrast_norm_26410(int *out1, int *out2, cr_image *mask,
+                                  const cr_image *src, const void *ctx)
+{
+    const uint8_t *c = (const uint8_t *)ctx;
+    int w  = mask->w;
+    int h  = mask->h;
+    uint8_t *mdata = (uint8_t *)mask->data;
+    int e;
+
+    cr_image img1;                                   /* u8 scratch (RSP+0xa0) */
+    if ((e = cr_image_alloc_u8((int *)&img1, w, h)) != 0)
+        return e;
+
+    float sigma0 = *(const float *)(c + 0x4);
+    if ((e = cr_bitmap_unpack_boxmax_fir(&img1, src, 1, 1, sigma0)) != 0) {
+        cr_cleanup_ptr8_a(&img1);
+        return e;
+    }
+    if ((e = cr_masked_sharpness(out1, mask, &img1.data)) != 0) {
+        cr_cleanup_ptr8_a(&img1);
+        return e;
+    }
+
+    cr_image img2;                                   /* s16 scratch (RSP+0x80) */
+    if ((e = cr_image_alloc_s16((int *)&img2, w, h)) != 0) {
+        cr_cleanup_ptr8_a(&img1);
+        return e;
+    }
+
+    const cr_image *gsrc = (const cr_image *)(c + 0x50);
+    if ((e = cr_gauss_fir7_apply(&img2, (void *)gsrc, 0.0f, 0.0f, 0.7f)) != 0) {
+        cr_cleanup_ptr8_a(&img1);
+        cr_cleanup_ptr8_clear(&img2);
+        return e;
+    }
+
+    int      n = w * h;
+    /* +0x58 holds a pointer to the int16 reference row (it is the .data field
+     * of the embedded cr_image at +0x50, i.e. == gsrc.data). */
+    const int16_t *ref = *(const int16_t * const *)(c + 0x58);
+    int16_t *i2  = (int16_t *)img2.data;
+    if (n > 0) {
+        for (int i = 0; i < n; i++)
+            i2[i] = (int16_t)(ref[i] - i2[i]);      /* img2.data = ref - smooth */
+    }
+    /* flag (signed byte at ctx+0x8) selects which array feeds the regression */
+    const int16_t *refptr = (*(const int8_t *)(c + 0x8) > 0) ? ref : i2;
+
+    uint8_t *i1 = (uint8_t *)img1.data;
+    int    count = 0;
+    float  sum = 0.0f, sumsq = 0.0f;                 /* first windowed loop */
+    if (h > 0) {
+        for (int r = 0; r < h; r++) {
+            if (r <= 9 || r >= h - 10) continue;
+            for (int col = 0; col < w; col++) {
+                if (col <= 9 || col >= w - 10) continue;
+                if (i1[r * w + col] != 0xff) continue;
+                int16_t v = i2[r * w + col];
+                count++;
+                sum   += (float)v;
+                sumsq += (float)((int)v * (int)v);
+            }
+        }
+    }
+
+    cr_fir_row_ctx firctx;                            /* RSP+0xc0 */
+    if ((e = cr_fir_ctx_init(&firctx, mask, 0.7f, 7, 0)) != 0) {
+        cr_cleanup_ptr8_a(&img1);
+        cr_cleanup_ptr8_clear(&img2);
+        return e;
+    }
+    int16_t *tmp = NULL;                              /* RSP+0x78, int16[w] */
+    if ((e = cr_malloc_aligned16((void **)&tmp,
+                                 (size_t)(2u * (uint32_t)w))) != 0) {
+        cr_cleanup_ptr8_a(&img1);
+        cr_cleanup_ptr8_clear(&img2);
+        cr_sized_free((void **)&firctx.base);
+        return e;
+    }
+
+    float cov = 0.0f;                                /* second windowed loop */
+    if (h > 0) {
+        for (int r2 = 0; r2 < h; r2++) {
+            if ((e = cr_row_fir_i16(tmp, &firctx, mask, r2)) != 0) {
+                cr_cleanup_ptr8_a(&img1);
+                cr_cleanup_ptr8_clear(&img2);
+                cr_sized_free((void **)&firctx.base);
+                cr_sized_free((void **)&tmp);
+                return e;
+            }
+            for (int col = 0; col < w; col++)        /* tmp = mask*64 - firval */
+                tmp[col] = (int16_t)(((int)mdata[r2 * w + col] << 6)
+                                     - (int)tmp[col]);
+            if (r2 <= 9 || r2 >= h - 10) continue;
+            for (int col = 0; col < w; col++) {
+                if (col <= 9 || col >= w - 10) continue;
+                if (i1[r2 * w + col] != 0xff) continue;
+                int16_t v = i2[r2 * w + col];
+                float x = (float)count * (float)v - sum;
+                cov += x * (float)(int16_t)tmp[col];
+            }
+        }
+    }
+
+    /* sharpness = 0.015625 if denom==0 else (cov/denom)*0.015625 */
+    float denom = (float)count * sumsq - sum * sum;
+    float sharpness = (denom == 0.0f)
+                          ? 0.015625f
+                          : (cov / denom) * 0.015625f;
+
+    float sum2 = 0.0f, max4 = 0.0f;                  /* mean of ref + max mask */
+    if (n > 0) {
+        for (int i = 0; i < n; i++) {
+            sum2 += (float)refptr[i];
+            float mv = (float)mdata[i];
+            if (mv > max4) max4 = mv;
+        }
+    }
+    float mean = sum2 / (float)n;
+
+    if (n > 0) {                                     /* in-place mask rewrite */
+        for (int i = 0; i < n; i++) {
+            float maskval = (float)mdata[i];
+            float refval  = (float)refptr[i];
+            float img1val = (float)i1[i];
+            float v = (maskval - (refval - mean) * sharpness) * img1val
+                    + (255.0f - img1val) * max4;
+            v = v / 255.0f + 0.5f;
+            int b;
+            if (v <= 0.0f)      b = 0;       /* EAX zeroed at 0x91f: store 0 */
+            else if (v >= 255.0f) b = 0xff;  /* AL = 0xff */
+            else                 b = (int)v; /* CVTTSS2SI: truncate */
+            mdata[i] = (uint8_t)b;
+        }
+    }
+
+    int ret = cr_masked_sharpness(out2, mask, &img1.data);
+
+    cr_sized_free((void **)&tmp);
+    cr_sized_free((void **)&firctx.base);
+    cr_cleanup_ptr8_clear(&img2);
+    cr_cleanup_ptr8_a(&img1);                         /* vendor frees img1 last */
+    return ret;
+}
+
+/* 0x1800208a0 — mask/feature stage driver.
+ *
+ * int cr_mask_stage_208a0(cr_image *dst, cr_image *img, const void *a3,
+ *                         const void *a4, void **slots, const uint8_t *cfg,
+ *                         int idx, int flag);
+ *
+ * slots[0] points at a {int16 w; int16 h; ...} descriptor; an int16 image is
+ * allocated at that size and filled from slot `idx` (shift 6).  The byte image
+ * `img` is cleared to 2, pixels with a non-positive int16 value become 1, and
+ * the int16 plane is threshold-marked at *(int16*)(cfg+0x2c) — via
+ * cr_thresh_open_mark when cfg[9] == 3, else cr_image_threshold_mark.  The
+ * index list at slots[0x0e] is stamped in and the plane is scaled to f32 into
+ * `dst`.  When cfg[0x40] is non-zero a masked bitmap is built from `img` and
+ * cr_template_remove_25960 blends it into `dst` with selector cfg[0x40].
+ * Then cr_mask_norm_32580(dst, a4, slots, img, a3, idx, cfg, flag) flattens,
+ * and a positive cfg[0x30] runs the block-variance gate over cfg+0x30 with
+ * block width *(int16*)(cfg+6).  Finally cr_mask_pipeline_25050(dst,
+ * slots[0x0e], cfg+0xc0, img) returns.  Verified by difftest. */
+int cr_mask_stage_208a0(cr_image *dst, cr_image *img, const void *a3,
+                        const void *a4, void **slots, const uint8_t *cfg,
+                        int idx, int flag)
+{
+    const int16_t *d = *(const int16_t * const *)slots;
+    cr_image local;                                  /* s16 scratch */
+    int e = cr_image_alloc_s16((int *)&local, d[0], d[1]);
+    if (e != 0)
+        return e;
+
+    e = cr_image_fill_desc(slots, idx, 6, &local);
+    if (e != 0) {
+        cr_cleanup_ptr8_clear(&local);
+        return e;
+    }
+
+    cr_image_fill_const2(img);
+    cr_image_mark_nonpos(img, &local);
+    if ((int8_t)cfg[9] == 3) {
+        e = cr_thresh_open_mark(img, &local, *(const int16_t *)(cfg + 0x2c));
+        if (e != 0) {
+            cr_cleanup_ptr8_clear(&local);
+            return e;
+        }
+    } else {
+        cr_image_threshold_mark(img, &local, *(const int16_t *)(cfg + 0x2c));
+    }
+    cr_image_mark_indices(img, (const cr_index_list *)slots[0x0e]);
+    cr_i16_to_f32_scaled(dst, &local, 6);
+    cr_cleanup_ptr8_clear(&local);
+
+    if (cfg[0x40] != 0) {
+        cr_image mask;
+        e = cr_bitmap_build_masked(&mask, img, cfg);
+        if (e != 0)
+            return e;
+        e = cr_template_remove_25960(dst, &mask, (int8_t)cfg[0x40]);
+        if (e != 0) {
+            cr_cleanup_ptr8_clear(&mask);
+            return e;
+        }
+        cr_cleanup_ptr8_clear(&mask);
+    }
+
+    e = cr_mask_norm_32580(dst, (void *)a4, slots, img, a3, idx, cfg, flag);
+    if (e != 0)
+        return e;
+
+    if ((int8_t)cfg[0x30] > 0) {
+        float res;
+        e = cr_block_variance_run_42150(dst, cfg + 0x30,
+                                        *(const int16_t *)(cfg + 6), &res);
+        if (e != 0)
+            return e;
+    }
+    return cr_mask_pipeline_25050(dst, slots[0x0e], cfg + 0xc0, img);
+}
+
+/* 0x180034ed0 — descriptor/point-grid feature pipeline.
+ *
+ * int cr_feature_pipeline_34ed0(void *obj, const void *arg2, int arg3,
+ *                               const uint8_t *cfg);
+ *
+ * `out = *(void**)(obj+0x48)` is the output descriptor; its count word at
+ * +0x20 is cleared first.  A type descriptor is built from cfg[0xb] (only
+ * types 2 and 4 are accepted) and a null cr_image is initialised.  Two
+ * scratch buffers are allocated on `out` (+0 the int16 plane of 2*h bytes,
+ * +8 the f32 plane of 4*h bytes, h = *(int*)(cfg+0x14)), the grid object at
+ * obj+0x20 is constructed over them, populated from obj (cfg dispatch), and
+ * the point selector runs.  The resulting count is stored at out+0x20, the
+ * grid is released twice, and when arg3 != 0 the obj+0x20 buffer is cleared.
+ * out+0x31 = the descriptor's type byte, out+0x30 = cfg[0xc].  With a
+ * positive count the angle/field descriptor buffer is allocated at out+0x28
+ * (count * type), the field is downsampled, packed, optionally palette
+ * remapped (cfg[0x3d] != 0), out+0x58 is zeroed and the bit table allocated
+ * at out+0x50.  Returns the first failing status, else 0.  Verified by
+ * difftest. */
+int cr_feature_pipeline_34ed0(void *obj, const void *arg2, int arg3,
+                              const uint8_t *cfg)
+{
+    uint8_t *o = (uint8_t *)obj;
+    uint8_t *out = (uint8_t *)*(void **)(o + 0x48);
+    *(uint32_t *)(out + 0x20) = 0;
+
+    uint8_t tdesc[0x20];
+    uint64_t r = cr_type_desc_getter(tdesc, (char)cfg[0xb]);
+    if ((int)r != 0)
+        return (int)r;
+
+    cr_image img;
+    r = cr_image_set(&img, NULL, 0, 0);
+    if ((int)r != 0)
+        return (int)r;
+
+    int quad = cr_read_quad((const int *)obj);
+
+    int e = cr_malloc_aligned16((void **)out,
+                                (size_t)(*(const int32_t *)(cfg + 0x14) * 2));
+    if (e != 0) {
+        cr_free_3ptr_and8((void **)out, &img);
+        return e;
+    }
+    e = cr_malloc_aligned16((void **)(out + 8),
+                            (size_t)*(const uint32_t *)(cfg + 0x14) * 4u);
+    if (e != 0) {
+        cr_free_3ptr_and8((void **)out, &img);
+        return e;
+    }
+
+    uint8_t grid[0x50];
+    e = cr_obj_ctor_20aa0(grid, o + 0x20, *(void **)out, *(void **)(out + 8),
+                          quad, cfg);
+    if (e != 0) {
+        cr_free_4slot_guard(grid);
+        cr_free_3ptr_and8((void **)out, &img);
+        return e;
+    }
+    e = cr_grid_populate_dispatch_38020((cr_grid *)grid, (const cr_image *)obj,
+                                        o + 0x20, cfg);
+    if (e != 0) {
+        cr_free_4slot_guard(grid);
+        cr_free_3ptr_and8((void **)out, &img);
+        return e;
+    }
+    e = cr_pick_points_dispatch_2b680(grid, o + 0x20, cfg);
+    if (e != 0) {
+        cr_free_4slot_guard(grid);
+        cr_free_3ptr_and8((void **)out, &img);
+        return e;
+    }
+
+    *(uint32_t *)(out + 0x20) = *(const int32_t *)(grid + 0x40);
+    cr_free_4slot_guard(grid);
+    cr_free_4slot_guard(grid);
+    if (arg3 != 0)
+        cr_cleanup_ptr8_b(o + 0x20);
+    *(uint8_t *)(out + 0x31) = tdesc[8];
+    *(uint8_t *)(out + 0x30) = cfg[0xc];
+
+    if (*(int32_t *)(out + 0x20) > 0) {
+        e = cr_malloc_aligned16((void **)(out + 0x28),
+                                (size_t)(*(const int32_t *)(out + 0x20)
+                                         * (uint32_t)tdesc[8]));
+        if (e != 0) {
+            cr_free_3ptr_and8((void **)out, &img);
+            return e;
+        }
+        e = cr_angle_field_ds_run((cr_af_ds_desc *)out, (const cr_image *)obj,
+                                  cfg);
+        if (e != 0) {
+            cr_free_3ptr_and8((void **)out, &img);
+            return e;
+        }
+        e = cr_feat_pack_0e850((cr_image *)obj, (cr_feat_obj *)out, cfg);
+        if (e != 0) {
+            cr_free_3ptr_and8((void **)out, &img);
+            return e;
+        }
+        if ((int8_t)cfg[0x3d] != 0) {
+            e = cr_palette_remap(obj, (const cr_image *)arg2, cfg);
+            if (e != 0) {
+                cr_free_3ptr_and8((void **)out, &img);
+                return e;
+            }
+        }
+        *(uint32_t *)(out + 0x58) = 0;
+        e = cr_bit_alloc((void **)(out + 0x50), *(const int32_t *)(out + 0x20));
+        if (e != 0) {
+            cr_free_3ptr_and8((void **)out, &img);
+            return e;
+        }
+    }
+
+    cr_cleanup_ptr8_clear(&img);
+    return 0;
 }

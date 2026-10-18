@@ -13300,6 +13300,70 @@ static void test_mask_norm_32580(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_mask_norm_32580\n");
 }
 
+/* ---- 0x180026410: masked contrast/sharpness normalisation -------------- */
+static void test_masked_contrast_norm_26410(void)
+{
+    typedef int (WINAPI *v_fn)(int *, int *, cr_image *, const cr_image *,
+                               const void *, const void *);
+    v_fn v = (v_fn)fn_at(RVA(0x180026410));
+    begin("cr_masked_contrast_norm_26410");
+    int bad = g_fail;
+
+    static uint8_t srcV[4096],  srcC[4096];
+    static uint8_t mdataV[4096], mdataC[4096];
+    static int16_t gsrcV[4096], gsrcC[4096];
+    static uint8_t ctxV[0x80],  ctxC[0x80];
+
+    for (int t = 0; t < 3000; t++) {
+        int W = (int)(rnd() % 40u) + 21;
+        int H = (int)(rnd() % 20u) + 21;
+        int n = W * H;
+        if (n > 4096) continue;
+
+        for (int i = 0; i < n; i++) {
+            uint8_t s = (uint8_t)rnd();
+            srcV[i] = s;  srcC[i] = s;
+            uint8_t m = (uint8_t)rnd();
+            mdataV[i] = m; mdataC[i] = m;
+            /* ctx+0x50 is an s16 image, read as the residual reference row */
+            int16_t g = (int16_t)((int)(rnd() % 4096u) - 2048);
+            gsrcV[i] = g; gsrcC[i] = g;
+        }
+
+        cr_image sv, sc, mv, mc;
+        memset(&sv, 0, sizeof sv); memset(&sc, 0, sizeof sc);
+        memset(&mv, 0, sizeof mv); memset(&mc, 0, sizeof mc);
+        sv.a = sv.w = W; sv.b = sv.h = H; sv.data = srcV;
+        sc.a = sc.w = W; sc.b = sc.h = H; sc.data = srcC;
+        mv.a = mv.w = W; mv.b = mv.h = H; mv.data = mdataV;
+        mc.a = mc.w = W; mc.b = mc.h = H; mc.data = mdataC;
+
+        memset(ctxV, 0, sizeof ctxV); memset(ctxC, 0, sizeof ctxC);
+        float sigma0 = (float)(rnd() % 50u) / 10.0f + 0.1f;
+        *(float *)(ctxV + 0x4) = sigma0;
+        *(float *)(ctxC + 0x4) = sigma0;
+        int8_t flag = (int8_t)((t & 1) ? 1 : -1);
+        *(int8_t *)(ctxV + 0x8) = flag;
+        *(int8_t *)(ctxC + 0x8) = flag;
+        *(int32_t *)(ctxV + 0x50) = W; *(int32_t *)(ctxV + 0x54) = H;
+        *(void **)(ctxV + 0x58) = gsrcV;
+        *(int32_t *)(ctxV + 0x60) = W; *(int32_t *)(ctxV + 0x64) = H;
+        *(int32_t *)(ctxC + 0x50) = W; *(int32_t *)(ctxC + 0x54) = H;
+        *(void **)(ctxC + 0x58) = gsrcC;
+        *(int32_t *)(ctxC + 0x60) = W; *(int32_t *)(ctxC + 0x64) = H;
+
+        int o1v = 0, o1c = 0, o2v = 0, o2c = 0;
+        int rv = v(&o1v, &o2v, &mv, (const cr_image *)&sv, ctxV, ctxV);
+        int rc = cr_masked_contrast_norm_26410(&o1c, &o2c, &mc,
+                                              (const cr_image *)&sc, ctxC);
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        if (o1v != o1c) mismatch("out1", (u32)t, (u32)o1v, (u32)o1c);
+        if (o2v != o2c) mismatch("out2", (u32)t, (u32)o2v, (u32)o2c);
+        cmp_buf("mask", (const u8 *)mdataV, (const u8 *)mdataC, (u32)n, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_masked_contrast_norm_26410\n");
+}
+
 /* ---- 0x180042150: block variance ratio + adaptive smoothing ------------ */
 static void test_block_variance_run_42150(void)
 {
@@ -13368,6 +13432,229 @@ static void test_block_variance_run_42150(void)
         cmp_buf("img", (const u8 *)iv, (const u8 *)ic, (u32)(n * 4), (u32)t);
     }
     if (g_fail == bad) end(); else printf("  FAIL cr_block_variance_run_42150\n");
+}
+
+/* ---- 0x1800208a0: mask/feature stage driver ---------------------------- */
+static void test_mask_stage_208a0(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, const void *, const void *,
+                              void **, const uint8_t *, int, int);
+    v_t v = (v_t)fn_at(RVA(0x1800208a0));
+    begin("cr_mask_stage_208a0");
+    int bad = g_fail;
+
+    enum { MAXPIX = 64 * 176 };
+    static float    dv[MAXPIX], dc[MAXPIX];
+    static uint8_t  iv[MAXPIX], ic[MAXPIX];
+    static uint8_t  fsv[MAXPIX], fsc[MAXPIX];
+    static uint16_t mkv[MAXPIX], mkc[MAXPIX];
+    static uint16_t msv[MAXPIX], msc[MAXPIX];
+    static uint16_t m2v[MAXPIX], m2c[MAXPIX];
+    static uint16_t n2v[MAXPIX], n2c[MAXPIX];
+    static uint8_t  ctxv[0x80], ctxc[0x80];
+    static uint8_t  a3v[0x10], a3c[0x10];
+    static uint8_t  cfgv[0x100], cfgc[0x100];
+    static void    *slv[16], *slc[16];
+    static uint8_t  s0v[0x20], s0c[0x20];
+    static uint8_t  sfv[0x20], sfc[0x20];
+    static uint8_t  s5v[0x20], s5c[0x20];
+    static uint8_t  s6v[0x20], s6c[0x20];
+    static uint8_t  ilv[0x10], ilc[0x10];
+    static uint16_t idv[16], idc[16];
+
+    for (int t = 0; t < 2000; t++) {
+        int big = (t % 10) == 9;
+        int W, H, bw;
+        if (big) {
+            W = 64; H = 80; bw = 8;
+        } else {
+            bw = 4 + (int)(rnd() % 5u);
+            W  = bw * (4 + (int)(rnd() % 4u));
+            H  = 20 + (int)(rnd() % 21u);
+        }
+        int n = W * H;
+        if (n > MAXPIX) continue;
+
+        for (int i = 0; i < n; i++) {
+            float f = (float)(rnd() % 2560u) / 10.0f;
+            dv[i] = f; dc[i] = f;
+            uint8_t b = (uint8_t)rnd();
+            iv[i] = b; ic[i] = b;
+            uint8_t s = (uint8_t)rnd();
+            fsv[i] = s; fsc[i] = s;
+            uint16_t m = (uint16_t)((rnd() % 3u == 0) ? 0xffffu : rnd());
+            msv[i] = m; msc[i] = m;
+            uint16_t m2 = (uint16_t)rnd();
+            n2v[i] = m2; n2c[i] = m2;
+        }
+        for (int i = 0; i < 8; i++) {
+            uint16_t k = (uint16_t)(rnd() % (unsigned)n);
+            idv[i] = k; idc[i] = k;
+        }
+
+        int idx = 1 + (t % 3);
+        int sel = big ? 1 : 0;
+        int mode = (t & 1) ? 2 : 0;
+        int tsel = (t % 3 == 0) ? 3 : 0;
+        int bvary = (t % 4 == 0);
+        int pmode = (t % 5 == 0) ? 7 : 0;
+
+        memset(ctxv, 0, sizeof ctxv); memset(ctxc, 0, sizeof ctxc);
+        float sig = (float)(rnd() % 50u) / 10.0f + 0.1f;
+        *(float *)(ctxv + 4) = sig;  *(float *)(ctxc + 4) = sig;
+        int8_t cflag = (int8_t)((t & 1) ? 1 : -1);
+        *(int8_t *)(ctxv + 8) = cflag; *(int8_t *)(ctxc + 8) = cflag;
+        *(void **)(ctxv + 0x18) = m2v; *(void **)(ctxc + 0x18) = m2c;
+        *(void **)(ctxv + 0x58) = mkv; *(void **)(ctxc + 0x58) = mkc;
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+        *(int *)(a3v + 4) = 1; *(int *)(a3c + 4) = 1;
+
+        memset(s0v, 0, 0x20); memset(s0c, 0, 0x20);
+        *(int16_t *)(s0v + 0) = (int16_t)W; *(int16_t *)(s0v + 2) = (int16_t)H;
+        *(int16_t *)(s0c + 0) = (int16_t)W; *(int16_t *)(s0c + 2) = (int16_t)H;
+
+        memset(sfv, 0, 0x20); memset(sfc, 0, 0x20);
+        *(int16_t *)(sfv + 0) = (int16_t)W; *(int16_t *)(sfv + 2) = (int16_t)H;
+        *(int16_t *)(sfc + 0) = (int16_t)W; *(int16_t *)(sfc + 2) = (int16_t)H;
+        sfv[6] = 8; sfc[6] = 8;
+        *(void **)(sfv + 0x10) = fsv; *(void **)(sfc + 0x10) = fsc;
+
+        memset(s5v, 0, 0x20); memset(s5c, 0, 0x20);
+        *(int16_t *)(s5v + 0) = (int16_t)W; *(int16_t *)(s5v + 2) = (int16_t)H;
+        *(void **)(s5v + 0x10) = msv; *(void **)(s5c + 0x10) = msc;
+        *(int16_t *)(s5c + 0) = (int16_t)W; *(int16_t *)(s5c + 2) = (int16_t)H;
+
+        memset(s6v, 0, 0x20); memset(s6c, 0, 0x20);
+        *(int16_t *)(s6v + 0) = (int16_t)W; *(int16_t *)(s6v + 2) = (int16_t)H;
+        *(void **)(s6v + 0x10) = n2v; *(void **)(s6c + 0x10) = n2c;
+        *(int16_t *)(s6c + 0) = (int16_t)W; *(int16_t *)(s6c + 2) = (int16_t)H;
+
+        memset(ilv, 0, 0x10); memset(ilc, 0, 0x10);
+        *(uint16_t *)(ilv + 0) = 8; *(uint16_t *)(ilc + 0) = 8;
+        *(void **)(ilv + 8) = idv; *(void **)(ilc + 8) = idc;
+
+        for (int i = 0; i < 16; i++) { slv[i] = NULL; slc[i] = NULL; }
+        slv[0] = s0v;  slc[0] = s0c;
+        slv[5] = s5v;  slc[5] = s5c;
+        slv[6] = s6v;  slc[6] = s6c;
+        slv[idx] = sfv; slc[idx] = sfc;
+        slv[0x0e] = ilv; slc[0x0e] = ilc;
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[9] = (uint8_t)tsel; cfgc[9] = (uint8_t)tsel;
+        *(int16_t *)(cfgv + 6) = (int16_t)bw; *(int16_t *)(cfgc + 6) = (int16_t)bw;
+        int16_t thr = (int16_t)((int)(rnd() % 4001u) - 2000);
+        *(int16_t *)(cfgv + 0x2c) = thr; *(int16_t *)(cfgc + 0x2c) = thr;
+        cfgv[0x30] = (uint8_t)bvary; cfgc[0x30] = (uint8_t)bvary;
+        cfgv[0x40] = (uint8_t)sel; cfgc[0x40] = (uint8_t)sel;
+        cfgv[0x44] = (uint8_t)mode; cfgc[0x44] = (uint8_t)mode;
+        float bsig = (float)(rnd() % 30u) / 10.0f + 0.3f;
+        *(float *)(cfgv + 0x48) = bsig; *(float *)(cfgc + 0x48) = bsig;
+        cfgv[0xc0] = (uint8_t)pmode; cfgc[0xc0] = (uint8_t)pmode;
+        cfgv[0xc1] = (uint8_t)(t & 1); cfgc[0xc1] = (uint8_t)(t & 1);
+        *(uint16_t *)(cfgv + 0xc2) = 16; *(uint16_t *)(cfgc + 0xc2) = 16;
+        int32_t pthr = (int32_t)(rnd() % 500u);
+        *(int32_t *)(cfgv + 0xc4) = pthr; *(int32_t *)(cfgc + 0xc4) = pthr;
+        cfgv[0xcc] = 3; cfgc[0xcc] = 3;
+        cfgv[0xcd] = 3; cfgc[0xcd] = 3;
+
+        cr_image dimg, dimgc, iimg, iimgc;
+        memset(&dimg, 0, sizeof dimg); memset(&dimgc, 0, sizeof dimgc);
+        memset(&iimg, 0, sizeof iimg); memset(&iimgc, 0, sizeof iimgc);
+        dimg.a  = dimg.w  = W; dimg.b  = dimg.h  = H; dimg.data  = dv;
+        dimgc.a = dimgc.w = W; dimgc.b = dimgc.h = H; dimgc.data = dc;
+        iimg.a  = iimg.w  = W; iimg.b  = iimg.h  = H; iimg.data  = iv;
+        iimgc.a = iimgc.w = W; iimgc.b = iimgc.h = H; iimgc.data = ic;
+
+        int rv = v(&dimg, &iimg, a3v, ctxv, slv, cfgv, idx, (t & 1));
+        int rc = cr_mask_stage_208a0(&dimgc, &iimgc, a3c, ctxc,
+                                     slc, cfgc, idx, (t & 1));
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        cmp_buf("dst", (const u8 *)dv, (const u8 *)dc, (size_t)n * 4, (u32)t);
+        cmp_buf("img", (const u8 *)iv, (const u8 *)ic, (size_t)n, (u32)t);
+        cmp_buf("mask", (const u8 *)mkv, (const u8 *)mkc, (size_t)n * 2, (u32)t);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_mask_stage_208a0\n");
+}
+
+/* ---- 0x180034ed0: descriptor/point-grid feature pipeline ---------------- */
+static void test_feature_pipeline_34ed0(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, int, const uint8_t *);
+    v_t v = (v_t)fn_at(RVA(0x180034ed0));
+    begin("cr_feature_pipeline_34ed0");
+    int bad = g_fail;
+
+    enum { PW = 64, PH = 40 };
+    static uint8_t  imgv[PW * PH], imgc[PW * PH];
+    static uint8_t  objv[0x200], objc[0x200];
+    static uint8_t  outv[0x100], outc[0x100];
+    static uint8_t  lutv[0x40], lutc[0x40];
+    static uint8_t  cfgv[0x80], cfgc[0x80];
+
+    for (int t = 0; t < 1200; t++) {
+        int tsel = (t % 4 == 0) ? 0 : ((t % 4 == 1) ? 2 : ((t % 4 == 2) ? 4 : 3));
+        int gsel;
+        switch (t % 6) {
+        case 0:  gsel = 1; break;
+        case 1:  gsel = 5; break;
+        case 2:  gsel = 4; break;
+        default: gsel = (int)(rnd() % 8u); break;
+        }
+        int arg3 = (int)(rnd() % 2u);
+
+        memset(imgv, 100, sizeof imgv);            /* flat: no local maxima */
+        memset(imgc, 100, sizeof imgc);
+
+        memset(objv, 0, sizeof objv); memset(objc, 0, sizeof objc);
+        *(int32_t *)(objv + 0x00) = PW; *(int32_t *)(objv + 0x04) = PH;
+        *(void   **)(objv + 0x08) = imgv;
+        *(int32_t *)(objv + 0x10) = PW; *(int32_t *)(objv + 0x14) = PH;
+        *(void   **)(objv + 0x48) = outv;
+        *(int32_t *)(objc + 0x00) = PW; *(int32_t *)(objc + 0x04) = PH;
+        *(void   **)(objc + 0x08) = imgc;
+        *(int32_t *)(objc + 0x10) = PW; *(int32_t *)(objc + 0x14) = PH;
+        *(void   **)(objc + 0x48) = outc;
+
+        memset(outv, 0, sizeof outv); memset(outc, 0, sizeof outc);
+        memset(lutv, 0, sizeof lutv); memset(lutc, 0, sizeof lutc);
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[0x01] = (uint8_t)gsel;   cfgc[0x01] = (uint8_t)gsel;
+        cfgv[0x08] = 2;               cfgc[0x08] = 2;
+        cfgv[0x0b] = (uint8_t)tsel;   cfgc[0x0b] = (uint8_t)tsel;
+        cfgv[0x0c] = (uint8_t)(rnd() % 7u); cfgc[0x0c] = cfgv[0x0c];
+        *(int32_t *)(cfgv + 0x14) = PH; *(int32_t *)(cfgc + 0x14) = PH;
+        float sig = 0.72f + (float)(rnd() % 150u) / 100.0f;
+        *(float *)(cfgv + 0x1c) = sig; *(float *)(cfgc + 0x1c) = sig;
+        cfgv[0x24] = (uint8_t)((t & 1) ? 2 : 5);
+        cfgc[0x24] = cfgv[0x24];
+        cfgv[0x25] = 4; cfgc[0x25] = 4;
+        cfgv[0x26] = 4; cfgc[0x26] = 4;
+        cfgv[0x09] = (uint8_t)((t & 1) ? 2 : 1); cfgc[0x09] = cfgv[0x09];
+        cfgv[0x3d] = (uint8_t)((t % 3) ? 0 : 1); cfgc[0x3d] = cfgv[0x3d];
+
+        int rv = v(objv, lutv, arg3, cfgv);
+        int rc = cr_feature_pipeline_34ed0(objc, lutc, arg3, cfgc);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); continue; }
+        if (rv != 0) continue;
+        uint32_t fv, fc;
+        #define CF(off) do { fv = *(uint32_t *)(outv + (off)); \
+            fc = *(uint32_t *)(outc + (off)); \
+            if (fv != fc) mismatch("f" #off, (u32)t, fv, fc); } while (0)
+        CF(0x20); CF(0x30); CF(0x31); CF(0x58);
+        #undef CF
+        if ((*(void **)(outv + 0x00) != NULL) != (*(void **)(outc + 0x00) != NULL))
+            mismatch("p0", (u32)t, 0, 0);
+        if ((*(void **)(outv + 0x08) != NULL) != (*(void **)(outc + 0x08) != NULL))
+            mismatch("p8", (u32)t, 0, 0);
+        /* release the vendor's allocations, then ours */
+        cr_free_3ptr_and8((void **)outv, NULL);
+        cr_free_3ptr_and8((void **)outc, NULL);
+        memset(outv, 0, sizeof outv); memset(outc, 0, sizeof outc);
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_feature_pipeline_34ed0\n");
 }
 
 /* ---- main -------------------------------------------------------------- */
@@ -13787,7 +14074,10 @@ int main(int argc, char **argv)
     test_mscale_run_16d00();
     test_masked_contrast_norm_2a620();
     test_mask_norm_32580();
+    test_masked_contrast_norm_26410();
     test_block_variance_run_42150();
+    test_mask_stage_208a0();
+    test_feature_pipeline_34ed0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -1117,4 +1117,18 @@ int      cr_mask_norm_32580(cr_image *src, void *ctx, void *a3,
 int      cr_block_variance_run_42150(cr_image *img, const uint8_t *cfg,
                                      int block_w, float *result); /* 0x180042150 */
 
+/* 0x180026410 — masked contrast/sharpness normalisation of a byte image.
+ * `ctx`: +0x4 float boxmax sigma, +0x8 int8 reference selector, +0x50 embedded
+ * gauss source image (its data at +0x58).  Writes the sharpness of the boxmax
+ * image to *out1, rewrites `mask` in place, then writes the sharpness of the
+ * rewritten mask to *out2.  See src/fpc_comp.c. */
+int      cr_masked_contrast_norm_26410(int *out1, int *out2, cr_image *mask,
+                                       const cr_image *src,
+                                       const void *ctx);        /* 0x180026410 */
+int      cr_mask_stage_208a0(cr_image *dst, cr_image *img, const void *a3,
+                             const void *a4, void **slots, const uint8_t *cfg,
+                             int idx, int flag);              /* 0x1800208a0 */
+int      cr_feature_pipeline_34ed0(void *obj, const void *arg2, int arg3,
+                                  const uint8_t *cfg);         /* 0x180034ed0 */
+
 #endif /* FPC_BEP_H */

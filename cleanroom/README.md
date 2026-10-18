@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **329** (92.7% of functions, 139,808 B = 82.5% of bytes) |
+| rewritten + parity-verified | **332** (93.5% of functions, 142,592 B = 84.1% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Eighty-two batches so far:
+Eighty-four batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -389,6 +389,22 @@ Eighty-two batches so far:
     (1/4/3-tap by ratio), median-filters five rows, integrates along the
     columns and smooths with a 7-tap FIR, optionally preceded by a box median
     of width `cfg[8]` (3 functions).
+83. masked contrast/sharpness normalisation:
+    `cr_masked_contrast_norm_26410` (1632 B) box-max-unpacks the source,
+    reports its masked sharpness, differences a 0.7-sigma Gaussian of the s16
+    reference against that reference, fits a single scale over the interior
+    (10-px border, `img1 == 0xff`) from the covariance of the residual with a
+    7-tap FIR of the mask, and rewrites every mask byte as
+    `((mask - (ref-mean)*scale)*img1 + (255-img1)*max_mask)/255 + 0.5`,
+    clamping to `[0,255]`; the rewritten mask's sharpness is the second output
+    (1 function).
+84. mask stage driver and descriptor/point-grid feature pipeline:
+    `cr_mask_stage_208a0` (512 B) allocates and fills the s16 plane, thresholds
+    it into the byte mask, runs the masked-template blend, the mask
+    normalisation, the block-variance gate and the mask pipeline;
+    `cr_feature_pipeline_34ed0` (640 B) drives the point-grid constructor,
+    populate and selector, then packs the angle field and allocates the bit
+    table (2 functions).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
