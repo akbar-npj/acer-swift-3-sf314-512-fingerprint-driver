@@ -712,6 +712,12 @@ side effects, never raw pointer values.
 | `0x180048310` | `fpc_bio_bep_sw23_...` | `cr_sharp_gate_48310` | `int fn(void *a1, void *a2, void *a3, void *a4, const void *a5, const void *a6, int a7, int a8, const void *a9)`. Returns 0 when `a3` is NULL. `cr_block_extreme_bitmap(a1, a2)`, then the mode byte at `a5+0x44` must be 1 or 2 (else 0). `cr_copy_image_fields(a4, a3)`; in mode 1 with `*(int*)(a6+4)|a7 == 0` the handle `*(void**)(a4+0x38+a8*8)` must be non-NULL (0x3ec) before `cr_feature_extract_step_26dc0`. Then `cr_masked_contrast_norm_26410(a2, a1, a3, a5+0x44)`, and when `(int)(0.8f*out2) > out1` the `a2->a * a2->b`-byte payload of slot `a9` is copied into `a2->data`. |
 | `0x1800344e0` | `fpc_bio_bep_sw23_...` | `cr_mask_refine_344e0` | `int fn(void *a1, void *a2, void *a3, void *a4, void *a5, void *a6, void *a7, int a8, int a9)`. Copies slot `a6[a8]`'s payload into `a2->data`; the mode byte at `a7+0x44` must be 0..2 (negative or >2 returns 0x69). Modes 1/2 run `cr_sharp_gate_48310(a3, a2, a5, a6, a7, a4, a9, a8, slot)`. Then `cr_mask_inpaint_317a0(a1, a2, a6[0x0e], a7+0xc0)` and `cr_block_extreme_bitmap(a3, a2)`. |
 
+### Batch 92 — feature pipeline driver
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x180028bc0` | `fpc_bio_bep_sw23_6f8b2300cb` | `cr_feature_run_28bc0` | `int fn(void *a1, void *a2, void *a3)`. Allocates the 0x58 wrapper at `a1+8`, then initialises it from `a2` in mode 1 (selector byte `(*(uint8_t**)(a3+8))[1] == 0`, followed by clearing the bitmap image at `a2+0x50`) or mode 0 (selector 1); any other selector destroys the wrapper and returns 0x69. Stamps the wrapper's +0x44 int16 from `a1+0x1c` and `a1+0x20` from the wrapper's +0x40, runs `cr_feature_pipeline_34ed0` with `a2+0x30`, the selector-0 flag and the config at `a3+0x10`, sets the whole bit table when the descriptor at `a3+0x20` has a zero +0x84 byte, releases `out+0x28` when `a3+0x18`'s +4 byte is zero and its +0x78 float is not exactly 1.0f, releases `out+8` when `(*(uint8_t**)(a3+8))[0]` is zero, releases `out+0x10` unless the descriptor's +0x8b byte is 2, sets `a1+0x24` when the descriptor's int16 bounds are met, and always clears `a1+0x10`. |
+
 
 ## Deferred (identified, not yet rewritten)
 

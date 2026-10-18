@@ -4445,3 +4445,99 @@ int cr_mask_refine_344e0(void *a1, void *a2, void *a3, void *a4, void *a5,
     cr_block_extreme_bitmap((cr_image *)a3, (const cr_image *)a2);
     return 0;
 }
+
+/* 0x180028bc0 — feature pipeline driver.
+ *
+ * int cr_feature_run_28bc0(void *a1, void *a2, void *a3);
+ *
+ * Allocates the 0x58-byte wrapper at `a1+8` (cr_alloc_obj_58) and, depending
+ * on the selector byte `(*(uint8_t**)(a3+8))[1]`, initialises it from `a2`
+ * with cr_obj_init_17ca0 in mode 1 (selector 0, followed by clearing the
+ * bitmap image at `a2+0x50`) or mode 0 (selector 1); any other selector
+ * destroys the wrapper and returns 0x69.  The wrapper's +0x44 int16 is then
+ * stamped from `a1+0x1c` and `a1+0x20` from the wrapper's +0x40, and
+ * cr_feature_pipeline_34ed0 runs over the wrapper with `a2+0x30`, the
+ * "selector == 0" flag and the config at `a3+0x10`.  When the descriptor at
+ * `a3+0x20` has a zero byte at +0x84 the whole bit table of the pipeline's
+ * output descriptor is set.  A zero byte at `a3+0x18` plus a +0x78 float that
+ * is not exactly 1.0f releases `out+0x28`, and a zero byte at
+ * `(*(uint8_t**)(a3+8))[0]` releases `out+8`.  Unless the descriptor's +0x8b
+ * byte is 2, `out+0x10` is released too.  Finally, when `a1+0x1c` and
+ * `a1+0x20` are at least the descriptor's int16 fields +0x18/+0x1c and
+ * `*(int16*)a1` is at least its uint16 at +0x1a, `a1+0x24` is set to 1, and
+ * `a1+0x10` is always cleared.  Verified by difftest. */
+int cr_feature_run_28bc0(void *a1, void *a2, void *a3)
+{
+    uint8_t *b = (uint8_t *)a1;
+    uint8_t *p = (uint8_t *)a3;
+    int e = cr_alloc_obj_58((void **)(b + 8));
+    if (e != 0)
+        return e;
+
+    uint8_t sel = (*(const uint8_t * const *)(p + 8))[1];
+
+    if (sel == 0) {
+        e = cr_obj_init_17ca0(*(void **)(b + 8), a2, 1);
+        if (e != 0)
+            goto fail;
+        cr_cleanup_ptr8_b((uint8_t *)a2 + 0x50);
+    } else if (sel != 1) {
+        cr_wrap_destroy((void **)(b + 8));
+        return 0x69;
+    } else {
+        e = cr_obj_init_17ca0(*(void **)(b + 8), a2, 0);
+        if (e != 0)
+            goto fail;
+    }
+
+    {
+        uint8_t *obj = *(uint8_t **)(b + 8);
+        *(int16_t *)(obj + 0x44) = (int16_t)*(const int *)(b + 0x1c);
+        *(int *)(b + 0x20) = *(const int *)(obj + 0x40);
+    }
+
+    e = cr_feature_pipeline_34ed0(*(void **)(b + 8), (uint8_t *)a2 + 0x30,
+                                  (*(const uint8_t * const *)(p + 8))[1] == 0,
+                                  *(void **)(p + 0x10));
+    if (e != 0)
+        goto fail;
+
+    {
+        const uint8_t *q = *(const uint8_t * const *)(p + 0x20);
+        if (q[0x84] == 0) {
+            uint8_t *out = *(uint8_t **)(*(uint8_t **)(b + 8) + 0x48);
+            int cnt = *(const int *)(out + 0x20);
+            if (cnt > 0) {
+                uint8_t *bits = *(uint8_t **)(out + 0x50);
+                for (int i = 0; i < cnt; i++)
+                    bits[i >> 3] |= (uint8_t)(1u << (i & 7));
+            }
+        }
+    }
+
+    {
+        const uint8_t *r = *(const uint8_t * const *)(p + 0x18);
+        if (r[4] == 0 && !(1.0f == *(const float *)(r + 0x78)))
+            cr_sized_free((void **)(*(uint8_t **)(b + 8) + 0x28));
+    }
+    if ((*(const uint8_t * const *)(p + 8))[0] == 0)
+        cr_sized_free((void **)(*(uint8_t **)(*(uint8_t **)(b + 8) + 0x48) + 8));
+
+    {
+        const uint8_t *q = *(const uint8_t * const *)(p + 0x20);
+        if (q[0x8b] != 2)
+            cr_sized_free((void **)(*(uint8_t **)(*(uint8_t **)(b + 8) + 0x48) + 0x10));
+
+        if (*(const int *)(b + 0x1c) >= (int)*(const int16_t *)(q + 0x18) &&
+            *(const int *)(b + 0x20) >= (int)*(const int16_t *)(q + 0x1c) &&
+            *(const int16_t *)b >= (int16_t)*(const uint16_t *)(q + 0x1a))
+            *(int *)(b + 0x24) = 1;
+    }
+
+    *(int *)(b + 0x10) = 0;
+    return 0;
+
+fail:
+    cr_wrap_destroy((void **)(b + 8));
+    return e;
+}

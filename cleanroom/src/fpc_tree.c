@@ -1313,7 +1313,7 @@ int cr_obj_ctor_20aa0(void *obj, void *buf, void *arg3, void *arg4, int arg5,
     uint8_t *o = (uint8_t *)obj;
     const uint8_t *d = (const uint8_t *)desc;
 
-    cr_fill(buf, 0, 0x50);
+    cr_fill(obj, 0, 0x50);   /* 0x180020ac6 fills rcx (=obj), not rdx */
     *(void **)(o + 0x00) = NULL;
     *(void **)(o + 0x18) = NULL;
     *(void **)(o + 0x20) = NULL;
@@ -1331,9 +1331,12 @@ int cr_obj_ctor_20aa0(void *obj, void *buf, void *arg3, void *arg4, int arg5,
         *(void **)(o + 0x08) = arg3;
         *(void **)(o + 0x10) = arg4;
         *(int *)(o + 0x48) = w10;
-        if (cr_malloc_aligned16((void **)(o + 0x20),
-                                (size_t)(uint32_t)(2u * (uint32_t)w10)) != 0)
-            return 0;                       /* tolerated */
+        {
+            int e = cr_malloc_aligned16((void **)(o + 0x20),
+                                        (size_t)(uint32_t)(2u * (uint32_t)w10));
+            if (e != 0)
+                return e;                   /* 0x180020c08 returns eax */
+        }
         if (cr_malloc_aligned16((void **)(o + 0x28),
                                 (size_t)(uint32_t)(4u * (uint32_t)w10)) != 0) {
             cr_free_4slot(obj);
@@ -1349,6 +1352,8 @@ int cr_obj_ctor_20aa0(void *obj, void *buf, void *arg3, void *arg4, int arg5,
         *(uint32_t *)(o + 0x48) = (uint32_t)d14;
         *(uint32_t *)(o + 0x30) = b25;
         *(uint32_t *)(o + 0x34) = b26;
+        *(uint32_t *)(o + 0x38) = *(const uint32_t *)((const uint8_t *)buf + 0x10);
+        *(uint32_t *)(o + 0x3c) = *(const uint32_t *)((const uint8_t *)buf + 0x14);
         *(uint32_t *)(o + 0x40) = 0;
         if (cr_malloc_aligned16((void **)(o + 0x18),
                                 (size_t)(uint32_t)(2u * (uint32_t)d14)) != 0)

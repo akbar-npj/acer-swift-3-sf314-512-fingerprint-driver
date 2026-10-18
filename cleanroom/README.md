@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **334** (94.1% of functions, 143,536 B = 84.7% of bytes) |
+| rewritten + parity-verified | **335** (94.4% of functions, 144,080 B = 85.0% of bytes) |
 | deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
 
-Eighty-five batches so far:
+Eighty-six batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -412,6 +412,13 @@ Eighty-five batches so far:
     `cr_mask_refine_344e0` (272 B) copies the slot payload, runs the gate for
     modes 1/2, inpaints from the index list and writes the final bitmap
     (2 functions).
+86. feature pipeline driver:
+    `cr_feature_run_28bc0` (544 B) allocates and initialises the feature
+    wrapper, drives the point-grid pipeline, patches the output bit table and
+    releases the descriptor's sub-buffers under the byte/float guards
+    (1 function). Also fixed three `cr_obj_ctor_20aa0` transcription errors
+    found while wiring it up (fill target, sel-5 buffer fields, sel-2 first
+    allocation status).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

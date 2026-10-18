@@ -13869,6 +13869,137 @@ static void test_mask_refine_344e0(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_mask_refine_344e0\n");
 }
 
+/* ---- 0x180028bc0: feature pipeline driver ------------------------------- */
+static void test_feature_run_28bc0(void)
+{
+    typedef int (WINAPI *v_t)(void *, void *, void *);
+    typedef int (WINAPI *v_m)(void **, size_t);
+    v_t   v       = (v_t)fn_at(RVA(0x180028bc0));
+    v_m   vmalloc = (v_m)fn_at(RVA(0x1800100c0));
+    v_v_p vsfree  = (v_v_p)fn_at(RVA(0x18003bf40));
+    begin("cr_feature_run_28bc0");
+    int bad = g_fail;
+
+    static u8 a1v[0x58], a1c[0x58], p2v[0x90], p2c[0x90];
+    static u8 a3v[0x30], a3c[0x30];
+    static u8 stv[8],  stc[8];
+    static u8 rv8[0x80], rc8[0x80];
+    static u8 qv8[0x90], qc8[0x90];
+    static u8 cfgv[0x80], cfgc[0x80];
+    static u8 imgV[4096], imgC[4096];
+    static u32 bmV[2048], bmC[2048];
+    static int16_t nsV[64], nsC[64];
+
+    for (int t = 0; t < 600; t++) {
+        int w = 64;
+        int h = 40;
+        int n = (int)(rnd() % 16u);
+        int bw = (w + 0x1f) & ~0x1f;
+        int tag = (int)(rnd() % 0x10000u) + 1;
+        int p78 = (int)(rnd() % 0x1000u);
+        int sox = 0;
+
+        /* flat image: the point grid finds no maxima, so the pipeline
+         * completes and no partially-built object is torn down. */
+        memset(imgV, 100, sizeof imgV); memset(imgC, 100, sizeof imgC);
+        for (size_t i = 0; i < 2048; i++) { u32 x = rnd(); bmV[i] = x; bmC[i] = x; }
+        for (int i = 0; i < 64; i++) { int16_t x = (int16_t)rnd(); nsV[i] = x; nsC[i] = x; }
+
+        int sel  = (int)(rnd() % 3u);
+        int b0   = (int)(rnd() % 2u);
+        int r4   = (int)(rnd() % 2u);
+        int q84  = (int)(rnd() % 2u);
+        int q8b  = (int)(rnd() % 3u);
+        int q18  = (int)(rnd() % 64u);
+        int q1a  = (int)(rnd() % 64u);
+        int q1c  = (int)(rnd() % 64u);
+        int a1c1c = (int)(rnd() % 64u);
+        int a1w   = (int)(rnd() % 64u);
+        int tsel = (t % 3 == 0) ? 4 : 2;
+        int gsel;
+        switch (t % 6) {
+        case 0:  gsel = 1; break;
+        case 1:  gsel = 5; break;
+        case 2:  gsel = 4; break;
+        default: gsel = (int)(rnd() % 8u); break;
+        }
+
+        memset(a1v, 0, sizeof a1v); memset(a1c, 0, sizeof a1c);
+        *(int16_t *)(a1v + 0) = (int16_t)a1w;  *(int16_t *)(a1c + 0) = (int16_t)a1w;
+        *(int32_t *)(a1v + 0x10) = (int32_t)rnd();
+        *(int32_t *)(a1c + 0x10) = *(int32_t *)(a1v + 0x10);
+        *(int32_t *)(a1v + 0x1c) = a1c1c; *(int32_t *)(a1c + 0x1c) = a1c1c;
+        *(int32_t *)(a1v + 0x20) = 0x77777777; *(int32_t *)(a1c + 0x20) = 0x77777777;
+        *(int32_t *)(a1v + 0x24) = 0;      *(int32_t *)(a1c + 0x24) = 0;
+
+        /* p2+0x58 is released inside the callee on the selector-0 path, so
+         * each side needs a buffer from its own allocator. */
+        void *bmvp = NULL, *bmcp = NULL;
+        size_t bmsz = (size_t)((bw >> 5) * h * 4);
+        if (vmalloc(&bmvp, bmsz) != 0) continue;
+        if (cr_malloc_aligned16(&bmcp, bmsz) != 0) { vsfree(&bmvp); continue; }
+        memcpy(bmvp, bmV, bmsz);
+        memcpy(bmcp, bmC, bmsz);
+        setup_p2_17ca0(p2v, imgV, (u32 *)bmvp, nsV, w, h, bw, tag, p78, n, sox);
+        setup_p2_17ca0(p2c, imgC, (u32 *)bmcp, nsC, w, h, bw, tag, p78, n, sox);
+
+        memset(stv, 0, sizeof stv); memset(stc, 0, sizeof stc);
+        stv[0] = (u8)b0; stc[0] = (u8)b0;
+        stv[1] = (u8)sel; stc[1] = (u8)sel;
+
+        memset(rv8, 0, sizeof rv8); memset(rc8, 0, sizeof rc8);
+        rv8[4] = (u8)r4; rc8[4] = (u8)r4;
+        float r78 = (r4 == 0 && (t & 1)) ? 1.0f : 0.25f;
+        *(float *)(rv8 + 0x78) = r78; *(float *)(rc8 + 0x78) = r78;
+
+        memset(qv8, 0, sizeof qv8); memset(qc8, 0, sizeof qc8);
+        qv8[0x84] = (u8)q84; qc8[0x84] = (u8)q84;
+        qv8[0x8b] = (u8)q8b; qc8[0x8b] = (u8)q8b;
+        *(int16_t *)(qv8 + 0x18) = (int16_t)q18; *(int16_t *)(qc8 + 0x18) = (int16_t)q18;
+        *(int16_t *)(qv8 + 0x1a) = (int16_t)q1a; *(int16_t *)(qc8 + 0x1a) = (int16_t)q1a;
+        *(int16_t *)(qv8 + 0x1c) = (int16_t)q1c; *(int16_t *)(qc8 + 0x1c) = (int16_t)q1c;
+
+        memset(cfgv, 0, sizeof cfgv); memset(cfgc, 0, sizeof cfgc);
+        cfgv[0x01] = (u8)gsel; cfgc[0x01] = (u8)gsel;
+        cfgv[0x08] = 2;        cfgc[0x08] = 2;
+        cfgv[0x0b] = (u8)tsel; cfgc[0x0b] = (u8)tsel;
+        cfgv[0x0c] = (u8)(rnd() % 7u); cfgc[0x0c] = cfgv[0x0c];
+        *(int32_t *)(cfgv + 0x14) = h; *(int32_t *)(cfgc + 0x14) = h;
+        float sig = 0.72f + (float)(rnd() % 150u) / 100.0f;
+        *(float *)(cfgv + 0x1c) = sig; *(float *)(cfgc + 0x1c) = sig;
+        cfgv[0x24] = (u8)((t % 3 == 0) ? 3 : ((t % 3 == 1) ? 2 : 5));
+        cfgc[0x24] = cfgv[0x24];
+        cfgv[0x25] = 4; cfgc[0x25] = 4;
+        cfgv[0x26] = 4; cfgc[0x26] = 4;
+        cfgv[0x09] = (u8)((t & 1) ? 2 : 1); cfgc[0x09] = cfgv[0x09];
+        cfgv[0x3d] = 0; cfgc[0x3d] = 0;
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+        *(void **)(a3v + 0x08) = stv; *(void **)(a3c + 0x08) = stc;
+        *(void **)(a3v + 0x10) = cfgv; *(void **)(a3c + 0x10) = cfgc;
+        *(void **)(a3v + 0x18) = rv8; *(void **)(a3c + 0x18) = rc8;
+        *(void **)(a3v + 0x20) = qv8; *(void **)(a3c + 0x20) = qc8;
+
+        int rv = v(a1v, p2v, a3v);
+        int rc = cr_feature_run_28bc0(a1c, p2c, a3c);
+        if (rv != rc) { mismatch("ret", (u32)t, (u32)rv, (u32)rc); }
+        else {
+            for (int off = 0x10; off < 0x28; off += 4) {
+                u32 a = *(u32 *)(a1v + off), b = *(u32 *)(a1c + off);
+                if (a != b) mismatch("a1", (u32)t, a, b);
+            }
+        }
+        /* both sides own a wrapper; each is released by its own allocator */
+        vsfree((void **)(a1v + 8));
+        cr_wrap_destroy((void **)(a1c + 8));
+        if (sel != 0) {
+            vsfree((void **)(p2v + 0x58));
+            cr_sized_free((void **)(p2c + 0x58));
+        }
+    }
+    if (g_fail == bad) end(); else printf("  FAIL cr_feature_run_28bc0\n");
+}
+
 /* ---- main -------------------------------------------------------------- */
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
@@ -14292,6 +14423,7 @@ int main(int argc, char **argv)
     test_feature_pipeline_34ed0();
     test_sharp_gate_48310();
     test_mask_refine_344e0();
+    test_feature_run_28bc0();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

@@ -1137,5 +1137,6 @@ int      cr_sharp_gate_48310(void *a1, void *a2, void *a3, void *a4,
 int      cr_mask_refine_344e0(void *a1, void *a2, void *a3, void *a4,
                                void *a5, void *a6, void *a7, int a8,
                                int a9);                        /* 0x1800344e0 */
+int      cr_feature_run_28bc0(void *a1, void *a2, void *a3);  /* 0x180028bc0 */
 
 #endif /* FPC_BEP_H */
