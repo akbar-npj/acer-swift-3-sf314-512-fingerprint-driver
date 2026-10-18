@@ -219,10 +219,11 @@ uint64_t cr_obj_init_58(void *obj)
  *     *(u64*)p = 0; *(u32*)(p+8) = 0; *(u8*)(p+0xc) = 0;
  *     *(u64*)(p+0x10) = ~0; *(u64*)(p+0x18) = ~0; *(u32*)(p+0x20) = ~0;
  * ------------------------------------------------------------------------ */
-void cr_alloc_handle(void **out)
+int cr_alloc_handle(void **out)
 {
-    if (cr_malloc_aligned16(out, 0x28) != 0)
-        return;
+    int r = cr_malloc_aligned16(out, 0x28);
+    if (r != 0)
+        return r;
     uint8_t *p = (uint8_t *)*out;
     *(uint64_t *)p = 0;
     *(uint32_t *)(p + 0x08) = 0;
@@ -230,6 +231,7 @@ void cr_alloc_handle(void **out)
     *(uint64_t *)(p + 0x10) = ~(uint64_t)0;
     *(uint64_t *)(p + 0x18) = ~(uint64_t)0;
     *(uint32_t *)(p + 0x20) = 0xffffffffu;
+    return 0;
 }
 
 /* ------------------------------------------------------------------------ *

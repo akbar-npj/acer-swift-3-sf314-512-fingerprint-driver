@@ -7378,3 +7378,104 @@ int cr_bep_frame_13f70(void *a1, void *a2, void *a3, void *a4, void *a5)
     cr_free_obj_flags(obj);                                /* 0x180014088 */
     return (int)st;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x1800013d0 — FpcBioEnrolAdd (560 bytes)
+ *
+ *   int fn(int a1, void *a2, void *a3)
+ *
+ * a1 is a node key, a2 a 0x14-byte status output, a3 the definition table.
+ * The status block is cleared, the node is looked up (0x67 when absent) and
+ * must have kind 3 at +4 (else 0x64).  Two owned objects are allocated:
+ * a 0x28-byte handle at node+0x98 and a 0x38-byte object at node+0xa0.  The
+ * frame entry cr_bep_frame_13f70(result@node+0xa0, handle@node+0x98,
+ * defs+0xc0[0]+8, a3, node+0x68) runs the pipeline.  On 0xdc the node's
+ * +0x14 dword is copied to a2; on other failures only cleanup happens.  On
+ * success the three qwords at object+0x14/0x1c and dword +0x24 are copied to
+ * a2[0..0x13], the handle geometry selects a metadata size (0xc, or
+ * 2*handle[0x10]+0xc when handle[8] > 0), key 0xc8 is written, the handle is
+ * released, and node[0x14] == 4 triggers the optional key-0xe5 slot store
+ * (writing 1 into that slot when the read fails).  node[+4] becomes 7 in the
+ * non-4 case.  Every exit after allocation releases exactly what was taken.
+ * ------------------------------------------------------------------------ */
+int cr_enrol_add_13d0(int a1, void *a2, void *a3)
+{
+    void *node = NULL;
+    uint8_t *o;
+    void *hA0, *h98;
+    uint32_t st;
+    uint8_t mst;
+
+    cr_fill(a2, 0, 0x14);                                  /* 0x1800013f2 */
+    if (cr_ctx_find_node(&node, (unsigned)a1) != 0)        /* 0x180001403 */
+        return 0x67;
+    o = (uint8_t *)node;
+    if (*(const int32_t *)(o + 4) != 3)                    /* 0x180001416 */
+        return 0x64;
+
+    st = (uint32_t)cr_alloc_handle((void **)(o + 0x98));
+    if (st != 0)                                           /* 0x18000143c */
+        return (int)st;
+
+    st = (uint32_t)cr_alloc_400((void **)(o + 0xa0));
+    if (st != 0)                                           /* 0x180001453 */
+        goto free98;
+
+    st = cr_status_from_ctx(o);                            /* 0x180001465 */
+    if (st != 0)                                           /* 0x180001473 */
+        goto free_both;
+
+    hA0 = *(void **)(o + 0xa0);
+    h98 = *(void **)(o + 0x98);
+    st = (uint32_t)cr_bep_frame_13f70(
+             hA0, h98, *(uint8_t **)(o + 0xc0) + 8, a3, o + 0x68);
+                                                           /* 0x18000149b */
+    if (st == 0xdc) {                                      /* 0x1800014a7 */
+        *(uint32_t *)a2 = *(const uint32_t *)(hA0 + 0x14);
+        cr_wrap_destroy2((void **)(o + 0xa0));             /* 0x180001598 */
+        goto free98;
+    }
+    if (st != 0) {                                         /* 0x1800014b5 */
+        cr_wrap_destroy2((void **)(o + 0xa0));             /* 0x180001598 */
+        goto free98;
+    }
+
+    *(uint64_t *)a2 = *(const uint64_t *)(hA0 + 0x14);
+    *(uint64_t *)((uint8_t *)a2 + 8) = *(const uint64_t *)(hA0 + 0x1c);
+    *(uint32_t *)((uint8_t *)a2 + 0x10) = *(const uint32_t *)(hA0 + 0x24);
+
+    int msz = 0xc;
+    if (*(const int32_t *)(h98 + 8) > 0)                   /* 0x1800014e7 */
+        msz = *(const int32_t *)(h98 + 0x10) * 2 + 0xc;
+
+    mst = cr_meta_set_slot(a3, 0, 0xc8, msz);              /* 0x1800014fe */
+    cr_obj_zero_free((void **)(o + 0x98));                 /* 0x180001511 */
+
+    if (mst != 0) {                                        /* 0x180001516 */
+        cr_wrap_destroy2((void **)(o + 0xa0));             /* 0x1800015e9 */
+        return (int)mst;
+    }
+
+    if (*(const int32_t *)(o + 0x14) != 4) {               /* 0x180001523 */
+        *(uint32_t *)(o + 4) = 7;
+        return 0;
+    }
+
+    {
+        uint8_t *b = *(uint8_t **)(o + 0xb0);
+        int32_t idx = *(const int32_t *)(*(const uint8_t **)(b + 8));
+        uint32_t *slot = (uint32_t *)(*(uint8_t **)(b + 0x48) +
+                                      (int64_t)idx * 4);
+        if (cr_meta_get_slot(a3, 0, 0xe5, slot) != 0)      /* 0x180001555 */
+            *slot = 1;
+    }
+    return 0;
+
+free_both:
+    cr_obj_zero_free((void **)(o + 0x98));                 /* 0x1800015c7 */
+    cr_wrap_destroy2((void **)(o + 0xa0));                 /* 0x1800015d8 */
+    return (int)st;
+free98:
+    cr_obj_zero_free((void **)(o + 0x98));                 /* 0x1800015ac */
+    return (int)st;
+}

@@ -16197,6 +16197,61 @@ static void test_bep_frame_13f70(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_bep_frame_13f70\n");
 }
 
+/* ---- batch 110: FpcBioEnrolAdd ---------------------------------------- */
+static void test_enrol_add_13d0(void)
+{
+    typedef int (WINAPI *v_t)(int, void *, void *);
+    v_t v = (v_t)fn_at(RVA(0x1800013d0));
+    begin("cr_enrol_add_13d0");
+    int bad = g_fail, ran = 0;
+
+    static u8 gbuf[0x20];
+    static u8 node[0x120];
+    static u8 inner[0x40];
+    static u8 objhdr[0x20];
+    static u8 cfg[0x300];
+    static u8 a3x[0x40];
+    static u8 a2v[0x20], a2c[0x20];
+
+    void **slot = (void **)(g_base + 0x16f4c8);
+    void *saved = *slot;
+    *slot = gbuf;
+    *(void **)(gbuf + 8) = node;      /* ctx = global+8 -> *ctx = head */
+
+    for (int t = 0; t < 24; t++) {
+        int kind = (t == 0) ? 2 : 3;
+        int bad_ctx = (t % 4 == 2);
+        unsigned key = (t == 1) ? 999u : 100u;
+
+        memset(node, 0, sizeof node);
+        *(uint32_t *)(node + 0) = 100u;
+        *(uint32_t *)(node + 4) = (uint32_t)kind;
+        *(void **)(node + 0x78) = inner;
+        *(void **)(node + 0x70) = objhdr;
+        *(void **)(node + 0x90) = cfg;
+        *(void **)(node + 0xc0) = a3x;
+        memset(inner, 0, sizeof inner);
+        inner[0x3c] = (u8)bad_ctx;
+        memset(cfg, 0, sizeof cfg);
+        memset(a3x, 0, sizeof a3x);
+        memset(objhdr, 0, sizeof objhdr);
+        memset(a2v, 0xA5, sizeof a2v); memset(a2c, 0xA5, sizeof a2c);
+
+        int rv = v((int)key, a2v, a3x);
+        int rc = cr_enrol_add_13d0((int)key, a2c, a3x);
+
+        if (rv != rc) mismatch("ret", (u32)t, (u32)rv, (u32)rc);
+        cmp_buf("a2", a2v, a2c, 0x14, (u32)t);
+        if (*(void **)(node + 0x98) != NULL || *(void **)(node + 0xa0) != NULL)
+            mismatch("leak", (u32)t, 0, 1);
+        ran++;
+    }
+
+    *slot = saved;
+    printf("  [13d0] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_enrol_add_13d0\n");
+}
+
 int main(int argc, char **argv)
 {    const char *dll = (argc > 1) ? argv[1] : "../FingerPrint_Carewe_20.26.23.27_W11x64/"
         "12b431fd-7d7e-4dd7-b87c-9ab3f9a3d01b/x64/fpc_enclave.dll";
@@ -16637,6 +16692,7 @@ int main(int argc, char **argv)
     test_bep_process_368d0();
     test_bep_dispatch_17420();
     test_bep_frame_13f70();
+    test_enrol_add_13d0();
 
 
 

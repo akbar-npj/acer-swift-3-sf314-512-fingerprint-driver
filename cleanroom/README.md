@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **354** (99.7% of functions, 168,928 B = 99.7% of bytes) |
+| rewritten + parity-verified | **355** (100% of functions, 169,488 B = 100% of bytes) |
 | deferred | 0 |
 
-One hundred and three batches so far:
+One hundred and four batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -564,6 +564,15 @@ One hundred and three batches so far:
     `cr_feature_run_28bc0` before zeroing the result image.  The new test
     covers the zero-definition failure, both seed modes, and the
     post-dispatch copy path (1 function).
+104. FpcBioEnrolAdd:
+    `cr_enrol_add_13d0` (560 B) is the root entry point: it clears the status
+    block, resolves the node by key, checks its kind, allocates the handle and
+    result object, runs `cr_bep_frame_13f70`, and folds the outcome into the
+    caller's 0x14-byte record (0xdc copies the object's `+0x14` dword;
+    success copies three fields and stores the key-0xc8 metadata size).  It
+    also fixed `cr_alloc_handle` to return the allocator status, which the
+    vendor checks.  With this batch **all 355 reachable functions** are ported
+    and bit-exact (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.

@@ -824,14 +824,16 @@ side effects, never raw pointer values.
 |---|---|---|---|
 | `0x180013f70` | `fpc_bio_bep_sw23_19c085d77a` | `cr_bep_frame_13f70` | `int fn(void *a1, void *a2, void *a3, void *a4, void *a5)` — 352 B. Clears `a1[0x30]` and `a1[0x24]`, then `cr_obj_init_13340(a4, ctx, cfg[0x44] == 1)` builds a 0x80-byte slot context (`ctx[i]` = 0x38-byte blocks for slots 0xc..0x15, `ctx[7+i]` = their dp pointers). The result object is initialised by `cr_obj_init_12fe0(obj, seed, a5)` where `seed` is `*(void**)ctx` unless `((uint8_t*)a5->obj)[1] == 1` (then NULL), and `cr_bep_dispatch_17420(ctx, a2, a3, obj, a5, 0)` runs the pipeline. Six fields are copied back into `a1` (`+0x14`=obj+8, `+0x18`=obj+4, `+0x1c`=(int16)obj, `+0x28`=obj+0x7c, `+0x00`=obj+2, `+0x02`=obj+0x7e), the context is freed, and on success `cr_feature_run_28bc0(a1, obj, a5)` runs followed by a zero fill of `obj+0x10`. `cr_free_obj_flags(obj)` always runs. Failure before the dispatch frees only the context (the partially built object owns nothing). |
 
-## Remaining (1 of 355)
+### Batch 110 — FpcBioEnrolAdd (root)
 
-| vendor RVA | vendor symbol | size | note |
+| vendor RVA | vendor symbol | clean-room name | behaviour |
 |---|---|---|---|
-| `0x1800013d0` | `FpcBioEnrolAdd` | 560 B | root entry point (11 callees). |
+| `0x1800013d0` | `FpcBioEnrolAdd` | `cr_enrol_add_13d0` | `int fn(int a1, void *a2, void *a3)` — 560 B. Clears the 0x14-byte status block, looks the node up by key in the bio context list (`cr_ctx_find_node`, 0x67 when absent) and requires node kind 3 at `+4` (else 0x64). Allocates the 0x28-byte handle at `node+0x98` and the 0x38-byte result object at `node+0xa0`, then `cr_status_from_ctx(node)` (0x69 when `node[0x78][0x3c] != 0`). `cr_bep_frame_13f70(node[0xa0], node[0x98], node[0xc0]+8, a3, node+0x68)` runs the frame. A 0xdc status copies `node[0xa0][0x14]` to `a2`; any other failure only destroys the object and frees the handle. On success the three fields at object+0x14/0x1c/0x24 are copied to `a2[0..0x13]`, the handle geometry picks the metadata size (`0xc`, or `2*handle[0x10]+0xc` when `handle[8] > 0`), key 0xc8 is stored, the handle is released, and `node[0x14] == 4` triggers the key-0xe5 slot probe (writing 1 when the read fails); otherwise `node[+4]` is set to 7. `cr_alloc_handle` was corrected to return the allocator status (the vendor tests `eax`). |
 
-This is the last of the 355 reachable functions; everything else is
-ported and bit-exact under `tools/difftest.c`.
+## Remaining (0 of 355)
+
+All 355 reachable functions are ported and bit-exact under
+`tools/difftest.c` (`369 functions ok`, `0 mismatches`).
 
 ## Notes on the naming
 

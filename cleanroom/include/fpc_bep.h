@@ -678,7 +678,7 @@ void     cr_free_obj_28_8(void *obj);                        /* 0x18000ee40 */
 uint8_t  cr_meta_set_slot(const void *defs, uint32_t idx,
                           int key, int value);               /* 0x1800303d0 */
 uint64_t cr_obj_init_58(void *obj);                          /* 0x180046b80 */
-void     cr_alloc_handle(void **out);                        /* 0x18002ad90 */
+int      cr_alloc_handle(void **out);                        /* 0x18002ad90 */
 int      cr_alloc_400(void **out);                           /* 0x18003fb70 */
 int      cr_image_alloc_u8(int *desc, int w, int h);         /* 0x18001d820 */
 int      cr_image_alloc_s16(int *desc, int w, int h);        /* 0x18003d790 */
@@ -1188,6 +1188,7 @@ int      cr_bep_dispatch_17420(void *a1, void *a2, void *a3, void *a4,
                               void *a5, int a6);           /* 0x180017420 */
 int      cr_bep_frame_13f70(void *a1, void *a2, void *a3, void *a4,
                             void *a5);                     /* 0x180013f70 */
+int      cr_enrol_add_13d0(int a1, void *a2, void *a3);    /* 0x1800013d0 */
 
 /* 0x180145240 — 501-entry bank of 9x9 int16 correlation kernels handed out by
  * cr_desc_get_tag_ptr selector 0 (tag 0x1f500000009: K=9, count=501). */
