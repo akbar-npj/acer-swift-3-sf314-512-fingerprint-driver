@@ -15323,6 +15323,278 @@ static void test_feature_pipeline_1ad30(void)
     if (g_fail == bad) end(); else printf("  FAIL cr_feature_pipeline_1ad30\n");
 }
 
+/* ---- batch 106: BEP image front end ----------------------------------- */
+static void mk_bmp_desc(u8 *d, int w, int h, void *words)
+{
+    memset(d, 0, 0x20);
+    *(int *)(d + 0x00) = (w + 31) & ~31;
+    *(int *)(d + 0x04) = h;
+    *(void **)(d + 0x08) = words;
+    *(int *)(d + 0x10) = w;
+    *(int *)(d + 0x14) = h;
+}
+
+static void test_bep_process_1c810(void)
+{
+    typedef int (WINAPI *v_t)(void *, const void *, void *, void **,
+                              void *, int);
+    v_t v = (v_t)fn_at(RVA(0x18001c810));
+    begin("cr_bep_process_1c810");
+    int bad = g_fail;
+
+    enum { MAXW = 160, MAXH = 160, MAXPIX = MAXW * MAXH,
+           MAXW32 = MAXH * ((MAXW + 31) / 32) };
+    static uint8_t  ssv[5][MAXPIX], ssc[5][MAXPIX];
+    static uint32_t f0v[MAXPIX], f0c[MAXPIX];
+    static uint32_t f1v[MAXPIX], f1c[MAXPIX];
+    static float    f32v[MAXPIX], f32c[MAXPIX];
+    static uint8_t  a3v[0x100], a3c[0x100];
+    static uint8_t  ctxv[0x40], ctxc[0x40];
+    static uint8_t  flgv[0x40], flgc[0x40];
+    static uint8_t  cfgv[0x300], cfgc[0x300];
+    static uint8_t  a1v[0x90], a1c[0x90];
+    static uint8_t  pixv[MAXPIX], pixc[MAXPIX];
+    static int16_t  imv[MAXPIX], imc[MAXPIX];
+    static uint32_t bmwv[MAXW32], bmwc[MAXW32];
+    static void    *slv[16], *slc[16];
+    static uint8_t  a4v[0x80], a4c[0x80];
+    static uint16_t mkv[MAXPIX], mkc[MAXPIX];
+    static uint8_t  sdv[5][0x20], sdc[5][0x20];
+    static uint8_t  adv[5][0x40], adc[5][0x40];
+    static uint8_t  s5v[0x20], s5c[0x20], s6v[0x20], s6c[0x20];
+    static uint8_t  ilv[0x10], ilc[0x10];
+    static uint16_t idv[16], idc[16];
+    static uint8_t  a2v[0x20], a2c[0x20];
+    static uint8_t  pcv[0x80], pcc[0x80];
+    int ran = 0;
+
+    {
+        int er = v(NULL, a2v, a3v, (void **)a4v, ctxv, 0);
+        int ec = cr_bep_process_1c810(NULL, a2c, a3c, (void **)a4c,
+                                      ctxc, 0);
+        if (er != ec) mismatch("null", 0, (u32)er, (u32)ec);
+        ran++;
+    }
+
+    for (int t = 0; t < 60; t++) {
+        int fam = t % 5;
+        int W, H, aw, ah, pipe, gain, sub, rsz, csel, osc, shrt, gfl;
+        int osel = 0;
+        switch (fam) {
+        case 0:  W=64; H=64; aw=64; ah=64; pipe=1; gain=0; sub=0; rsz=0;
+                 csel=12; osc=10; shrt=1; gfl=0; break;
+        case 1:  W=88; H=88; aw=88; ah=88; pipe=0; gain=0; sub=0; rsz=0;
+                 csel=12; osc=2;  shrt=0; gfl=0; break;
+        case 2:  W=32; H=32; aw=16; ah=16; pipe=0; gain=1; sub=2; rsz=1;
+                 csel=0;  osc=0;  shrt=0; gfl=1; break;
+        case 3:  W=152; H=152; aw=152; ah=152; pipe=0; gain=0; sub=0; rsz=0;
+                 csel=13; osc=2;  shrt=0; gfl=0; break;
+        default: W=88; H=88; aw=88; ah=88; pipe=0; gain=0; sub=0; rsz=0;
+                 csel=12; osc=2;  shrt=0; gfl=0; osel=2; break;
+        }
+        int N = W * H;
+        int cnt = 1 + (t % 2);
+        u32 seed = (u32)t;
+
+        for (int i = 0; i < N; i++) {
+            uint8_t b = (uint8_t)rnd();
+            for (int k = 0; k < 5; k++) ssv[k][i] = (uint8_t)(b + k * 17);
+            pixv[i] = (uint8_t)rnd();
+            imv[i] = (int16_t)((int)(rnd() % 65536) - 32768);
+            f32v[i] = (float)(int)(rnd() % 2000) - 1000.0f;
+            f0v[i] = rnd();
+            f1v[i] = rnd();
+            mkv[i] = (uint16_t)rnd();
+        }
+        for (int i = 0; i < N; i++) {
+            for (int k = 0; k < 5; k++) ssc[k][i] = ssv[k][i];
+            pixc[i] = pixv[i];
+            imc[i] = imv[i];
+            f32c[i] = f32v[i];
+            f0c[i] = f0v[i];
+            f1c[i] = f1v[i];
+            mkc[i] = mkv[i];
+        }
+        for (int i = 0; i < 8; i++) {
+            idv[i] = (uint16_t)(rnd() % (unsigned)N);
+            idc[i] = idv[i];
+        }
+
+        memset(a3v, 0, sizeof a3v); memset(a3c, 0, sizeof a3c);
+        *(int *)(a3v + 4) = 1; *(int *)(a3c + 4) = 1;
+
+        memset(ctxv, 0, sizeof ctxv); memset(ctxc, 0, sizeof ctxc);
+        *(void **)(ctxv + 0x10) = flgv; *(void **)(ctxc + 0x10) = flgc;
+        *(void **)(ctxv + 0x28) = cfgv; *(void **)(ctxc + 0x28) = cfgc;
+
+        memset(flgv, 0, sizeof flgv); memset(flgc, 0, sizeof flgc);
+        flgv[0x3d] = (uint8_t)gfl; flgc[0x3d] = flgv[0x3d];
+
+        for (int k = 0; k < 5; k++) {
+            memset(sdv[k], 0, 0x20); memset(sdc[k], 0, 0x20);
+            *(int16_t *)(sdv[k] + 0) = (int16_t)W;
+            *(int16_t *)(sdv[k] + 2) = (int16_t)H;
+            sdv[k][6] = 8;
+            *(void **)(sdv[k] + 0x10) = ssv[k];
+            memcpy(sdc[k], sdv[k], 0x20);
+            sdc[k][6] = 8;
+            *(void **)(sdc[k] + 0x10) = ssc[k];
+        }
+        memset(s5v, 0, 0x20); memset(s5c, 0, 0x20);
+        *(int16_t *)(s5v + 0) = (int16_t)W; *(int16_t *)(s5v + 2) = (int16_t)H;
+        *(void **)(s5v + 0x10) = f0v;
+        memcpy(s5c, s5v, 0x20);
+        *(void **)(s5c + 0x10) = f0c;
+        memset(s6v, 0, 0x20); memset(s6c, 0, 0x20);
+        *(int16_t *)(s6v + 0) = (int16_t)W; *(int16_t *)(s6v + 2) = (int16_t)H;
+        *(void **)(s6v + 0x10) = f1v;
+        memcpy(s6c, s6v, 0x20);
+        *(void **)(s6c + 0x10) = f1c;
+        memset(ilv, 0, 0x10); memset(ilc, 0, 0x10);
+        *(uint16_t *)(ilv + 0) = 8; *(uint16_t *)(ilc + 0) = 8;
+        *(void **)(ilv + 8) = idv; *(void **)(ilc + 8) = idc;
+
+        for (int i = 0; i < 16; i++) { slv[i] = NULL; slc[i] = NULL; }
+        for (int k = 0; k < cnt; k++) { slv[k] = sdv[k]; slc[k] = sdc[k]; }
+        slv[5] = s5v;  slc[5] = s5c;
+        slv[6] = s6v;  slc[6] = s6c;
+        slv[0x0e] = ilv; slc[0x0e] = ilc;
+
+        memset(a4v, 0, sizeof a4v); memset(a4c, 0, sizeof a4c);
+        memset(pcv, 0, sizeof pcv); memset(pcc, 0, sizeof pcc);
+        *(float *)(pcv + 4) = 0.5f;    *(float *)(pcc + 4) = 0.5f;
+        *(int8_t *)(pcv + 8) = 1;      *(int8_t *)(pcc + 8) = 1;
+        *(void **)(pcv + 0x18) = mkv;  *(void **)(pcc + 0x18) = mkc;
+        *(void **)(pcv + 0x58) = mkv;  *(void **)(pcc + 0x58) = mkc;
+        for (int k = 0; k < 5; k++) {
+            memset(adv[k], 0, 0x40); memset(adc[k], 0, 0x40);
+            *(int16_t *)(adv[k] + 0) = (int16_t)W;
+            *(int16_t *)(adv[k] + 2) = (int16_t)H;
+            adv[k][6] = 8;
+            *(void **)(adv[k] + 0x10) = ssv[k];
+            memcpy(adc[k], adv[k], 0x40);
+            adc[k][6] = 8;
+            *(void **)(adc[k] + 0x10) = ssc[k];
+            *(void **)(a4v + k * 8) = adv[k];
+            *(void **)(a4c + k * 8) = adc[k];
+        }
+
+        memset(a2v, 0, sizeof a2v); memset(a2c, 0, sizeof a2c);
+        *(void **)(a2v + 0) = pcv; *(void **)(a2c + 0) = pcc;
+        *(void **)(a2v + 8) = f32v; *(void **)(a2c + 8) = f32c;
+
+        memset(cfgv, 0, sizeof cfgv);
+        cfgv[0] = 0;                          /* orientation pipeline sel */
+        cfgv[2] = 0;                          /* stretch mode            */
+        cfgv[5] = (uint8_t)rsz;
+        cfgv[9] = 0;                          /* normaliser map mode     */
+        cfgv[0x1c] = (uint8_t)shrt;
+        *(float *)(cfgv + 0x24) = 50.0f;      /* chain threshold         */
+        cfgv[0x28] = (uint8_t)csel;
+        cfgv[0x29] = 1;                       /* grad-score enabled      */
+        *(uint16_t *)(cfgv + 0x2a) = 2;       /* grad margin             */
+        *(int16_t *)(cfgv + 0x2c) = 0;        /* mask threshold          */
+        cfgv[0x30] = 0;
+        cfgv[0x40] = 0;
+        cfgv[0x44] = (uint8_t)((fam == 0) ? 2 : (fam == 2 ? 1 : 0));
+        *(float *)(cfgv + 0x48) = 0.5f;
+        cfgv[0x78] = (uint8_t)pipe;
+        cfgv[0x79] = 6;
+        cfgv[0x7a] = 16;
+        *(float *)(cfgv + 0x7c) = -1.0e30f;
+        *(int *)(cfgv + 0x84) = 0;
+        *(int *)(cfgv + 0x88) = H - 1;
+        *(int *)(cfgv + 0x8c) = 0;
+        *(int *)(cfgv + 0x90) = W - 1;
+        *(int *)(cfgv + 0x94) = 0;
+        *(int *)(cfgv + 0x98) = W - 1;
+        cfgv[0x9c] = 1;
+        cfgv[0x9d] = 0;
+        cfgv[0x9e] = 3;
+        cfgv[0x9f] = 1;
+        cfgv[0xa0] = 1;
+        *(int16_t *)(cfgv + 6) = (int16_t)((W * W) / 256);
+        *(float *)(cfgv + 0xb0) = 1.0f;
+        *(float *)(cfgv + 0xb4) = 0.0f;
+        cfgv[0xc0] = 0;
+        cfgv[0xc1] = (uint8_t)(t & 1);
+        *(uint16_t *)(cfgv + 0xc2) = 16;
+        *(int32_t *)(cfgv + 0xc4) = 0;
+        cfgv[0xcc] = 3;
+        cfgv[0xcd] = 3;
+        cfgv[0xd0] = (uint8_t)gain;
+        *(int *)(cfgv + 0xd4) = sub;
+        *(int *)(cfgv + 0xd8) = sub;
+        *(int *)(cfgv + 0xdc) = sub;
+        *(int *)(cfgv + 0xe0) = sub;
+        cfgv[0x108] = 0;
+        *(int16_t *)(cfgv + 0x10a) = 0;
+        *(int32_t *)(cfgv + 0x110) = 0;
+        cfgv[0x250] = (uint8_t)osc;
+        *(float *)(cfgv + 0x258) = 1.0f;
+        if (osel) {
+            cfgv[0] = (uint8_t)osel;
+            cfgv[1] = (uint8_t)osel;
+            cfgv[3] = 2;                       /* stretch percentile mode */
+            cfgv[8] = 1;
+            cfgv[0xa8] = 1;
+            *(float *)(cfgv + 0xb8) = 0.35f;
+            *(float *)(cfgv + 0xbc) = 0.75f;
+            *(float *)(cfgv + 0xe4) = 0.9f;
+            *(float *)(cfgv + 0xe8) = 1.4f;
+            cfgv[0xf0] = 0;
+            cfgv[0xf4] = 0;
+            *(float *)(cfgv + 0xf8) = 1.1f;
+            *(float *)(cfgv + 0xfc) = 0.6f;
+            *(int16_t *)(cfgv + 0x100) = 0;
+            cfgv[0x102] = 1;
+            cfgv[0x103] = 2;
+            cfgv[0x104] = 0;
+            cfgv[0x105] = 0;
+            cfgv[0x2cc] = 4;
+            *(float *)(cfgv + 0x2c4) = 1.3f;
+        }
+        memcpy(cfgc, cfgv, sizeof cfgv);
+
+        memset(a1v, 0, 0x90); memset(a1c, 0, 0x90);
+        mk_img2(a1v + 0x10, (int16_t *)pixv, aw, ah);
+        mk_img2(a1c + 0x10, (int16_t *)pixc, aw, ah);
+        mk_img2(a1v + 0x30, imv, W, H);
+        mk_img2(a1c + 0x30, imc, W, H);
+        mk_bmp_desc(a1v + 0x50, W, H, bmwv);
+        mk_bmp_desc(a1c + 0x50, W, H, bmwc);
+        memset(bmwv, 0, sizeof bmwv); memset(bmwc, 0, sizeof bmwc);
+        *(uint32_t *)(a1v + 0x74) = (t & 1) ? 0xffffffffu : 0xfffffffeu;
+        *(uint32_t *)(a1c + 0x74) = *(uint32_t *)(a1v + 0x74);
+
+        int a6 = (t & 4) ? 1 : 0;
+        int rv = v(a1v, a2v, a3v, (void **)a4v, ctxv, a6);
+        int rc = cr_bep_process_1c810(a1c, a2c, a3c, (void **)a4c,
+                                      ctxc, a6);
+
+        if (rv != rc) mismatch("ret", seed, (u32)rv, (u32)rc);
+        {
+            u8 tv[0x90], tc[0x90];
+            memcpy(tv, a1v, 0x90); memcpy(tc, a1c, 0x90);
+            memset(tv + 0x18, 0, 8); memset(tc + 0x18, 0, 8);
+            memset(tv + 0x38, 0, 8); memset(tc + 0x38, 0, 8);
+            memset(tv + 0x58, 0, 8); memset(tc + 0x58, 0, 8);
+            cmp_buf("a1", tv, tc, 0x90, seed);
+        }
+        cmp_buf("pix", pixv, pixc, (size_t)(aw * ah), seed);
+        cmp_buf("im", (const u8 *)imv, (const u8 *)imc, (size_t)N * 2, seed);
+        cmp_buf("bm", (const u8 *)bmwv, (const u8 *)bmwc,
+                sizeof bmwv, seed);
+        cmp_buf("st", a3v, a3c, 0x100, seed);
+        for (int k = 0; k < 5; k++)
+            cmp_buf("slot", ssv[k], ssc[k], (size_t)N, seed);
+        ran++;
+    }
+
+    printf("  [1c810] cases=%d\n", ran);
+    if (g_fail == bad) end(); else printf("  FAIL cr_bep_process_1c810\n");
+}
+
 /* ---- batch 105: chain stages ------------------------------------------ */
 static void test_chain_stages(void)
 {
@@ -15894,6 +16166,7 @@ int main(int argc, char **argv)
     test_orient_score_dispatch_1c220();
     test_feature_pipeline_1ad30();
     test_chain_stages();
+    test_bep_process_1c810();
 
     printf("\n=============================\n");
     printf("functions ok : %d\n", g_pass);

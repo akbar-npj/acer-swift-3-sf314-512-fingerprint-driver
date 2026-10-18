@@ -6928,3 +6928,210 @@ int cr_chain_stage_43040(void *ctx, const void *bm, uint8_t sel, int margin)
         (int16_t)(int)(1000.0f * v);                       /* 0x1800430fd */
     return 0;
 }
+
+/* ------------------------------------------------------------------------ *
+ * 0x18001c810 — BEP image front end (1408 bytes)
+ *               fpc_bio_bep_sw23_33da9c9eac
+ *
+ *   int fn(void *a1, const void *a2, void *a3, void **a4, void *a5, int a6)
+ *
+ * a1 is the 0x90-byte result object built by cr_obj_init_12fe0, i.e. three
+ * back-to-back descriptors plus scalars:
+ *   +0x00 u8 image  (a/b/w/h/offx/offy, pixels at +0x18)
+ *   +0x30 s16 image (pixels at +0x38)
+ *   +0x50 bitmap    (stride@0, h@4, words@8, w@0x10, h@0x14, offx/offy@0x18)
+ *   +0x70 int slot  +0x74 u32 free flags  +0x78 int population %
+ *   +0x7c u8        +0x7e int16 chain score
+ *   +0x00 int16 quality (-1) / +0x02 int16 score (1000) / +0x04 int pipe flag
+ *   +0x08 int stage code
+ * a2 is { void **slots; const float *f32data; ... }; a3 the slot-selection
+ * state block, a4 the slot descriptor array and a5 a context whose +0x28 is
+ * the (0x250+ byte) config block and +0x10 a flag object.
+ *
+ * Returns 0x69 for a NULL result object.  The slot selector may short-circuit
+ * with 0x3e9/0x3ec/0x3ed (recorded as stage 1/2/3) or any other status; the
+ * slot index is always copied to a1+0x70.  Otherwise the pipeline runs
+ * grad-score -> optional block-feature pipeline / gain normalisation ->
+ * optional sub-view extension -> optional resize -> normalise -> stretch ->
+ * bitmap + margin -> population -> orientation dispatch -> structure tensor
+ * -> optional chain stage -> orientation pipeline, then converts the s16
+ * image back into the u8 image at a1+0x10 and (for cfg[0x250] == 2) runs the
+ * structure-tensor score over it, storing the pipeline flag at a1+4.
+ * ------------------------------------------------------------------------ */
+int cr_bep_process_1c810(void *a1, const void *a2, void *a3, void **a4,
+                         void *a5, int a6)
+{
+    cr_image s16, u8;
+    uint8_t score = 0;
+    int v6c = 0;
+    int st, w, h, f20, f24;
+    const uint8_t *cfg;
+    uint8_t *o = (uint8_t *)a1;
+
+    if (a1 == NULL)                                        /* 0x18001c810 */
+        return 0x69;
+
+    cfg = *(const uint8_t *const *)((const uint8_t *)a5 + 0x28);
+    w   = (int16_t)((const int16_t *)a4[0])[0];            /* 0x18001c845 */
+    h   = (int16_t)((const int16_t *)a4[0])[1];
+    f24 = *(const int32_t *)(o + 0x24);                    /* 0x18001c855 */
+    f20 = *(const int32_t *)(o + 0x20);
+
+    *(uint64_t *)o = 0x3e8ffffull;                         /* 0x18001c860 */
+    *(uint32_t *)(o + 0x08) = 0;
+    *(uint8_t  *)(o + 0x7c) = 0;
+    *(uint16_t *)(o + 0x7e) = 0;
+
+    if (*(uint32_t *)(o + 0x74) & 1u)                      /* 0x18001c87f */
+        cr_rect_fill_u8((cr_image *)(o + 0x10), 0);
+
+    st = cr_image_alloc_s16((int *)&s16, w, h);            /* 0x18001c8a4 */
+    if (st != 0)
+        return st;
+
+    st = cr_image_alloc_u8((int *)&u8, w, h);              /* 0x18001c8dd */
+    if (st != 0) {                                         /* 0x18001c980 */
+        cr_cleanup_ptr8_clear(&s16);
+        return st;
+    }
+
+    st = cr_slot_select_11170(&s16, &u8, a3, *(void **)a2, a4,
+                              cfg, a6);                    /* 0x18001c912 */
+    if (st == 0x3e9 || st == 0x3ec || st == 0x3ed) {       /* 0x18001c917 */
+        *(int32_t *)(o + 0x08) = (st == 0x3e9) ? 1
+                               : (st == 0x3ec) ? 2 : 3;
+        *(int32_t *)(o + 0x70) = *(const int32_t *)a3;
+        goto done;
+    }
+    *(int32_t *)(o + 0x70) = *(const int32_t *)a3;         /* 0x18001c9cb */
+    if (st != 0)
+        goto done;
+
+    st = cr_grad_score_from_desc(&score, a4, &u8,
+                                 *(const uint8_t *)((const uint8_t *)a3 + 0xc),
+                                 2, 6, cfg);              /* 0x18001c9fb */
+    if (st != 0)
+        goto done;
+
+    if (*(const int8_t *)(cfg + 0x78) > 0) {               /* 0x18001ca0b */
+        st = cr_feature_pipeline_1ad30(&s16, &v6c, cfg + 0x78, a6,
+                                       *(const int16_t *)(cfg + 6));
+        if (st != 0)
+            goto free_both;
+    } else if (cfg[0xd0] != 0) {                           /* 0x18001ca16 */
+        st = cr_gain_normalize_s16(&s16);                  /* 0x18001cd00 */
+        if (st != 0)
+            goto free_both;
+    }
+
+    {
+        int t = *(const int32_t *)(cfg + 0xd4);            /* 0x18001ca32 */
+        int b = *(const int32_t *)(cfg + 0xd8);
+        int l = *(const int32_t *)(cfg + 0xdc);
+        int r = *(const int32_t *)(cfg + 0xe0);
+        if (l != 0 || r != 0 || t != 0 || b != 0) {
+            st = cr_subview_extend_s16(&s16, t, b, l, r);  /* 0x18001cc69 */
+            if (st != 0)
+                goto free_both;
+            st = cr_subview_extend_u8(&u8, t, b, l, r);    /* 0x18001cc9f */
+            if (st != 0)
+                goto free_both;
+        }
+    }
+
+    if (cfg[5] == 1) {                                     /* 0x18001ca62 */
+        st = cr_resize_pair_18000(&s16, &u8, f20, f24);    /* 0x18001cd41 */
+        if (st != 0)
+            goto free_both;
+    }
+
+    st = cr_norm_2bd60(&s16, &u8, cfg);                    /* 0x18001ca7b */
+    if (st != 0)
+        goto free_both;
+
+    st = cr_stretch_14bit(&s16, &u8, 0xe,
+                          *(const float *)(cfg + 0xb0),
+                          *(const float *)(cfg + 0xb4),
+                          (int8_t)cfg[2]);                 /* 0x18001cabe */
+    if (st != 0)
+        goto free_both;
+
+    cr_bitmap_set_from_image((cr_image *)(o + 0x50), &u8); /* 0x18001cade */
+    st = cr_bitmap_margin_extract((cr_image *)(o + 0x50),
+                                  (const cr_image *)(o + 0x50));
+    if (st != 0)                                           /* 0x18001cae9 */
+        goto free_both;
+
+    {
+        int pc = cr_bitmap_popcount((const cr_image *)(o + 0x50));
+        float v = (float)pc * 100.0f;                      /* 0x18001cb2c */
+        v = v / (float)(*(const int32_t *)(o + 0x60) *
+                        *(const int32_t *)(o + 0x64));
+        *(int32_t *)(o + 0x78) = (int)v;                   /* 0x18001cb3c */
+    }
+
+    st = cr_orient_score_dispatch_1c220((int16_t *)a1,
+                                        (const cr_image *)(o + 0x50),
+                                        &s16, cfg + 0x250);
+    if (st != 0)                                           /* 0x18001cb3f */
+        goto free_both;
+
+    st = cr_struct_tensor_dispatch(
+        (cr_image *)(o + 0x30), &s16,
+        *(const void *const *)((const uint8_t *)a5 + 0x10));
+    if (st != 0)                                           /* 0x18001cb5f */
+        goto free_both;
+
+    if (*(const int8_t *)(cfg + 0x28) != 0) {              /* 0x18001cb6f */
+        if (v6c == 100 && cfg[0x1c] == 1) {
+            *(uint16_t *)(o + 0x7e) = 1000;                /* 0x18001cd56 */
+        } else {
+            st = cr_chain_stage_43040(a1, &s16, (uint8_t)cfg[0x28],
+                                      *(const int16_t *)(cfg + 0x1e));
+            if (st != 0)                                   /* 0x18001cb96 */
+                goto free_both;
+            if (*(const float *)(cfg + 0x24) > (float)score)
+                *(uint16_t *)(o + 0x7e) = 0;               /* 0x18001cbbe */
+        }
+    }
+
+    st = cr_orient_pipeline_18c60(&s16, (const cr_image *)a2, cfg, &u8,
+                                  0xe, a6);                /* 0x18001cbe3 */
+    if (st != 0)
+        goto free_both;
+
+    {
+        int n = f20 * f24;                                 /* 0x18001cbf7 */
+        if (n > 0) {
+            const int16_t *src = (const int16_t *)s16.data;
+            uint8_t *dst = *(uint8_t **)(o + 0x18);
+            for (int i = 0; i < n; i++)
+                dst[i] = (uint8_t)((src[i] + 0x20) >> 6);
+        }
+    }
+
+    cr_cleanup_ptr8_clear(&s16);                           /* 0x18001cc34 */
+    cr_cleanup_ptr8_a(&u8);
+
+    if (cfg[0x250] == 2) {                                 /* 0x18001cc43 */
+        uint64_t r = cr_structure_tensor_score_img(
+            (int16_t *)a1, (int32_t *)(o + 0x50),
+            (const cr_image *)(o + 0x10),
+            (uint64_t)(uintptr_t)(cfg + 0x250));           /* 0x18001cd73 */
+        if ((int)r != 0)
+            return (int)r;
+    }
+
+    *(int32_t *)(o + 0x04) = v6c;                          /* 0x18001cc5a */
+    return 0;
+
+done:                                                      /* 0x18001c93a */
+    cr_cleanup_ptr8_clear(&s16);
+    cr_cleanup_ptr8_a(&u8);
+    return st;
+
+free_both:                                                 /* 0x18001ccaf */
+    cr_cleanup_ptr8_a(&u8);
+    cr_cleanup_ptr8_clear(&s16);
+    return st;
+}

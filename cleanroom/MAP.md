@@ -800,7 +800,22 @@ side effects, never raw pointer values.
 | `0x180043020` | `fpc_bio_bep_sw23_e617d5a6b0` | `cr_chain_gate_43020` | `int fn(int16_t *a1, const void *bm, const void *img, const void *cfg)`. `cfg[0]` must be 4 (else `0x69`); `*(float *)(cfg+4)` is loaded into `xmm3` and the call tail-jumps to `cr_chain_score_26a70`. |
 | `0x180043040` | `fpc_bio_bep_sw23_e6767afcb6` | `cr_chain_stage_43040` | `int fn(void *ctx, const void *bm, uint8_t sel, int margin)`. `sel > 0xd` -> `0x69`; the bitmask `0x3540` admits only {6, 8, 10, 12, 13} and every other rejected selector returns `0x69` while `sel == 0` returns 0. `cr_desc_get_ptr2(&chain, sel)` yields the static chain (`image+0x122980` for 12, `image+0x1598e0` for 13); the bitmap descriptor lives at `ctx+0x50` and the window fields are `cd[1]`/`cd[2]`. `cr_bitmap_centroid(ctx+0x50, cd[1], cd[2], &y, &x, margin)` then `cr_chain_classify_i16(&v, chain, bm, x, y)`, and `*(int16_t *)(ctx+0x7e) = (int16_t)(int)(1000.0f * v)`. Both helpers were previously unreachable because `cr_desc_get_ptr1`/`cr_desc_get_ptr2` returned NULL for every selector; they now hand out the `g_cr_image_base`-relative chain addresses, matching the vendor. |
 
-## Deferred (identified, not yet rewritten)
+### Batch 106 — BEP image front end
+
+| vendor RVA | vendor symbol | clean-room name | behaviour |
+|---|---|---|---|
+| `0x18001c810` | `fpc_bio_bep_sw23_33da9c9eac` | `cr_bep_process_1c810` | `int fn(void *a1, const void *a2, void *a3, void **a4, void *a5, int a6)` — 1408 B. `a1` is the 0x90-byte result object (`cr_obj_init_12fe0` layout: u8 image at +0x10, s16 at +0x30, bitmap at +0x50, slot at +0x70, flags at +0x74, population at +0x78, chain score at +0x7e, status at +0x00/0x08/0x04). `a2` is `{void *params; void *f32data; …}` — `*(void**)a2` is the mask/params block handed to the slot selector; `a4` is the slot-descriptor array (`a4[0]` supplies w/h); `a5+0x28` is the config and `a5+0x10` the flag object. Pipeline: alloc s16+u8 at the descriptor size, `cr_slot_select_11170(s16, u8, a3, *(void**)a2, a4, cfg, a6)` (0x3e9/0x3ec/0x3ed map to stage 1/2/3 and return the status), `cr_grad_score_from_desc`, then either `cr_feature_pipeline_1ad30(s16, &v6c, cfg+0x78, a6, *(int16_t*)(cfg+6))` (when `cfg[0x78] > 0`) or `cr_gain_normalize_s16` (when `cfg[0xd0] != 0`); optional `cr_subview_extend_s16`/`_u8` (t/b/l/r at cfg+0xd4..0xe0), optional `cr_resize_pair_18000` (cfg[5] == 1), `cr_norm_2bd60`, `cr_stretch_14bit(s16, u8, 0xe, cfg[0xb0], cfg[0xb4], cfg[2])`, bitmap build + margin, population `%` = `popcount*100/(w*h)`, `cr_orient_score_dispatch_1c220(a1, bitmap, s16, cfg+0x250)`, `cr_struct_tensor_dispatch(a1+0x30, s16, *(void**)(a5+0x10))`, optional chain stage (`v6c == 100 && cfg[0x1c] == 1` → score 1000, else `cr_chain_stage_43040(a1, s16, cfg[0x28], *(int16_t*)(cfg+0x1e))` and zero the score when `cfg.f32[0x24] > score`), `cr_orient_pipeline_18c60(s16, a2, cfg, u8, 0xe, a6)`, then `u8[i] = (s16[i] + 0x20) >> 6` over `w*h` and, for `cfg[0x250] == 2`, `cr_structure_tensor_score_img`. `*a1+0x04 = v6c` on success. |
+## Remaining (4 of 355)
+
+| vendor RVA | vendor symbol | size | note |
+|---|---|---|---|
+| `0x1800368d0` | `fpc_bio_bep_sw23_a9419e00dd.part.6` | 816 B | calls the finished `cr_chain_gate_43020` at `0x180036b0e`. |
+| `0x180013f70` | `fpc_bio_bep_sw23_19c085d77a` | 352 B | — |
+| `0x180017420` | `fpc_bio_bep_sw23_232010b95b` | 176 B | thin wrapper around `cr_bep_process_1c810` / `0x1800368d0`. |
+| `0x1800013d0` | `FpcBioEnrolAdd` | 560 B | root entry point (11 callees). |
+
+These four are the last of the 355 reachable functions; everything else is
+ported and bit-exact under `tools/difftest.c`.
 
 | vendor RVA | vendor symbol | why deferred |
 |---|---|---|

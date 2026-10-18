@@ -1180,6 +1180,8 @@ int      cr_chain_gate_43020(int16_t *a1, const void *bm, const void *img,
                              const void *cfg);              /* 0x180043020 */
 int      cr_chain_stage_43040(void *ctx, const void *bm, uint8_t sel,
                               int margin);                  /* 0x180043040 */
+int      cr_bep_process_1c810(void *a1, const void *a2, void *a3,
+                             void **a4, void *a5, int a6);  /* 0x18001c810 */
 
 /* 0x180145240 — 501-entry bank of 9x9 int16 correlation kernels handed out by
  * cr_desc_get_tag_ptr selector 0 (tag 0x1f500000009: K=9, count=501). */

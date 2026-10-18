@@ -153,10 +153,10 @@ cleanroom/
 | reachable functions | 355 |
 | total `.text` size | 169,488 B (165.5 KiB) |
 | leaf functions (rewrite frontier) | 118 |
-| rewritten + parity-verified | **350** (98.6% of functions, 166,176 B = 98.0% of bytes) |
-| deferred (trained-model tables) | 2 (`0x180026a70`, `0x180043040`) |
+| rewritten + parity-verified | **351** (98.9% of functions, 167,584 B = 98.9% of bytes) |
+| deferred | 0 |
 
-Ninety-nine batches so far:
+One hundred batches so far:
 1. math kernel + buffer/metadata helpers (11 functions)
 2. util kernel + image leaves (14 functions, incl. two byte-identical duplicate pairs)
 3. more math/util/image leaves (10 functions, incl. a third `cr_image_set` duplicate)
@@ -521,6 +521,18 @@ Ninety-nine batches so far:
     `cr_desc_get_ptr2` (sel 12/13) now return the real `image+0x159ea0` /
     `image+0x122980` / `image+0x1598e0` chain addresses instead of NULL, which
     is what unblocked this batch (3 functions).
+100. BEP image front end:
+    `cr_bep_process_1c810` (1408 B) drives the whole per-frame pipeline over a
+    0x90-byte result object: s16/u8 allocation at the slot-descriptor size,
+    slot selection (`cr_slot_select_11170`, with 0x3e9/0x3ec/0x3ed recorded as
+    stages 1/2/3), gradient score, the block-feature or gain-normalisation
+    branch, optional sub-view extension and resize, normalisation, 14-bit
+    stretch, bitmap build/margin/popcount, orientation dispatch, structure
+    tensor, optional chain stage, orientation pipeline, the `(x+0x20)>>6`
+    s16→u8 conversion and the `cfg[0x250] == 2` structure-tensor score.  The
+    slot selector's fourth argument is `*(void**)a2` (the mask/params block)
+    and its fifth is the slot array `a4` — the two were swapped in the first
+    draft, which made the vendor dereference a NULL mask (1 function).
 
 See [`REACHABLE.md`](REACHABLE.md) for the full frontier and
 [`MAP.md`](MAP.md) for what each completed function actually does.
