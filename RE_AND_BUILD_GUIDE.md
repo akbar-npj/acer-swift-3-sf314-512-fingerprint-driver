@@ -654,14 +654,29 @@ How it behaves:
   system. In that case rebuild the driver against the new libfprint and refresh
   the canonical copy.
 - **No-ops when the custom build is already in place** (`cmp -s` guard), and
-  **backs up** whatever it replaces (`…distro.<epoch>`) so rollback is trivial.
+  **backs up** whatever it replaces to `/usr/local/lib/fpc2040/backups/` (a
+  directory *outside* any ldconfig search path) so rollback is trivial.
+
+> **Gotcha (fixed 2026-10-19):** earlier the restore script wrote its backup
+> as `/usr/lib/libfprint-2.so.2.0.0.distro.<epoch>` — i.e. *inside*
+> `/usr/lib`. Because that file still carries the `libfprint-2` soname,
+> `ldconfig` (run on every boot and by many pacman hooks) treated it as a
+> candidate and rewired `libfprint-2.so.2` to the **stock** copy, which has no
+> `fpc2040` driver → `fprintd` reported "No devices available". Backups now live
+> in `/usr/local/lib/fpc2040/backups/` so ldconfig can never relink to them. If
+> you ever see "No devices available" after a reboot, check
+> `ls -l /usr/lib/libfprint-2.so.2` — it must point at `libfprint-2.so.2.0.0`
+> (not a `.distro`/`.pacman` file) and re-run
+> `sudo /usr/local/sbin/restore-fpc2040-libfprint.sh`.
 
 Test it without waiting for an upgrade:
 
 ```sh
 # simulate a distro overwrite, then let the hook logic fix it:
-sudo cp -a /usr/lib/libfprint-2.so.2.0.0.pacman /usr/lib/libfprint-2.so.2.0.0
+sudo cp -f /usr/local/lib/fpc2040/backups/libfprint-2.so.2.0.0.distro.* /usr/lib/libfprint-2.so.2.0.0
 sudo /usr/local/sbin/restore-fpc2040-libfprint.sh   # -> "restored custom libfprint"
+sudo ldconfig                                       # as a reboot would
+ls -l /usr/lib/libfprint-2.so.2                     # must -> libfprint-2.so.2.0.0
 fprintd-verify -f right-index-finger                 # should still match
 ```
 
@@ -725,6 +740,23 @@ Notes / safety:
   installed QML path disappears (layout change).
 - Rollback: `sudo cp -a /usr/local/share/kde-lockscreen/LockScreenUi.qml.orig
   /usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/LockScreenUi.qml`.
+
+#### Uninstall
+
+To remove the patch entirely (revert to the upstream "Unlock" button and delete
+all deploy artifacts), use the shipped script:
+
+```sh
+sudo /usr/local/sbin/uninstall-kde-lockscreen.sh
+```
+
+What it does: restores the upstream QML from the saved
+`/usr/local/share/kde-lockscreen/LockScreenUi.qml.orig`, disables and removes
+`kde-lockscreen-restore.service`, removes `99-kde-lockscreen.hook` and
+`restore-kde-lockscreen.sh`, and deletes the `/usr/local/share/kde-lockscreen/`
+directory. The change applies on the next lock (no reboot needed). Re-apply any
+time with `patch-lockscreen.py` + the deploy steps above. The script is safe to
+run even if some pieces are already gone.
 
 ---
 

@@ -53,7 +53,14 @@ if cmp -s "$CANON" "$REAL" 2>/dev/null; then
 fi
 
 # 4. Distro overwrote us (or first deploy) — back up the current file and restore.
-BACK="${REAL}.distro.$(date +%s)"
+# Back up the file we are about to overwrite, but OUTSIDE any ldconfig search
+# path. Leaving a backup named libfprint-2.so.* in /usr/lib makes ldconfig
+# treat it as a candidate and rewire the soname symlink to the stock build
+# (which has no fpc2040 driver) -> "No devices available". See issue fixed
+# 2026-10-19.
+BACKDIR="/usr/local/lib/fpc2040/backups"
+mkdir -p "$BACKDIR"
+BACK="$BACKDIR/$(basename "$REAL").distro.$(date +%s)"
 if cp -a "$REAL" "$BACK" 2>/dev/null; then
     log "backed up current libfprint -> $BACK"
 else
