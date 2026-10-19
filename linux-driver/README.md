@@ -237,14 +237,12 @@ Use `stdbuf -oL` when piping: `examples/*` use buffered stdout.
 
 ### 4.4 System install (fprintd / PAM)
 
-Not packaged yet. The pieces are:
+Verified end-to-end on the Acer (Arch Linux / KDE / SDDM): `fprintd-enroll` →
+`fprintd-verify` returns `verify-match`, and a real fingerprint login/unlock
+works. Steps (polkit rule, PAM wiring, udev, replacing the distro libfprint):
 
-1. `ninja -C build install` (installs `libfprint-2.so` and the driver).
-2. `sudo make -C linux-driver install-udev` — grants `uaccess` on `10a5:e340`
-   so fprintd can open the device without root.
-3. `sudo dnf install fprintd fprintd-pam` and enable the service.
-4. `fprintd-enroll` / `fprintd-verify`, then add `pam_fprintd.so` to the
-   relevant PAM stacks.
-
-See `RE_AND_BUILD_GUIDE.md` §4 for the full build/validation walkthrough and
-§7 for current status.
+See `RE_AND_BUILD_GUIDE.md` **§4.7** for the full walkthrough and **§7** for
+current status. In short: `pacman -S fprintd`, swap `/usr/lib/libfprint-2.so.2.0.0`
+for `build/libfprint/libfprint-2.so.2.0.0`, install the udev rule, add the
+polkit rule for your user, then prepend `auth sufficient pam_fprintd.so` to
+`/etc/pam.d/{login,sddm,kde}`.

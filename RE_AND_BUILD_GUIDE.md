@@ -540,6 +540,84 @@ Defaults point at `~/native/fpc_recon_native` and the vendor package path.
 
 ---
 
+### 4.7 System install (fprintd / PAM)
+
+Verified on the Acer Swift 3 (Arch Linux, KDE/SDDM, Wayland). The same driver
+is also valid for the Honor `10a5:a900` part.
+
+1. **Install the daemon** (pulls libfprint as a dependency):
+
+   ```sh
+   sudo pacman -S fprintd
+   ```
+
+2. **Replace the distro libfprint with the driver build.** The package ships
+   `1.94.100` but without the `fpc2040` driver, so swap the `.so` in place
+   (keep a backup in case a later `pacman -Syu` restores it):
+
+   ```sh
+   sudo cp -a /usr/lib/libfprint-2.so.2.0.0 /usr/lib/libfprint-2.so.2.0.0.pacman
+   sudo install -m755 ~/src/libfprint-v1.94.100/build/libfprint/libfprint-2.so.2.0.0 \
+                    /usr/lib/libfprint-2.so.2.0.0
+   ```
+
+3. **udev** (already in `linux-driver/udev/70-libfprint-2-fpc2040.rules`):
+
+   ```sh
+   sudo make -C linux-driver install-udev   # or: cp + udevadm control --reload-rules
+   ```
+
+4. **polkit** — over an SSH/headless session fprintd is denied by default. Add
+   `/etc/polkit-1/rules.d/49-fprintd-user.rules` (the user below is `shaan`):
+
+   ```js
+   polkit.addRule(function(action, subject) {
+       if (action.id.indexOf("net.reactivated.fprint.") === 0 &&
+           subject.user === "shaan") {
+           return polkit.Result.YES;
+       }
+   });
+   ```
+
+   `sudo systemctl restart polkit`.
+
+5. **Enrol + verify as the user** (not root — root's prints land under `root`):
+
+   ```sh
+   fprintd-enroll -f right-index-finger   # 5 presses
+   fprintd-verify -f right-index-finger   # 1 press -> "verify-match"
+   ```
+
+6. **PAM** — add `auth sufficient pam_fprintd.so` to the stacks you want
+   fingerprint on. For a laptop, the lock screen and console login:
+
+   ```sh
+   # prepend to /etc/pam.d/login and /etc/pam.d/sddm (and create /etc/pam.d/kde)
+   auth       sufficient   pam_fprintd.so max-tries=3 timeout=10
+   ```
+
+   `sufficient` means a fingerprint match is enough, but a failure falls through
+   to the password — it cannot lock you out. Restarting `polkit`/`fprintd` is
+   not required; the change takes effect immediately. Originals were saved as
+   `/etc/pam.d/{login,sddm}.pre-fprintd` for rollback.
+
+   > Note: a synthetic `pamtester`-style `PAM_PERM_DENIED` is expected when the
+   > caller has no real seat/TTY (e.g. a hand-rolled test binary). The actual
+   > `login`/`sddm`/`kde` path works because it runs with a proper session.
+
+7. **Enable the daemon** so it is available after reboot (it is D-Bus
+   activated, but `enable` is harmless):
+
+   ```sh
+   sudo systemctl enable fprintd
+   ```
+
+Known gap: `sudo` was intentionally left on password only so headless SSH stays
+password-based; add the same `auth sufficient` line to `/etc/pam.d/sudo` to
+enable fingerprint sudo.
+
+---
+
 ## 5. Troubleshooting & gotchas
 
 | Symptom | Cause / fix |
@@ -591,10 +669,11 @@ Defaults point at `~/native/fpc_recon_native` and the vendor package path.
 - **Fully standalone clean-room BEP**: `cr_bep_run_frame()` links into the
   driver; no vendor DLL, no subprocess. 20/20 corpus frames byte-identical,
   live enrol 5/5 with the DLL-free backend.
+- **System install**: `fprintd` + `pam_fprintd` wired for login/screen-lock on
+  the Acer (Arch/KDE/SDDM). End-to-end `verify-match` via fprintd and a
+  real fingerprint login/unlock both confirmed on the hardware.
 
 **Remaining**
 
-1. **fprintd / PAM integration** — install libfprint system-wide, package udev
-   rules, wire `pam_fprintd` for login and sudo.
-2. **Upstreaming** — split the driver and matcher into a reviewable patch
+1. **Upstreaming** — split the driver and matcher into a reviewable patch
    series for libfprint.
