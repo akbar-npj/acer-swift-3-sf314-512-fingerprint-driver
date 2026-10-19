@@ -1,32 +1,40 @@
-# FPC `10a5:e340` — Complete Reverse-Engineering & Build Guide
+# FPC `10a5:e340` — Reverse-Engineering Guide (deep)
 
-This document is the end-to-end guide for the Acer Swift 3 SF314-512 fingerprint
-sensor: how the vendor stack was reverse-engineered, how the clean-room
-reimplementation is structured and validated, and how to build and run every
-component on Linux.
+This document is the **deep reverse-engineering write-up** for the Acer Swift 3
+SF314-512 fingerprint sensor: how the vendor stack was reverse-engineered, how
+the clean-room reimplementation is structured, and how its correctness is
+validated.
 
 Everything here was verified against real hardware (USB `10a5:e340`,
 firmware `20.26.23.27`). Do not assume behaviour from the sibling `10a5:9201`
 part — it differs in endianness, TLS roles, and geometry.
 
+> **Compilation & install live elsewhere.** How to *build* the clean-room
+> library, the matcher, the native rehost, and the libfprint `fpc2040` driver —
+> and how to *install* them (udev, fprintd/PAM, KDE lock-screen QML, and
+> surviving distribution updates) on Debian, Fedora, and Arch — is in the
+> companion document **[`CROSS_DISTRO_BUILD_GUIDE.md`](./CROSS_DISTRO_BUILD_GUIDE.md)**.
+> Read that one to build/run; read this one to understand the stack.
+
 ---
 
 ## 0. TL;DR
 
-```sh
-# 1. Clean-room BEP library + differential test (x86-64 only)
-cd cleanroom && make && make check
+What we reverse-engineered, and the proof it is correct:
 
-# 2. Native rehost of the vendor enclave (only needed to (re)generate the
-#    standalone template or an oracle; the driver does not use it)
-cd ../native && make
-
-# 3. Correlation matcher
-cd ../matcher && make
-
-# 4. libfprint driver (see §4.5 for the meson integration)
-#    build libfprint 1.94.100 with -Ddrivers=fpc2040
-```
+- **USB protocol** (`CMD_*`/`EVT_*`) — fully solved; handshake and session
+  flow reconstructed from captured Windows traffic.
+- **TLS-PSK** — the sealed PSK is derived with `FPC_SEALING_KEY` /
+  `FPC_HMAC_KEY`; the handshake is a standard TLS-PSK over the bulk pipe.
+- **Enclave / BEP** — `fpc_enclave.dll` (a plain `no_sgx` x86-64 DLL) does all
+  ridge reconstruction. We rehost it (native PE loader, no Wine needed) and then
+  re-implement it clean-room.
+- **Clean-room BEP** — 355/355 functions, 370 difftest cases, 37/37 real frames
+  byte-identical to the DLL output. Fully standalone: the driver links
+  `cr_bep_run_frame()`; the DLL is only an oracle, never shipped or loaded.
+- **Matcher** — correlation-based (NBIS is unusable: 2–6 minutiae/frame);
+  0 FAR / 0 FRR on live hardware.
+- **libfprint `fpc2040` driver** — enrol / verify / identify all working live.
 
 Live validation already achieved:
 
@@ -103,7 +111,7 @@ algorithmic.
 
 ---
 
-## 3. Part I — Reverse engineering
+## 3. Reverse engineering
 
 ### 3.1 Target artifacts
 
@@ -341,437 +349,15 @@ libfprint's image path assumes NBIS minutiae matching.
 - Identify: same, across all enrolled prints.
 - Endpoint and MPS are auto-discovered from the USB descriptors.
 
----
-
-## 4. Part II — Build and run
-
-### 4.1 Prerequisites
-
-- Linux x86-64 (the difftest and vendor DLL are x86-64 only)
-- `gcc`, `make`, `pkg-config`
-- GLib / GIO, GUsb ≥ 0.4, libusb-1.0, OpenSSL ≥ 3.0, pixman
-- `meson` + `ninja` (for libfprint)
-- The vendor package (for the DLL, used only as a parity oracle / bootstrap)
-
-On Arch:
-
-```sh
-sudo pacman -S base-devel meson ninja glib2 gusb libusb openssl pixman
-```
-
-### 4.2 Clean-room library + difftest
-
-```sh
-cd cleanroom
-make                 # builds libfpcbep.a and difftest
-make check           # runs difftest against fpc_enclave.dll
-```
-
-Expected: `370 functions ok / 0 mismatches / RESULT: PASS`.
-
-Key flags: `-O2 -ffp-contract=off -fno-strict-aliasing`.
-
-### 4.3 Native rehost
-
-```sh
-cd native
-make                 # needs ../cleanroom/libfpcbep.a
-```
-
-Usage:
-
-```sh
-./fpc_recon_native <raw.bin> [out.raw] \
-    --dll path/to/fpc_enclave.dll [--cleanroom] [--no-dllmain]
-```
-
-- Without `--cleanroom`: runs the vendor pipeline.
-- With `--cleanroom`: routes `0x18001c810` to `cr_bep_process_1c810`.
-- `FPC_BEP_DUMP=<prefix>` dumps the exact BEP input buffers once (used to
-  build a standalone runner).
-
-The input `.raw` file is the **EVT_IMG payload** (22-byte header + 11264
-pixels). The output is a 64×176 ridge image.
-
-### 4.3.1 Standalone BEP (no DLL)
-
-`cleanroom/src/fpc_bep_run.c` exposes `cr_bep_run_frame()`. The driver links
-it directly; nothing vendor-side is needed at runtime.
-
-```sh
-cd cleanroom
-make                 # builds bep_run_test too
-
-# one frame, compared against a vendor-produced oracle
-./bep_run_test frame.raw out.raw oracle.raw
-# -> cr_bep_run_frame -> 0
-#    PARITY OK (11264 bytes byte-identical)
-```
-
-Regenerating the template (only needed if the sensor firmware or the corpus
-changes):
-
-```sh
-cd native
-FPC_BEP_SNAP=/tmp/bep.snap ./fpc_recon_native frame.raw /tmp/oracle.raw \
-    --dll path/to/fpc_enclave.dll
-cd ../cleanroom
-python3 tools/gen_template.py /tmp/bep.snap src/fpc_bep_template.c
-make
-```
-
-`CR_PROBE=1 ./bep_run_test ...` runs with guard pages over every uncopied page
-of the synthetic image and reports the first out-of-region read.
-
-### 4.4 Matcher
-
-```sh
-cd matcher
-make                 # builds fpc_match_tool
-./fpc_match_tool a.ridge.raw b.ridge.raw
-```
-
-The library is two files (`fpc_match.c/.h`) with no dependencies beyond
-`libm`; it is compiled directly into the libfprint driver.
-
-### 4.5 libfprint driver
-
-Use libfprint **1.94.100**. Copy the driver sources into the tree:
-
-```sh
-cp linux-driver/src/fpc2040.c      $LIBFPRINT/libfprint/drivers/
-cp linux-driver/src/bep_runner.c   $LIBFPRINT/libfprint/drivers/
-cp linux-driver/include/bep_runner.h $LIBFPRINT/libfprint/drivers/
-cp linux-driver/include/fpc_protocol.h $LIBFPRINT/libfprint/drivers/
-cp matcher/fpc_match.c             $LIBFPRINT/libfprint/drivers/
-cp matcher/fpc_match.h             $LIBFPRINT/libfprint/drivers/
-```
-
-Register the driver in `$LIBFPRINT/meson.build`:
-
-```meson
-drivers_info = {
-    ...
-    'fpc2040': { 'helper': ['openssl'] },
-}
-```
-
-and in `$LIBFPRINT/libfprint/meson.build`:
-
-```meson
-driver_sources = {
-    ...
-    'fpc2040' : files(
-        'drivers/fpc2040.c',
-        'drivers/bep_runner.c',
-        'drivers/fpc_match.c',
-        # clean-room BEP (copy of cleanroom/src + cleanroom/include)
-        'drivers/fpcbep/fpc_comp.c',
-        'drivers/fpcbep/fpc_bep_run.c',
-        'drivers/fpcbep/fpc_bep_template.c',
-        ... one entry per cleanroom/src/*.c ...
-    ),
-}
-```
-
-Two more edits are required:
-
-```meson
-# parity: never let the compiler fuse mul+add into an FMA
-drivers_cflags = ['-ffp-contract=off']
-
-# let bep_runner.c find fpc_bep_template.h
-deps += declare_dependency(include_directories: [
-    ...
-    include_directories('drivers/fpcbep'),
-])
-```
-
-Copy `cleanroom/src/*.c` and `cleanroom/include/*.h` into
-`$LIBFPRINT/libfprint/drivers/fpcbep/` first.
-
-Configure and build:
-
-```sh
-meson setup build \
-    -Ddrivers=fpc2040 \
-    -Dintrospection=false \
-    -Ddoc=false \
-    -Dinstalled-tests=false \
-    -Dudev_rules=disabled
-ninja -C build
-```
-
-> **Meson ≥ 1.12 note:** `tests/meson.build` uses the old single-variable dict
-> iteration. Change `foreach driver_test: drivers_tests` to
-> `foreach driver_test, _unused: drivers_tests`.
-
-Verify registration:
-
-```sh
-./build/libfprint/fprint-list-supported-devices | grep 10a5
-# 10a5:a900 | Fingerprint Cards Disum (Honor / Acer)
-# 10a5:e340 | Fingerprint Cards Disum (Honor / Acer)
-```
-
-### 4.6 Live test (no fprintd required)
-
-```sh
-cd build
-printf '6\n' | G_MESSAGES_DEBUG=all stdbuf -oL ./examples/enroll
-printf '6\n' | G_MESSAGES_DEBUG=all stdbuf -oL ./examples/verify
-```
-
-- `6` = right index.
-- Use `stdbuf -oL`: the examples' stdout is block-buffered when piped.
-- Enrol needs **5 presses**; verify needs **1**.
-- The print is stored in `test-storage.variant` in the current directory.
-
-Expected: `MATCH!` for the enrolled finger, `NO MATCH!` for any other finger.
-
-The BEP backend needs two paths, overridable by environment:
-
-```sh
-FPC_RECON_BIN=/path/to/fpc_recon_native
-FPC_ENCLAVE_DLL=/path/to/fpc_enclave.dll
-```
-
-Defaults point at `~/native/fpc_recon_native` and the vendor package path.
+> **Building and installing** the clean-room library, matcher, native
+> rehost, and the libfprint `fpc2040` driver — including udev, fprintd/PAM,
+> KDE lock-screen QML, and update-survival hooks — is covered step-by-step
+> for Debian, Fedora, and Arch in
+> **[`CROSS_DISTRO_BUILD_GUIDE.md`](./CROSS_DISTRO_BUILD_GUIDE.md)**.
 
 ---
 
-### 4.7 System install (fprintd / PAM)
-
-Verified on the Acer Swift 3 (Arch Linux, KDE/SDDM, Wayland). The same driver
-is also valid for the Honor `10a5:a900` part.
-
-1. **Install the daemon** (pulls libfprint as a dependency):
-
-   ```sh
-   sudo pacman -S fprintd
-   ```
-
-2. **Replace the distro libfprint with the driver build.** The package ships
-   `1.94.100` but without the `fpc2040` driver, so swap the `.so` in place.
-   Also stash a *canonical* copy in a pacman-untouched location — this is what
-   the auto-restore mechanism (§4.8) re-deploys after every upgrade:
-
-   ```sh
-   sudo cp -a /usr/lib/libfprint-2.so.2.0.0 /usr/lib/libfprint-2.so.2.0.0.pacman
-   sudo install -m755 ~/src/libfprint-v1.94.100/build/libfprint/libfprint-2.so.2.0.0 \
-                    /usr/lib/libfprint-2.so.2.0.0
-   # canonical copy used by the restore hook (see §4.8):
-   sudo install -Dm755 ~/src/libfprint-v1.94.100/build/libfprint/libfprint-2.so.2.0.0 \
-                    /usr/local/lib/fpc2040/libfprint-2.so.2.0.0
-   ```
-
-3. **udev** (already in `linux-driver/udev/70-libfprint-2-fpc2040.rules`):
-
-   ```sh
-   sudo make -C linux-driver install-udev   # or: cp + udevadm control --reload-rules
-   ```
-
-4. **polkit** — over an SSH/headless session fprintd is denied by default. Add
-   `/etc/polkit-1/rules.d/49-fprintd-user.rules` (the user below is `shaan`):
-
-   ```js
-   polkit.addRule(function(action, subject) {
-       if (action.id.indexOf("net.reactivated.fprint.") === 0 &&
-           subject.user === "shaan") {
-           return polkit.Result.YES;
-       }
-   });
-   ```
-
-   `sudo systemctl restart polkit`.
-
-5. **Enrol + verify as the user** (not root — root's prints land under `root`):
-
-   ```sh
-   fprintd-enroll -f right-index-finger   # 5 presses
-   fprintd-verify -f right-index-finger   # 1 press -> "verify-match"
-   ```
-
-6. **PAM** — add `auth sufficient pam_fprintd.so` to the stacks you want
-   fingerprint on. For a laptop, the lock screen and console login:
-
-   ```sh
-   # prepend to /etc/pam.d/login and /etc/pam.d/sddm (and create /etc/pam.d/kde)
-   auth       sufficient   pam_fprintd.so max-tries=3 timeout=10
-   ```
-
-   `sufficient` means a fingerprint match is enough, but a failure falls through
-   to the password — it cannot lock you out. Restarting `polkit`/`fprintd` is
-   not required; the change takes effect immediately. Originals were saved as
-   `/etc/pam.d/{login,sddm}.pre-fprintd` for rollback.
-
-   > Note: a synthetic `pamtester`-style `PAM_PERM_DENIED` is expected when the
-   > caller has no real seat/TTY (e.g. a hand-rolled test binary). The actual
-   > `login`/`sddm`/`kde` path works because it runs with a proper session.
-
-7. **Enable the daemon** so it is available after reboot (it is D-Bus
-   activated, but `enable` is harmless):
-
-   ```sh
-   sudo systemctl enable fprintd
-   ```
-
-Known gap: `sudo` was intentionally left on password only so headless SSH stays
-password-based; add the same `auth sufficient` line to `/etc/pam.d/sudo` to
-enable fingerprint sudo.
-
-### 4.8 Surviving `pacman -Syu` (auto-restore the driver)
-
-A future `pacman -Syu` that upgrades `libfprint` will overwrite
-`/usr/lib/libfprint-2.so.2.0.0` with the stock build and silently drop the
-`fpc2040` driver. The files in `linux-driver/install/` make that self-healing:
-
-| File | Goes to | Role |
-|---|---|---|
-| `restore-fpc2040-libfprint.sh` | `/usr/local/sbin/` (mode 755) | Restores the canonical `.so` into place; idempotent, safe to run by hand. |
-| `99-fpc2040-libfprint.hook` | `/etc/pacman.d/hooks/` | Pacman `PostTransaction` hook: fires on any `libfprint` Upgrade/Install and calls the script. |
-| `fpc2040-libfprint-restore.service` | `/etc/systemd/system/` | Oneshot at boot, same script — catches any out-of-band overwrite. |
-
-Deploy once:
-
-```sh
-REPO=~/Projects/FingerPrintSensors/Acer\ Swift\ 3\ SF314-512   # adjust
-sudo install -Dm755 "$REPO"/linux-driver/install/restore-fpc2040-libfprint.sh \
-     /usr/local/sbin/restore-fpc2040-libfprint.sh
-sudo install -Dm644 "$REPO"/linux-driver/install/99-fpc2040-libfprint.hook \
-     /etc/pacman.d/hooks/99-fpc2040-libfprint.hook
-sudo install -Dm644 "$REPO"/linux-driver/install/fpc2040-libfprint-restore.service \
-     /etc/systemd/system/fpc2040-libfprint-restore.service
-sudo systemctl enable fpc2040-libfprint-restore.service
-```
-
-How it behaves:
-
-- **Resolves via the soname symlink** (`libfprint-2.so.2`), so a minor bump
-  (`…2.0.0` → `…2.0.1`) is handled without editing anything.
-- **Refuses to clobber on a major ABI bump** — if `libfprint-2.so.2` disappears
-  (e.g. libfprint-3), it logs "needs rebuild" and exits, instead of breaking the
-  system. In that case rebuild the driver against the new libfprint and refresh
-  the canonical copy.
-- **No-ops when the custom build is already in place** (`cmp -s` guard), and
-  **backs up** whatever it replaces to `/usr/local/lib/fpc2040/backups/` (a
-  directory *outside* any ldconfig search path) so rollback is trivial.
-
-> **Gotcha (fixed 2026-10-19):** earlier the restore script wrote its backup
-> as `/usr/lib/libfprint-2.so.2.0.0.distro.<epoch>` — i.e. *inside*
-> `/usr/lib`. Because that file still carries the `libfprint-2` soname,
-> `ldconfig` (run on every boot and by many pacman hooks) treated it as a
-> candidate and rewired `libfprint-2.so.2` to the **stock** copy, which has no
-> `fpc2040` driver → `fprintd` reported "No devices available". Backups now live
-> in `/usr/local/lib/fpc2040/backups/` so ldconfig can never relink to them. If
-> you ever see "No devices available" after a reboot, check
-> `ls -l /usr/lib/libfprint-2.so.2` — it must point at `libfprint-2.so.2.0.0`
-> (not a `.distro`/`.pacman` file) and re-run
-> `sudo /usr/local/sbin/restore-fpc2040-libfprint.sh`.
-
-Test it without waiting for an upgrade:
-
-```sh
-# simulate a distro overwrite, then let the hook logic fix it:
-sudo cp -f /usr/local/lib/fpc2040/backups/libfprint-2.so.2.0.0.distro.* /usr/lib/libfprint-2.so.2.0.0
-sudo /usr/local/sbin/restore-fpc2040-libfprint.sh   # -> "restored custom libfprint"
-sudo ldconfig                                       # as a reboot would
-ls -l /usr/lib/libfprint-2.so.2                     # must -> libfprint-2.so.2.0.0
-fprintd-verify -f right-index-finger                 # should still match
-```
-
-> Long-term "proper" fix: fork the Arch `libfprint` PKGBUILD to include the
-> `fpc2040` driver, so pacman owns the file and an upgrade simply rebuilds it.
-> The hook is the zero-maintenance answer until then.
-
-### 4.9 Lock-screen auto-unlock + password Enter (KDE QML tweaks)
-
-Two KDE lock-screen behaviours are overridden via small QML edits, made
-persistent with the same pacman-hook approach as §4.8.
-
-**9.1 Auto-unlock on success (drop the extra "Unlock" button).** By design
-(KDE commit `dc6341bb`, Plasma 5.25+) `kscreenlocker` shows an explicit
-**Unlock** button whenever authentication succeeds *without a password prompt
-having been shown* — meant to stop passwordless accounts unlocking silently, but
-it also hits fingerprint/face auth, so you get one extra click after a good scan.
-The fix rewrites `onSucceeded()` in `LockScreenUi.qml` to always `Qt.quit()`
-(auto-unlock). Failures still go through `onFailed` → "Unlocking failed".
-
-**9.2 Password submits on Enter/Return.** The password field's `onAccepted()`
-in `MainBlock.qml` only calls `startLogin()` when
-`sessionManager.lockScreenUiVisible` is true. That property is frequently false
-on the lock screen, so Enter/Return is silently dropped and you must click the
-">" button. The fix drops the guard so Enter behaves exactly like the button.
-
-Relevant upstream logic (before patching):
-
-```js
-// LockScreenUi.qml
-function onSucceeded() {
-    if (authenticator.hadPrompt) { Qt.quit(); }
-    else { mainStack.replace(..., "NoPasswordUnlock.qml", ...); }  // the button
-}
-// MainBlock.qml -- password field
-onAccepted: {
-    if (sessionManager.lockScreenUiVisible) { sessionManager.startLogin(); }
-}
-```
-
-`linux-driver/install/` ships everything to make both persistent:
-
-| File | Goes to | Role |
-|---|---|---|
-| `patch-lockscreen.py` | run once (as root) | Reads the upstream QMLs, rewrites `onSucceeded()` (in `LockScreenUi.qml`) and the `onAccepted()` guard (in `MainBlock.qml`), writes canonical patched files to `/usr/local/share/kde-lockscreen/`. Idempotent; prints `PATTERN NOT FOUND` if a QML layout changed. |
-| `restore-kde-lockscreen.sh` | `/usr/local/sbin/` (755) | Re-applies the canonical patched QMLs into place; idempotent, safe to run by hand. |
-| `99-kde-lockscreen.hook` | `/etc/pacman.d/hooks/` | `PostTransaction` hook on `plasma-desktop` upgrades. |
-| `kde-lockscreen-restore.service` | `/etc/systemd/system/` | Oneshot at boot, same script. |
-| `uninstall-kde-lockscreen.sh` | `/usr/local/sbin/` (755) | Reverts the QML to upstream and removes the deploy artifacts. |
-
-Deploy once:
-
-```sh
-REPO=~/Projects/FingerPrintSensors/Acer\ Swift\ 3\ SF314-512   # adjust
-# 1) generate the canonical patched QMLs from the installed upstream files:
-sudo python3 "$REPO"/linux-driver/install/patch-lockscreen.py
-# 2) install the guard files:
-sudo install -Dm755 "$REPO"/linux-driver/install/restore-kde-lockscreen.sh /usr/local/sbin/
-sudo install -Dm755 "$REPO"/linux-driver/install/uninstall-kde-lockscreen.sh /usr/local/sbin/
-sudo install -Dm644 "$REPO"/linux-driver/install/99-kde-lockscreen.hook /etc/pacman.d/hooks/
-sudo install -Dm644 "$REPO"/linux-driver/install/kde-lockscreen-restore.service /etc/systemd/system/
-sudo systemctl enable kde-lockscreen-restore.service
-```
-
-Notes / safety:
-
-- A broken QML just makes `kscreenlocker` fall back to the built-in password
-  locker (you can still unlock with your password) — it will not lock you out.
-- Each patch is tied to a specific code shape; if a future `plasma-desktop`
-  reworks `onSucceeded()` / `onAccepted()`, `patch-lockscreen.py` prints
-  `PATTERN NOT FOUND` and you re-run it. `restore-kde-lockscreen.sh` also
-  refuses to clobber if an installed QML path disappears (layout change).
-- Rollback per file: `sudo cp -a /usr/local/share/kde-lockscreen/<File>.orig
-  /usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/<File>`.
-
-#### Uninstall
-
-To remove the patch entirely (revert to the upstream "Unlock" button and delete
-all deploy artifacts), use the shipped script:
-
-```sh
-sudo /usr/local/sbin/uninstall-kde-lockscreen.sh
-```
-
-What it does: restores the upstream QML from the saved
-`/usr/local/share/kde-lockscreen/LockScreenUi.qml.orig`, disables and removes
-`kde-lockscreen-restore.service`, removes `99-kde-lockscreen.hook` and
-`restore-kde-lockscreen.sh`, and deletes the `/usr/local/share/kde-lockscreen/`
-directory. The change applies on the next lock (no reboot needed). Re-apply any
-time with `patch-lockscreen.py` + the deploy steps above. The script is safe to
-run even if some pieces are already gone.
-
----
-
-## 5. Troubleshooting & gotchas
+## 4. Troubleshooting & gotchas
 
 | Symptom | Cause / fix |
 |---|---|
@@ -781,12 +367,13 @@ run even if some pieces are already gone.
 | Device disappears (`LIBUSB_ERROR_NO_DEVICE`) | A killed process can leave the sensor mid-session; it re-enumerates. Re-open or replug. |
 | No events after arming | The sensor is silent until touched — this is normal. |
 | `Error loading storage` on first run | Expected: no `test-storage.variant` yet. |
-| Meson `Foreach expects exactly 2 variables` | Patch the dict iteration (see §4.5). |
+| Fingerprint scanner "fails to load" intermittently / kernel `usb reset` for the FPC device | The kernel autosuspends the USB sensor after ~2s idle (`/sys/.../power/control = auto`); resuming it on next unlock triggers a `usb reset` that races with the libfprint driver's claim. Disable autosuspend with a udev rule — see `CROSS_DISTRO_BUILD_GUIDE.md` §5.3. |
+| Meson `Foreach expects exactly 2 variables` | Patch the dict iteration — see `CROSS_DISTRO_BUILD_GUIDE.md` §4.6. |
 | `pkg-config libfprint-2` missing | libfprint is built from source here, not installed. |
 
 ---
 
-## 6. File map
+## 5. File map
 
 | Path | Purpose |
 |---|---|
@@ -810,7 +397,7 @@ run even if some pieces are already gone.
 
 ---
 
-## 7. Current status & roadmap
+## 6. Current status & roadmap
 
 **Done**
 

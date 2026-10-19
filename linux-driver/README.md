@@ -241,8 +241,10 @@ Verified end-to-end on the Acer (Arch Linux / KDE / SDDM): `fprintd-enroll` →
 `fprintd-verify` returns `verify-match`, and a real fingerprint login/unlock
 works. Steps (polkit rule, PAM wiring, udev, replacing the distro libfprint):
 
-See `RE_AND_BUILD_GUIDE.md` **§4.7** for the full walkthrough and **§7** for
-current status. In short: `pacman -S fprintd`, swap `/usr/lib/libfprint-2.so.2.0.0`
-for `build/libfprint/libfprint-2.so.2.0.0`, install the udev rule, add the
-polkit rule for your user, then prepend `auth sufficient pam_fprintd.so` to
-`/etc/pam.d/{login,sddm,kde}`.
+See `CROSS_DISTRO_BUILD_GUIDE.md` **§5** (System install, per distro) for the
+full walkthrough, and `RE_GUIDE.md` **§6** for current status. In
+short: `pacman -S fprintd`, swap `/usr/lib/libfprint-2.so.2.0.0` for
+`build/libfprint/libfprint-2.so.2.0.0`, install the udev rule, add the polkit
+rule for your user, then add `auth sufficient pam_fprintd.so` to
+`/etc/pam.d/{login,sddm,kde}` (password first — see
+`CROSS_DISTRO_BUILD_GUIDE.md` §5.4 for the ordering).

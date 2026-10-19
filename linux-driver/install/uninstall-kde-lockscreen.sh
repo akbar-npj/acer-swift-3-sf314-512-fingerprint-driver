@@ -4,11 +4,11 @@
 #
 # Remove the KDE lock-screen auto-unlock patch: restore the upstream QML and
 # delete all deploy artifacts (pacman hook, systemd service, restore script,
-# canonical/backup directory). The reverse of the §4.9 install.
+# canonical/backup directory). The reverse of the §5.5 install.
 #
 # After running, the lock screen reverts to upstream behaviour (the explicit
 # "Unlock" button after a fingerprint scan). Re-apply any time with
-# patch-lockscreen.py + the deploy steps in RE_AND_BUILD_GUIDE.md §4.9.
+# patch-lockscreen.py + the deploy steps in CROSS_DISTRO_BUILD_GUIDE.md §5.5.
 #
 # Safe to run even if parts are already gone.
 
