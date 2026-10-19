@@ -19,6 +19,7 @@
  */
 #include "pe_loader.h"
 #include "win32_shims.h"
+#include "bep_snap.h"
 #include "fpc_bep.h"   /* clean-room BEP (optional --cleanroom backend) */
 
 #include <stdio.h>
@@ -121,6 +122,19 @@ static unsigned char g_orig_bytes[16];
 /* FUN_18001c810(param_1..param_6): param_1[3]=out px, +0x20 w, +0x24 h */
 static long long WINAPI hk_1c810(void *a, void *b, void *c, void *d, void *e, long long f) {
     long long r;
+
+    /* FPC_BEP_SNAP=<file>: one-shot snapshot of the whole input graph, used
+     * by the standalone (DLL-free) BEP runner.  Must run at entry, before
+     * the BEP mutates a1/a3. */
+    {
+        const char *snap = getenv("FPC_BEP_SNAP");
+        static int snapped;
+        if (snap && !snapped) {
+            snapped = 1;
+            bep_snap_dump(snap, a, b, c, (void **)d, e, (int)f,
+                          (uintptr_t)g_base);
+        }
+    }
     /* optional threshold override for probing the internal mx value.
      * 1c810 passes cfg+0x78 to the feature pipeline, whose cfg+4 is the
      * branch threshold, so the override goes to outer cfg+0x7c. */
@@ -238,9 +252,201 @@ static long long WINAPI hk_put(void *i, long long k, long long v) {
     unpatch(g_orig_put, g_orig_put_bytes);
     long long r = ((long long(WINAPI *)(void *, long long, long long))g_orig_put)(i, k, v);
     if (g_trace)
-        printf("      [meta_put] key=0x%llx val=0x%llx -> %lld\n",
-               (unsigned long long)k, (unsigned long long)v, r);
+        printf("      [meta_put] key=0x%llx val=0x%llx -> %lld  rva=0x%llx\n",
+               (unsigned long long)k, (unsigned long long)v, r,
+               (unsigned long long)((uintptr_t)__builtin_return_address(0) -
+                                    (uintptr_t)g_base));
     patch(g_orig_put, hk_put);
+    return r;
+}
+
+/* ---- optional 0x180018c60 probe --------------------------------------- *
+ * Dumps the s16 image entering and leaving the orientation pipeline
+ * (FPC_TRACE_18C60=<dir>).  Pair it with CR_TRACE_DIR=<dir> on the
+ * standalone runner to bisect a divergence inside/outside the pipeline. */
+static void *g_orig_18c60;
+static unsigned char g_orig_18c60_bytes[16];
+static const char *g_dump_18c60;
+
+static void dump_img_file(const char *dir, const char *tag, const cr_image *im,
+                          int bytespp) {
+    char path[512];
+    FILE *fp;
+
+    if (!dir || !im || !im->data || im->w <= 0 || im->h <= 0)
+        return;
+    snprintf(path, sizeof path, "%s/%s.s16", dir, tag);
+    fp = fopen(path, "wb");
+    if (!fp)
+        return;
+    fwrite(im->data, (size_t)bytespp, (size_t)im->w * im->h, fp);
+    fclose(fp);
+    printf("      [dump] %s %dx%d\n", path, im->w, im->h);
+}
+
+static void dump_s16_file(const char *dir, const char *tag, const cr_image *im) {
+    dump_img_file(dir, tag, im, 2);
+}
+
+static long long WINAPI hk_18c60(void *a1, void *a2, void *a3, void *a4,
+                                 long long a5, long long a6) {
+    long long r;
+
+    dump_s16_file(g_dump_18c60, "18c60-in", (const cr_image *)a1);
+    unpatch(g_orig_18c60, g_orig_18c60_bytes);
+    r = ((long long(WINAPI *)(void *, void *, void *, void *, long long, long long))
+             g_orig_18c60)(a1, a2, a3, a4, a5, a6);
+    patch(g_orig_18c60, hk_18c60);
+    dump_s16_file(g_dump_18c60, "18c60-out", (const cr_image *)a1);
+    return r;
+}
+
+/* ---- optional 0x180011170 probe --------------------------------------- *
+ * Dumps the mask-stage s16 output and its u8 partner (FPC_TRACE_11170=<dir>). */
+static void *g_orig_11170;
+static unsigned char g_orig_11170_bytes[16];
+static const char *g_dump_11170;
+static int g_n_11170;
+
+static long long WINAPI hk_11170(void *a1, void *a2, void *a3, void *a4,
+                                 void *a5, void *a6, long long a7) {
+    long long r;
+    int n = g_n_11170++;
+    char tag[64];
+
+    unpatch(g_orig_11170, g_orig_11170_bytes);
+    r = ((long long(WINAPI *)(void *, void *, void *, void *, void *, void *,
+                              long long))g_orig_11170)(a1, a2, a3, a4, a5, a6, a7);
+    patch(g_orig_11170, hk_11170);
+    snprintf(tag, sizeof tag, "sel%d-s16", n);
+    dump_s16_file(g_dump_11170, tag, (const cr_image *)a1);
+    snprintf(tag, sizeof tag, "sel%d-u8", n);
+    dump_img_file(g_dump_11170, tag, (const cr_image *)a2, 1);
+    return r;
+}
+
+/* ---- optional 0x18002a620 / 0x18000f9d0 probes ------------------------- *
+ * Dump the f32 image after masked contrast normalisation and the f32 image
+ * handed to the final f32->s16 conversion (FPC_TRACE_F32=<dir>). */
+static void *g_orig_2a620, *g_orig_0f9d0;
+static unsigned char g_orig_2a620_bytes[16], g_orig_0f9d0_bytes[16];
+static const char *g_dump_f32;
+static int g_n_2a620, g_n_0f9d0;
+
+static long long WINAPI hk_2a620(void *a1, void *a2, void *a3) {
+    long long r;
+    int n = g_n_2a620++;
+    char tag[64];
+    const cr_image *i1 = (const cr_image *)a1, *i2 = (const cr_image *)a2;
+
+    printf("      [2a620] a1=%p %dx%d data=%p | a2=%p %dx%d data=%p\n",
+           a1, i1->w, i1->h, i1->data, a2, i2->w, i2->h, i2->data);
+    {
+        const cr_image *m = (const cr_image *)a3;
+        void *mu = a2 ? *(void **)((unsigned char *)a2 + 0x58) : NULL;
+        printf("      [2a620] mask=%p %dx%d data=%p mask16=%p flag=%d\n",
+               a3, m->w, m->h, m->data, mu,
+               a2 ? *(signed char *)((unsigned char *)a2 + 8) : -99);
+        snprintf(tag, sizeof tag, "mask%d", n);
+        dump_img_file(g_dump_f32, tag, m, 1);
+        if (mu) {
+            char p2[512];
+            FILE *f;
+            snprintf(p2, sizeof p2, "%s/mask16_%d.u16", g_dump_f32, n);
+            f = fopen(p2, "wb");
+            if (f) { fwrite(mu, 2, (size_t)m->w * m->h, f); fclose(f); }
+        }
+    }
+    snprintf(tag, sizeof tag, "cnorm_in%d", n);
+    dump_img_file(g_dump_f32, tag, (const cr_image *)a1, 4);
+    snprintf(tag, sizeof tag, "cnorm_inb%d", n);
+    dump_img_file(g_dump_f32, tag, (const cr_image *)a2, 4);
+    unpatch(g_orig_2a620, g_orig_2a620_bytes);
+    r = ((long long(WINAPI *)(void *, void *, void *))g_orig_2a620)(a1, a2, a3);
+    patch(g_orig_2a620, hk_2a620);
+    snprintf(tag, sizeof tag, "cnorm%d", n);
+    dump_img_file(g_dump_f32, tag, (const cr_image *)a1, 4);
+    snprintf(tag, sizeof tag, "cnormb%d", n);
+    dump_img_file(g_dump_f32, tag, (const cr_image *)a2, 4);
+    printf("      [2a620] ret=%lld\n", r);
+    return r;
+}
+
+static void *g_orig_334c0;
+static unsigned char g_orig_334c0_bytes[16];
+static int g_n_334c0;
+
+static void *g_orig_357a0;
+static unsigned char g_orig_357a0_bytes[16];
+
+static long long WINAPI hk_357a0(void *a, void *b) {
+    long long r;
+    short *p = a ? *(short **)((unsigned char *)a + 0x28) : NULL;
+    short *q = a ? *(short **)((unsigned char *)a + 0x30) : NULL;
+    void *dst1 = b ? *(void **)((unsigned char *)b + 0x58) : NULL;
+    void *dst2 = b ? *(void **)((unsigned char *)b + 0x18) : NULL;
+
+    printf("      [copyfields] a=%p b=%p p=%p(%dx%d) q=%p dst1=%p dst2=%p\n",
+           a, b, p, p ? p[0] : -1, p ? p[1] : -1, q, dst1, dst2);
+    if (p && dst1)
+        printf("      [copyfields]   pdata=%p first=%d %d %d %d\n",
+               *(void **)((unsigned char *)p + 0x10),
+               ((short *)*(void **)((unsigned char *)p + 0x10))[0],
+               ((short *)*(void **)((unsigned char *)p + 0x10))[1],
+               ((short *)*(void **)((unsigned char *)p + 0x10))[2],
+               ((short *)*(void **)((unsigned char *)p + 0x10))[3]);
+    unpatch(g_orig_357a0, g_orig_357a0_bytes);
+    r = ((long long(WINAPI *)(void *, void *))g_orig_357a0)(a, b);
+    patch(g_orig_357a0, hk_357a0);
+    if (dst1)
+        printf("      [copyfields]   dst1 after: %d %d %d %d\n",
+               ((short *)dst1)[0], ((short *)dst1)[1], ((short *)dst1)[2],
+               ((short *)dst1)[3]);
+    return r;
+}
+
+static void *g_orig_33f60;
+static unsigned char g_orig_33f60_bytes[16];
+static int g_n_33f60;
+
+static long long WINAPI hk_33f60(void *a1, void *a2, long long a3, long long a4,
+                                 void *a5) {
+    long long r;
+
+    unpatch(g_orig_33f60, g_orig_33f60_bytes);
+    r = ((long long(WINAPI *)(void *, void *, long long, long long, void *))
+             g_orig_33f60)(a1, a2, a3, a4, a5);
+    patch(g_orig_33f60, hk_33f60);
+    printf("      [sharp%d] w=%lld h=%lld -> r=%lld metric=%d\n",
+           g_n_33f60++, a3, a4, r, a1 ? *(int *)a1 : -1);
+    return r;
+}
+
+static long long WINAPI hk_334c0(void *a1, void *a2, long long a3) {
+    long long r;
+    int n = g_n_334c0++;
+    char tag[64];
+
+    snprintf(tag, sizeof tag, "i2f_src%d", n);
+    dump_s16_file(g_dump_f32, tag, (const cr_image *)a2);
+    unpatch(g_orig_334c0, g_orig_334c0_bytes);
+    r = ((long long(WINAPI *)(void *, void *, long long))g_orig_334c0)(a1, a2, a3);
+    patch(g_orig_334c0, hk_334c0);
+    snprintf(tag, sizeof tag, "i2f_dst%d", n);
+    dump_img_file(g_dump_f32, tag, (const cr_image *)a1, 4);
+    return r;
+}
+
+static long long WINAPI hk_0f9d0(void *a1, void *a2, long long a3) {
+    long long r;
+    int n = g_n_0f9d0++;
+    char tag[64];
+
+    snprintf(tag, sizeof tag, "conv%d", n);
+    dump_img_file(g_dump_f32, tag, (const cr_image *)a2, 4);
+    unpatch(g_orig_0f9d0, g_orig_0f9d0_bytes);
+    r = ((long long(WINAPI *)(void *, void *, long long))g_orig_0f9d0)(a1, a2, a3);
+    patch(g_orig_0f9d0, hk_0f9d0);
     return r;
 }
 
@@ -357,6 +563,39 @@ int main(int argc, char **argv) {
         memcpy(g_orig_1ad30_bytes, g_orig_1ad30, 16);
         g_dump_s16 = getenv("CR_S16_OUT") != NULL;
         patch(g_orig_1ad30, hk_1ad30);
+    }
+
+    g_dump_18c60 = getenv("FPC_TRACE_18C60");
+    if (g_dump_18c60) {
+        g_orig_18c60 = (u8 *)g_base + 0x18c60;
+        memcpy(g_orig_18c60_bytes, g_orig_18c60, 16);
+        patch(g_orig_18c60, hk_18c60);
+    }
+
+    g_dump_11170 = getenv("FPC_TRACE_11170");
+    if (g_dump_11170) {
+        g_orig_11170 = (u8 *)g_base + 0x11170;
+        memcpy(g_orig_11170_bytes, g_orig_11170, 16);
+        patch(g_orig_11170, hk_11170);
+    }
+
+    g_dump_f32 = getenv("FPC_TRACE_F32");
+    if (g_dump_f32) {
+        g_orig_2a620 = (u8 *)g_base + 0x2a620;
+        memcpy(g_orig_2a620_bytes, g_orig_2a620, 16);
+        patch(g_orig_2a620, hk_2a620);
+        g_orig_0f9d0 = (u8 *)g_base + 0x0f9d0;
+        memcpy(g_orig_0f9d0_bytes, g_orig_0f9d0, 16);
+        patch(g_orig_0f9d0, hk_0f9d0);
+        g_orig_334c0 = (u8 *)g_base + 0x334c0;
+        memcpy(g_orig_334c0_bytes, g_orig_334c0, 16);
+        patch(g_orig_334c0, hk_334c0);
+        g_orig_33f60 = (u8 *)g_base + 0x33f60;
+        memcpy(g_orig_33f60_bytes, g_orig_33f60, 16);
+        patch(g_orig_33f60, hk_33f60);
+        g_orig_357a0 = (u8 *)g_base + 0x357a0;
+        memcpy(g_orig_357a0_bytes, g_orig_357a0, 16);
+        patch(g_orig_357a0, hk_357a0);
     }
 
     g_trace = getenv("FPC_TRACE") != NULL;

@@ -7,6 +7,8 @@ matcher/fpc_match_tool
 cleanroom/*.o
 cleanroom/libfpcbep.a
 cleanroom/difftest
+cleanroom/bep_standalone
+cleanroom/bep_run_test
 wine-rehost/*.exe
 wine-rehost/*.o
 *.o

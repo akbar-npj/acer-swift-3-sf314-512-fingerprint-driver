@@ -21,12 +21,13 @@ SRC     := src/fpc_math.c src/fpc_buffer.c src/fpc_util.c src/fpc_image.c \
            src/fpc_stats.c src/fpc_filter.c src/fpc_orient.c src/fpc_matmul.c \
            src/fpc_sample.c src/fpc_alloc.c src/fpc_transform.c src/fpc_grid.c \
            src/fpc_desc.c src/fpc_sort.c src/fpc_linefit.c src/fpc_tree.c \
-           src/fpc_fft.c src/fpc_data.c src/fpc_kbank.c src/fpc_comp.c
+           src/fpc_fft.c src/fpc_data.c src/fpc_kbank.c src/fpc_comp.c \
+           src/fpc_bep_template.c src/fpc_bep_run.c
 OBJ     := $(SRC:.c=.o)
 
 DLL     := ../FingerPrint_Carewe_20.26.23.27_W11x64/12b431fd-7d7e-4dd7-b87c-9ab3f9a3d01b/x64/fpc_enclave.dll
 
-all: libfpcbep.a difftest
+all: libfpcbep.a difftest bep_standalone bep_run_test
 
 libfpcbep.a: $(OBJ)
 	$(AR) rcs $@ $^
@@ -38,10 +39,18 @@ difftest: tools/difftest.c libfpcbep.a $(NATIVE)/pe_loader.c $(NATIVE)/win32_shi
 	$(CC) $(CFLAGS) $(INCS) -o $@ tools/difftest.c $(NATIVE)/pe_loader.c \
 	      $(NATIVE)/win32_shims.c libfpcbep.a $(LDFLAGS)
 
+# DLL-free runner: replays a graph snapshot through cr_bep_process_1c810.
+bep_standalone: tools/bep_standalone.c libfpcbep.a
+	$(CC) $(CFLAGS) $(INCS) -o $@ tools/bep_standalone.c libfpcbep.a $(LDFLAGS)
+
+# DLL-free entry point: template graph + one frame -> ridge image.
+bep_run_test: tools/bep_run_test.c libfpcbep.a
+	$(CC) $(CFLAGS) $(INCS) -o $@ tools/bep_run_test.c libfpcbep.a $(LDFLAGS)
+
 check: difftest
 	./difftest "$(DLL)"
 
 clean:
-	rm -f $(OBJ) libfpcbep.a difftest
+	rm -f $(OBJ) libfpcbep.a difftest bep_standalone bep_run_test
 
 .PHONY: all check clean

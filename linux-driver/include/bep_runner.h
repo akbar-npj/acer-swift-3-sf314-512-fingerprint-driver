@@ -5,10 +5,8 @@
  * it into a 64x176 ridge image, and the correlation matcher compares ridges.
  *
  * The BEP backend is deliberately isolated behind fpc_bep_ridge() so it can be
- * swapped without touching the driver.  The current implementation shells out
- * to the validated `fpc_recon_native --cleanroom` (which still needs the
- * vendor DLL for enclave bootstrap + static tables).  A future implementation
- * will link libfpcbep.a directly and remove that dependency.
+ * swapped without touching the driver.  It links the clean-room BEP directly
+ * (libfpcbep / cr_bep_run_frame): no vendor DLL, no subprocess.
  *
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */
@@ -35,9 +33,5 @@ int fpc_bep_ridge (const uint8_t *raw_payload, size_t raw_len,
 
 /* Correlation match of two 64x176 ridge images, 0..1000 (>= 550 = same). */
 int fpc_match_ridge (const uint8_t *a, const uint8_t *b);
-
-/* Backend paths (env overrides: FPC_RECON_BIN, FPC_ENCLAVE_DLL). */
-const char *fpc_bep_recon_bin (void);
-const char *fpc_bep_dll_path (void);
 
 #endif /* FPC_BEP_RUNNER_H */

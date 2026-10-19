@@ -17,6 +17,59 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Debug helper: when CR_TRACE_DIR is set, dump an int16 image as raw pixels.
+ * Used to bisect divergences between the clean-room pipeline and the vendor
+ * DLL during bring-up; inert (single getenv) when the variable is unset. */
+void cr_trace_s16(const char *tag, const void *data, int w, int h)
+{
+    const char *dir = getenv("CR_TRACE_DIR");
+    char path[512];
+    FILE *f;
+
+    if (!dir || !data || w <= 0 || h <= 0)
+        return;
+    snprintf(path, sizeof path, "%s/%s.s16", dir, tag);
+    f = fopen(path, "wb");
+    if (!f)
+        return;
+    fwrite(data, 2, (size_t)w * (size_t)h, f);
+    fclose(f);
+}
+
+/* Same, for 8-bit planes (1 byte per pixel). */
+void cr_trace_u8(const char *tag, const void *data, int w, int h)
+{
+    const char *dir = getenv("CR_TRACE_DIR");
+    char path[512];
+    FILE *f;
+
+    if (!dir || !data || w <= 0 || h <= 0)
+        return;
+    snprintf(path, sizeof path, "%s/%s.s16", dir, tag);
+    f = fopen(path, "wb");
+    if (!f)
+        return;
+    fwrite(data, 1, (size_t)w * (size_t)h, f);
+    fclose(f);
+}
+
+/* Same, for float planes (4 bytes per pixel). */
+void cr_trace_f32(const char *tag, const void *data, int w, int h)
+{
+    const char *dir = getenv("CR_TRACE_DIR");
+    char path[512];
+    FILE *f;
+
+    if (!dir || !data || w <= 0 || h <= 0)
+        return;
+    snprintf(path, sizeof path, "%s/%s.f32", dir, tag);
+    f = fopen(path, "wb");
+    if (!f)
+        return;
+    fwrite(data, 4, (size_t)w * (size_t)h, f);
+    fclose(f);
+}
+
 static inline void *desc_data(const void *d) {
     const unsigned char *p = (const unsigned char *)d;
     void *v;
@@ -3535,6 +3588,11 @@ int cr_masked_contrast_norm_2a620(cr_image *src, void *params, cr_image *mask)
                     cov += (mres[i] * cnt - sum) * ires[i];
             }
             float den = sumsq * cnt - sum * sum;
+            if (getenv("CR_TRACE_DIR"))
+                printf("[2a620] cnt=%d sum=%g sumsq=%g den=%g cov=%g mres0=%g %g %g\n",
+                       count, (double)sum, (double)sumsq, (double)den,
+                       (double)cov, (double)mres[0], (double)mres[1],
+                       (double)mres[2]);
             if (den == 0.0f)
                 scale = C1_64;
             else
@@ -3575,6 +3633,10 @@ int cr_masked_contrast_norm_2a620(cr_image *src, void *params, cr_image *mask)
         r = cr_masked_sharpness_f32(&out_metric,
                                     (const float *const *)&i4.data,
                                     i4.w, i4.h, (void *const *)&mask->data);
+        if (getenv("CR_TRACE_DIR"))
+            printf("[2a620] in=%d out=%d gate=%d scale=%g\n", in_metric,
+                   out_metric, (int32_t)((float)out_metric * C80),
+                   (double)scale);
         if (r == 0 && (int32_t)((float)out_metric * C80) <= in_metric) {
             int cr2 = (int)cr_image_copy_u32(src, &i4);
             if (cr2 != 0) {
@@ -3650,6 +3712,25 @@ int cr_mask_norm_32580(cr_image *src, void *ctx, void *a3,
         return (mode == 0) ? 0 : 0x69;
     }
 
+    if (getenv("CR_TRACE_DIR")) {
+        const char *dir = getenv("CR_TRACE_DIR");
+        char p2[512];
+        FILE *f;
+        void *mu = *(void **)((unsigned char *)ctx + 0x58);
+        cr_trace_u8("mask-cr", mask.data, mask.w, mask.h);
+        snprintf(p2, sizeof p2, "%s/mask16_cr.u16", dir);
+        if (mu && (f = fopen(p2, "wb")) != NULL) {
+            fwrite(mu, 2, (size_t)src->w * src->h, f);
+            fclose(f);
+        }
+        printf("[32580] mask %dx%d flag=%d mode=%d mask16=%p slots5=%p p58v=%d %d %d %d\n",
+               mask.w, mask.h, *(const int8_t *)((const unsigned char *)ctx + 8),
+               mode, mu, ((void **)a3)[5],
+               mu ? ((const int16_t *)mu)[0] : -1,
+               mu ? ((const int16_t *)mu)[1] : -1,
+               mu ? ((const int16_t *)mu)[2] : -1,
+               mu ? ((const int16_t *)mu)[3] : -1);
+    }
     r = cr_masked_contrast_norm_2a620(src, ctx, &mask);
 
 out:
@@ -4189,7 +4270,9 @@ int cr_mask_stage_208a0(cr_image *dst, cr_image *img, const void *a3,
         cr_image_threshold_mark(img, &local, *(const int16_t *)(cfg + 0x2c));
     }
     cr_image_mark_indices(img, (const cr_index_list *)slots[0x0e]);
+    cr_trace_s16("s16-local", local.data, local.w, local.h);
     cr_i16_to_f32_scaled(dst, &local, 6);
+    cr_trace_f32("f32-a", dst->data, dst->w, dst->h);
     cr_cleanup_ptr8_clear(&local);
 
     if (cfg[0x40] != 0) {
@@ -4205,9 +4288,11 @@ int cr_mask_stage_208a0(cr_image *dst, cr_image *img, const void *a3,
         cr_cleanup_ptr8_clear(&mask);
     }
 
+    cr_trace_f32("f32-pre-cnorm", dst->data, dst->w, dst->h);
     e = cr_mask_norm_32580(dst, (void *)a4, slots, img, a3, idx, cfg, flag);
     if (e != 0)
         return e;
+    cr_trace_f32("f32-b", dst->data, dst->w, dst->h);
 
     if ((int8_t)cfg[0x30] > 0) {
         float res;
@@ -4216,7 +4301,10 @@ int cr_mask_stage_208a0(cr_image *dst, cr_image *img, const void *a3,
         if (e != 0)
             return e;
     }
-    return cr_mask_pipeline_25050(dst, slots[0x0e], cfg + 0xc0, img);
+    cr_trace_f32("f32-c", dst->data, dst->w, dst->h);
+    e = cr_mask_pipeline_25050(dst, slots[0x0e], cfg + 0xc0, img);
+    cr_trace_f32("f32-d", dst->data, dst->w, dst->h);
+    return e;
 }
 
 /* 0x180034ed0 — descriptor/point-grid feature pipeline.
@@ -5112,6 +5200,7 @@ int cr_slot_select_11170(cr_image *a1, const cr_image *a2, void *a3,
         return ret;
 
     emit:
+        cr_trace_f32("f32-final", img.data, img.w, img.h);
         cr_f32_to_i16_scaled(a1, &img, 6);
         cr_cleanup_ptr8_clear_b(&img);
         return ret;
@@ -7012,6 +7101,9 @@ int cr_bep_process_1c810(void *a1, const void *a2, void *a3, void **a4,
     if (st != 0)
         goto done;
 
+    cr_trace_s16("sel0-s16", s16.data, s16.w, s16.h);
+    cr_trace_u8("sel0-u8", u8.data, u8.w, u8.h);
+
     st = cr_grad_score_from_desc(&score, a4, &u8,
                                  *(const uint8_t *)((const uint8_t *)a3 + 0xc),
                                  2, 6, cfg);              /* 0x18001c9fb */
@@ -7019,10 +7111,12 @@ int cr_bep_process_1c810(void *a1, const void *a2, void *a3, void **a4,
         goto done;
 
     if (*(const int8_t *)(cfg + 0x78) > 0) {               /* 0x18001ca0b */
+        cr_trace_s16("pre-1ad30", s16.data, s16.w, s16.h);
         st = cr_feature_pipeline_1ad30(&s16, &v6c, cfg + 0x78, a6,
                                        *(const int16_t *)(cfg + 6));
         if (st != 0)
             goto free_both;
+        cr_trace_s16("post-1ad30", s16.data, s16.w, s16.h);
     } else if (cfg[0xd0] != 0) {                           /* 0x18001ca16 */
         st = cr_gain_normalize_s16(&s16);                  /* 0x18001cd00 */
         if (st != 0)
@@ -7100,10 +7194,12 @@ int cr_bep_process_1c810(void *a1, const void *a2, void *a3, void **a4,
         }
     }
 
+    cr_trace_s16("pre-orient", s16.data, s16.w, s16.h);
     st = cr_orient_pipeline_18c60(&s16, (const cr_image *)a2, cfg, &u8,
                                   0xe, a6);                /* 0x18001cbe3 */
     if (st != 0)
         goto free_both;
+    cr_trace_s16("post-orient", s16.data, s16.w, s16.h);
 
     {
         int n = f20 * f24;                                 /* 0x18001cbf7 */

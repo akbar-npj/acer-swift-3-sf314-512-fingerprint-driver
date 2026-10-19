@@ -17,7 +17,8 @@ part — it differs in endianness, TLS roles, and geometry.
 # 1. Clean-room BEP library + differential test (x86-64 only)
 cd cleanroom && make && make check
 
-# 2. Native rehost of the vendor enclave (still needs the DLL for bootstrap)
+# 2. Native rehost of the vendor enclave (only needed to (re)generate the
+#    standalone template or an oracle; the driver does not use it)
 cd ../native && make
 
 # 3. Correlation matcher
@@ -34,6 +35,8 @@ Live validation already achieved:
 | Enrol right index ×5 via libfprint | 5/5 stages, print saved |
 | Verify same finger | `FPI_MATCH_SUCCESS` |
 | Verify different finger | `FPI_MATCH_FAIL` |
+| DLL-free BEP (`cr_bep_run_frame`) | 20/20 corpus frames byte-identical |
+| Enrol after removing the DLL backend | 5/5 stages, print saved |
 
 ---
 
@@ -214,6 +217,46 @@ Two static table families are referenced through
 `+0x122980`, `+0x1598e0`), so table-consuming functions are bit-exact rather
 than stubbed.
 
+### 3.5.1 Running the BEP without the vendor image
+
+`cr_bep_process_1c810` takes a five-pointer graph, not just an image. To run it
+with no vendor code at all, the graph is captured once and turned into a
+template:
+
+1. `FPC_BEP_SNAP=<file>` in `native/fpc_recon_native` dumps every block the
+   graph reaches **at function entry** (before the BEP mutates anything):
+   roots `a1..a5`, `a6`, and a recursive block list.
+2. `cleanroom/tools/gen_template.py` keeps the small control blocks, drops
+   every buffer ≥ 32 KiB (they are pure scratch — the BEP writes before it
+   reads), copies static objects that live inside the PE image, and emits
+   `cleanroom/src/fpc_bep_template.c`.
+3. `cr_bep_run_frame(hdr22, pix, out)` (`cleanroom/src/fpc_bep_run.c`)
+   rebuilds the graph, patches the frame, and calls the BEP.
+
+Two things are per-frame:
+
+| Input | Where it goes |
+|---|---|
+| 128×88 pixels (11264 B) | `a4[0]->data` (the pixbuf) |
+| 22-byte header bytes | metadata store `a4[7]`, keys `d2..da` |
+
+The header mapping (verified on the whole corpus):
+
+```
+d3 = hdr[0]   d5 = hdr[1]   d7 = hdr[2]   da = hdr[3]
+d2 = u16 @ hdr[4]   d4 = u16 @ hdr[6]   d6 = u16 @ hdr[8]
+```
+
+Static data reached through `g_cr_image_base` is reproduced sparsely: a
+`0x17d000` zeroed image with only the referenced regions copied in
+(calibration blobs at `+0x117800` / `+0x12d3a0`, descriptor chains at
+`+0x159ea0` / `+0x122980` / `+0x1598e0`, `+0x1229e0`, `+0xa0c80`). The blob
+sizes are in **elements**, not bytes: `0x1900` floats = `0x6400` bytes.
+
+Validation: all 20 corpus frames are byte-identical with the driver's sparse
+image, and `CR_PROBE=1` (guard pages over every uncopied page) confirms the
+BEP reads nothing else.
+
 ### 3.6 Function inventory and reachability
 
 `cleanroom/tools/reachable.txt` lists every reachable function (address, vendor
@@ -350,6 +393,36 @@ Usage:
 The input `.raw` file is the **EVT_IMG payload** (22-byte header + 11264
 pixels). The output is a 64×176 ridge image.
 
+### 4.3.1 Standalone BEP (no DLL)
+
+`cleanroom/src/fpc_bep_run.c` exposes `cr_bep_run_frame()`. The driver links
+it directly; nothing vendor-side is needed at runtime.
+
+```sh
+cd cleanroom
+make                 # builds bep_run_test too
+
+# one frame, compared against a vendor-produced oracle
+./bep_run_test frame.raw out.raw oracle.raw
+# -> cr_bep_run_frame -> 0
+#    PARITY OK (11264 bytes byte-identical)
+```
+
+Regenerating the template (only needed if the sensor firmware or the corpus
+changes):
+
+```sh
+cd native
+FPC_BEP_SNAP=/tmp/bep.snap ./fpc_recon_native frame.raw /tmp/oracle.raw \
+    --dll path/to/fpc_enclave.dll
+cd ../cleanroom
+python3 tools/gen_template.py /tmp/bep.snap src/fpc_bep_template.c
+make
+```
+
+`CR_PROBE=1 ./bep_run_test ...` runs with guard pages over every uncopied page
+of the synthetic image and reports the first out-of-region read.
+
 ### 4.4 Matcher
 
 ```sh
@@ -392,9 +465,30 @@ driver_sources = {
         'drivers/fpc2040.c',
         'drivers/bep_runner.c',
         'drivers/fpc_match.c',
+        # clean-room BEP (copy of cleanroom/src + cleanroom/include)
+        'drivers/fpcbep/fpc_comp.c',
+        'drivers/fpcbep/fpc_bep_run.c',
+        'drivers/fpcbep/fpc_bep_template.c',
+        ... one entry per cleanroom/src/*.c ...
     ),
 }
 ```
+
+Two more edits are required:
+
+```meson
+# parity: never let the compiler fuse mul+add into an FMA
+drivers_cflags = ['-ffp-contract=off']
+
+# let bep_runner.c find fpc_bep_template.h
+deps += declare_dependency(include_directories: [
+    ...
+    include_directories('drivers/fpcbep'),
+])
+```
+
+Copy `cleanroom/src/*.c` and `cleanroom/include/*.h` into
+`$LIBFPRINT/libfprint/drivers/fpcbep/` first.
 
 Configure and build:
 
@@ -474,6 +568,10 @@ Defaults point at `~/native/fpc_recon_native` and the vendor package path.
 | `matcher/` | Correlation matcher + `MATCHING.md` |
 | `native/` | PE loader, Win32 shims, `fpc_recon_native` |
 | `cleanroom/` | 355-function clean-room BEP, `libfpcbep.a`, difftest |
+| `cleanroom/src/fpc_bep_run.c` | `cr_bep_run_frame()` — DLL-free entry point |
+| `cleanroom/src/fpc_bep_template.c` | generated graph template (do not edit) |
+| `cleanroom/tools/gen_template.py` | snapshot → template generator |
+| `cleanroom/tools/bep_run_test.c` | one-frame parity harness (`CR_PROBE`) |
 | `cleanroom/MAP.md`, `REACHABLE.md` | Function inventory and mapping |
 | `TESTING.md` | Determinism and parity test details |
 | `ENCLAVE_IMAGE_PIPELINE.md` | Enclave image pipeline analysis |
@@ -490,13 +588,13 @@ Defaults point at `~/native/fpc_recon_native` and the vendor package path.
   byte-identical.
 - Correlation matcher validated: 0 FAR / 0 FRR on live hardware.
 - libfprint `fpc2040` driver: enrol, verify, identify all working live.
+- **Fully standalone clean-room BEP**: `cr_bep_run_frame()` links into the
+  driver; no vendor DLL, no subprocess. 20/20 corpus frames byte-identical,
+  live enrol 5/5 with the DLL-free backend.
 
 **Remaining**
 
-1. **Fully standalone clean-room** — remove the vendor DLL bootstrap
-   (`fpc_setup_enclave` / `FpcTaInitialize_ecall` / `fmi`) so no vendor code is
-   needed at runtime.
-2. **fprintd / PAM integration** — install libfprint system-wide, package udev
+1. **fprintd / PAM integration** — install libfprint system-wide, package udev
    rules, wire `pam_fprintd` for login and sudo.
-3. **Upstreaming** — split the driver and matcher into a reviewable patch
+2. **Upstreaming** — split the driver and matcher into a reviewable patch
    series for libfprint.
