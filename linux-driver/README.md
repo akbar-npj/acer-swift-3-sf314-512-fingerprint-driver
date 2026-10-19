@@ -167,7 +167,84 @@ See [`../WINE_REHOST.md`](../WINE_REHOST.md) and [`../native/README.md`](../nati
 
 ## 4. Integrating into `libfprint`
 
-`src/fpc2040.c` is a libfprint driver skeleton. It predates the reverse
-engineering above and still contains the old (incorrect) assumptions
-(interrupt endpoint, 160×160, plaintext), so it must be updated to use this
-protocol before it will work with `fprintd`.
+`src/fpc2040.c` is a **working** libfprint 1.94.100 driver, not a skeleton. It
+implements the protocol above over GUsb and registers as a custom
+`FP_TYPE_DEVICE` (not an image device): this sensor yields only 2–6 minutiae per
+frame, so NBIS matching cannot work and the driver carries its own correlation
+matcher.
+
+### 4.1 What the driver does
+
+| Stage | Implementation |
+|---|---|
+| Capture | `src/fpc2040.c` — GUsb sync control/bulk transfers, TLS-PSK via OpenSSL |
+| Ridge recovery | `src/bep_runner.c` → `cr_bep_run_frame()` from `cleanroom/` |
+| Matching | `src/bep_runner.c` → `matcher/fpc_match.c` (scores 0..1000, thr 550) |
+| Template | 5 ridge images stored in the `FpPrint` `fpi-data` blob (`FPC1` magic) |
+
+The BEP backend is **standalone** — it links the clean-room sources directly and
+does **not** need `fpc_enclave.dll` at runtime. `cr_bep_run_frame(hdr22, pix,
+out)` rebuilds the captured pointer graph from a static template and produces a
+byte-identical 64×176 ridge image to the vendor DLL.
+
+### 4.2 Building libfprint with the driver
+
+The driver is not upstream; it is built inside a libfprint source tree.
+
+```bash
+git clone --depth 1 --branch v1.94.100 \
+    https://gitlab.freedesktop.org/libfprint/libfprint.git ~/src/libfprint-v1.94.100
+cd ~/src/libfprint-v1.94.100
+
+# 1. driver entry point + clean-room BEP + matcher
+mkdir -p libfprint/drivers/fpcbep
+cp "$REPO"/linux-driver/src/fpc2040.c libfprint/drivers/
+cp "$REPO"/linux-driver/src/bep_runner.c \
+   "$REPO"/linux-driver/include/*.h libfprint/drivers/fpcbep/
+cp "$REPO"/cleanroom/src/*.c "$REPO"/cleanroom/include/*.h libfprint/drivers/fpcbep/
+cp "$REPO"/matcher/fpc_match.c "$REPO"/matcher/fpc_match.h libfprint/drivers/fpcbep/
+```
+
+Then in `libfprint/meson.build`:
+
+* add `'drivers/fpc2040.c'` plus every `drivers/fpcbep/*.c` to the `'fpc2040'`
+  entry of `driver_sources`,
+* add `'fpc2040'` to `drivers_info`,
+* add `include_directories('drivers/fpcbep')` to the driver deps,
+* set `drivers_cflags = ['-ffp-contract=off']` (bit-exact float parity),
+* add `helper: ['openssl']` for the driver.
+
+Configure and build:
+
+```bash
+meson setup build -Ddrivers=fpc2040 -Dintrospection=false -Ddoc=false \
+                  -Dinstalled-tests=false -Dudev_rules=disabled
+ninja -C build
+```
+
+> `-ffp-contract=off` is **required**. Without it the compiler fuses
+> multiply-adds and the clean-room BEP no longer reproduces the vendor output
+> bit-for-bit.
+
+### 4.3 Trying it
+
+```bash
+sudo ./build/examples/enroll   # 5 touches of the same finger
+sudo ./build/examples/verify   # touch again -> FPI_MATCH_SUCCESS / _FAIL
+```
+
+Use `stdbuf -oL` when piping: `examples/*` use buffered stdout.
+
+### 4.4 System install (fprintd / PAM)
+
+Not packaged yet. The pieces are:
+
+1. `ninja -C build install` (installs `libfprint-2.so` and the driver).
+2. `sudo make -C linux-driver install-udev` — grants `uaccess` on `10a5:e340`
+   so fprintd can open the device without root.
+3. `sudo dnf install fprintd fprintd-pam` and enable the service.
+4. `fprintd-enroll` / `fprintd-verify`, then add `pam_fprintd.so` to the
+   relevant PAM stacks.
+
+See `RE_AND_BUILD_GUIDE.md` §4 for the full build/validation walkthrough and
+§7 for current status.
