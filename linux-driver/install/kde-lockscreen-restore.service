@@ -1,0 +1,23 @@
+# /etc/systemd/system/kde-lockscreen-restore.service
+#
+# Belt-and-suspenders guard: ensure the patched lock-screen QML is in place at
+# boot, in case it was overwritten out-of-band. Uses the same restore script as
+# the pacman hook.
+#
+# Deploy + enable:
+#   sudo install -Dm644 kde-lockscreen-restore.service \
+#        /etc/systemd/system/kde-lockscreen-restore.service
+#   sudo systemctl enable kde-lockscreen-restore.service
+
+[Unit]
+Description=Ensure patched KDE lock-screen QML is in place
+After=local-fs.target
+ConditionPathExists=/usr/local/share/kde-lockscreen/LockScreenUi.qml
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/restore-kde-lockscreen.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

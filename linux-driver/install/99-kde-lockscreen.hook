@@ -1,0 +1,21 @@
+# /etc/pacman.d/hooks/99-kde-lockscreen.hook
+#
+# After any pacman transaction that touches the `plasma-desktop` package
+# (Upgrade / Install / Reinstall), re-apply the patched lock-screen QML so a
+# successful fingerprint auth auto-unlocks (no explicit "Unlock" button).
+#
+# Deploy:
+#   sudo install -Dm644 99-kde-lockscreen.hook \
+#        /etc/pacman.d/hooks/99-kde-lockscreen.hook
+
+[Trigger]
+Operation = Upgrade
+Operation = Install
+Operation = Reinstall
+Type = Package
+Target = plasma-desktop
+
+[Action]
+Description = Restore patched KDE lock-screen QML (fingerprint auto-unlock)
+When = PostTransaction
+Exec = /usr/local/sbin/restore-kde-lockscreen.sh
