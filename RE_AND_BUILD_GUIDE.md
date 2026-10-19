@@ -552,13 +552,17 @@ is also valid for the Honor `10a5:a900` part.
    ```
 
 2. **Replace the distro libfprint with the driver build.** The package ships
-   `1.94.100` but without the `fpc2040` driver, so swap the `.so` in place
-   (keep a backup in case a later `pacman -Syu` restores it):
+   `1.94.100` but without the `fpc2040` driver, so swap the `.so` in place.
+   Also stash a *canonical* copy in a pacman-untouched location — this is what
+   the auto-restore mechanism (§4.8) re-deploys after every upgrade:
 
    ```sh
    sudo cp -a /usr/lib/libfprint-2.so.2.0.0 /usr/lib/libfprint-2.so.2.0.0.pacman
    sudo install -m755 ~/src/libfprint-v1.94.100/build/libfprint/libfprint-2.so.2.0.0 \
                     /usr/lib/libfprint-2.so.2.0.0
+   # canonical copy used by the restore hook (see §4.8):
+   sudo install -Dm755 ~/src/libfprint-v1.94.100/build/libfprint/libfprint-2.so.2.0.0 \
+                    /usr/local/lib/fpc2040/libfprint-2.so.2.0.0
    ```
 
 3. **udev** (already in `linux-driver/udev/70-libfprint-2-fpc2040.rules`):
@@ -615,6 +619,55 @@ is also valid for the Honor `10a5:a900` part.
 Known gap: `sudo` was intentionally left on password only so headless SSH stays
 password-based; add the same `auth sufficient` line to `/etc/pam.d/sudo` to
 enable fingerprint sudo.
+
+### 4.8 Surviving `pacman -Syu` (auto-restore the driver)
+
+A future `pacman -Syu` that upgrades `libfprint` will overwrite
+`/usr/lib/libfprint-2.so.2.0.0` with the stock build and silently drop the
+`fpc2040` driver. The files in `linux-driver/install/` make that self-healing:
+
+| File | Goes to | Role |
+|---|---|---|
+| `restore-fpc2040-libfprint.sh` | `/usr/local/sbin/` (mode 755) | Restores the canonical `.so` into place; idempotent, safe to run by hand. |
+| `99-fpc2040-libfprint.hook` | `/etc/pacman.d/hooks/` | Pacman `PostTransaction` hook: fires on any `libfprint` Upgrade/Install and calls the script. |
+| `fpc2040-libfprint-restore.service` | `/etc/systemd/system/` | Oneshot at boot, same script — catches any out-of-band overwrite. |
+
+Deploy once:
+
+```sh
+REPO=~/Projects/FingerPrintSensors/Acer\ Swift\ 3\ SF314-512   # adjust
+sudo install -Dm755 "$REPO"/linux-driver/install/restore-fpc2040-libfprint.sh \
+     /usr/local/sbin/restore-fpc2040-libfprint.sh
+sudo install -Dm644 "$REPO"/linux-driver/install/99-fpc2040-libfprint.hook \
+     /etc/pacman.d/hooks/99-fpc2040-libfprint.hook
+sudo install -Dm644 "$REPO"/linux-driver/install/fpc2040-libfprint-restore.service \
+     /etc/systemd/system/fpc2040-libfprint-restore.service
+sudo systemctl enable fpc2040-libfprint-restore.service
+```
+
+How it behaves:
+
+- **Resolves via the soname symlink** (`libfprint-2.so.2`), so a minor bump
+  (`…2.0.0` → `…2.0.1`) is handled without editing anything.
+- **Refuses to clobber on a major ABI bump** — if `libfprint-2.so.2` disappears
+  (e.g. libfprint-3), it logs "needs rebuild" and exits, instead of breaking the
+  system. In that case rebuild the driver against the new libfprint and refresh
+  the canonical copy.
+- **No-ops when the custom build is already in place** (`cmp -s` guard), and
+  **backs up** whatever it replaces (`…distro.<epoch>`) so rollback is trivial.
+
+Test it without waiting for an upgrade:
+
+```sh
+# simulate a distro overwrite, then let the hook logic fix it:
+sudo cp -a /usr/lib/libfprint-2.so.2.0.0.pacman /usr/lib/libfprint-2.so.2.0.0
+sudo /usr/local/sbin/restore-fpc2040-libfprint.sh   # -> "restored custom libfprint"
+fprintd-verify -f right-index-finger                 # should still match
+```
+
+> Long-term "proper" fix: fork the Arch `libfprint` PKGBUILD to include the
+> `fpc2040` driver, so pacman owns the file and an upgrade simply rebuilds it.
+> The hook is the zero-maintenance answer until then.
 
 ---
 

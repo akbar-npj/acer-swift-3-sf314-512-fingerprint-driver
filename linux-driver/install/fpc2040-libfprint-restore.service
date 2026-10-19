@@ -1,0 +1,24 @@
+# /etc/systemd/system/fpc2040-libfprint-restore.service
+#
+# Belt-and-suspenders guard: ensure the custom libfprint is in place at
+# boot, in case it was overwritten by a package install that happened
+# outside a normal `pacman -Syu` (or by a manual copy). Uses the same
+# restore script as the pacman hook.
+#
+# Deploy + enable:
+#   sudo install -Dm644 fpc2040-libfprint-restore.service \
+#        /etc/systemd/system/fpc2040-libfprint-restore.service
+#   sudo systemctl enable fpc2040-libfprint-restore.service
+
+[Unit]
+Description=Ensure FPC2040 custom libfprint is in place
+After=local-fs.target
+ConditionPathExists=/usr/local/lib/fpc2040/libfprint-2.so.2.0.0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/restore-fpc2040-libfprint.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

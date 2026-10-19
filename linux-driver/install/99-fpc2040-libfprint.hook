@@ -1,0 +1,21 @@
+# /etc/pacman.d/hooks/99-fpc2040-libfprint.hook
+#
+# After any pacman transaction that touches the `libfprint` package
+# (Upgrade / Install / Reinstall), re-inject the FPC2040 custom build so a
+# `pacman -Syu` can never silently drop the fingerprint driver.
+#
+# Deploy:
+#   sudo install -Dm644 99-fpc2040-libfprint.hook \
+#        /etc/pacman.d/hooks/99-fpc2040-libfprint.hook
+
+[Trigger]
+Operation = Upgrade
+Operation = Install
+Operation = Reinstall
+Type = Package
+Target = libfprint
+
+[Action]
+Description = Restore FPC2040 custom libfprint driver after upgrade
+When = PostTransaction
+Exec = /usr/local/sbin/restore-fpc2040-libfprint.sh
