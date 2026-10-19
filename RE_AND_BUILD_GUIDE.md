@@ -684,47 +684,58 @@ fprintd-verify -f right-index-finger                 # should still match
 > `fpc2040` driver, so pacman owns the file and an upgrade simply rebuilds it.
 > The hook is the zero-maintenance answer until then.
 
-### 4.9 Lock-screen auto-unlock (drop the extra "Unlock" button)
+### 4.9 Lock-screen auto-unlock + password Enter (KDE QML tweaks)
 
-By design (KDE commit `dc6341bb`, Plasma 5.25+) `kscreenlocker` shows an
-explicit **Unlock** button whenever authentication succeeds *without a password
-prompt having been shown* — meant to stop passwordless accounts unlocking
-silently, but it also hits fingerprint/face auth, so you get one extra click
-after a good scan. The fix is a one-function edit to the lock-screen QML: make
-*any* successful auth call `Qt.quit()` (auto-unlock). Failures still go through
-`onFailed` → "Unlocking failed", so the "success → unlock, fail → error"
-behaviour you want falls out for free.
+Two KDE lock-screen behaviours are overridden via small QML edits, made
+persistent with the same pacman-hook approach as §4.8.
 
-The relevant logic in
-`/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/LockScreenUi.qml`:
+**9.1 Auto-unlock on success (drop the extra "Unlock" button).** By design
+(KDE commit `dc6341bb`, Plasma 5.25+) `kscreenlocker` shows an explicit
+**Unlock** button whenever authentication succeeds *without a password prompt
+having been shown* — meant to stop passwordless accounts unlocking silently, but
+it also hits fingerprint/face auth, so you get one extra click after a good scan.
+The fix rewrites `onSucceeded()` in `LockScreenUi.qml` to always `Qt.quit()`
+(auto-unlock). Failures still go through `onFailed` → "Unlocking failed".
+
+**9.2 Password submits on Enter/Return.** The password field's `onAccepted()`
+in `MainBlock.qml` only calls `startLogin()` when
+`sessionManager.lockScreenUiVisible` is true. That property is frequently false
+on the lock screen, so Enter/Return is silently dropped and you must click the
+">" button. The fix drops the guard so Enter behaves exactly like the button.
+
+Relevant upstream logic (before patching):
 
 ```js
+// LockScreenUi.qml
 function onSucceeded() {
-    if (authenticator.hadPrompt) {
-        Qt.quit();                       // password path: auto-unlock
-    } else {
-        mainStack.replace(..., "NoPasswordUnlock.qml", ...);  // the button
-    }
+    if (authenticator.hadPrompt) { Qt.quit(); }
+    else { mainStack.replace(..., "NoPasswordUnlock.qml", ...); }  // the button
+}
+// MainBlock.qml -- password field
+onAccepted: {
+    if (sessionManager.lockScreenUiVisible) { sessionManager.startLogin(); }
 }
 ```
 
-`linux-driver/install/` ships everything to make this persistent:
+`linux-driver/install/` ships everything to make both persistent:
 
 | File | Goes to | Role |
 |---|---|---|
-| `patch-lockscreen.py` | run once (as root) | Reads the upstream QML, rewrites `onSucceeded()` to always `Qt.quit()`, writes the canonical patched file to `/usr/local/share/kde-lockscreen/LockScreenUi.qml`. Idempotent; refuses if the QML layout changed. |
-| `restore-kde-lockscreen.sh` | `/usr/local/sbin/` (755) | Re-applies the canonical patched QML into place; idempotent, safe to run by hand. |
+| `patch-lockscreen.py` | run once (as root) | Reads the upstream QMLs, rewrites `onSucceeded()` (in `LockScreenUi.qml`) and the `onAccepted()` guard (in `MainBlock.qml`), writes canonical patched files to `/usr/local/share/kde-lockscreen/`. Idempotent; prints `PATTERN NOT FOUND` if a QML layout changed. |
+| `restore-kde-lockscreen.sh` | `/usr/local/sbin/` (755) | Re-applies the canonical patched QMLs into place; idempotent, safe to run by hand. |
 | `99-kde-lockscreen.hook` | `/etc/pacman.d/hooks/` | `PostTransaction` hook on `plasma-desktop` upgrades. |
 | `kde-lockscreen-restore.service` | `/etc/systemd/system/` | Oneshot at boot, same script. |
+| `uninstall-kde-lockscreen.sh` | `/usr/local/sbin/` (755) | Reverts the QML to upstream and removes the deploy artifacts. |
 
 Deploy once:
 
 ```sh
 REPO=~/Projects/FingerPrintSensors/Acer\ Swift\ 3\ SF314-512   # adjust
-# 1) generate the canonical patched QML from the installed upstream file:
+# 1) generate the canonical patched QMLs from the installed upstream files:
 sudo python3 "$REPO"/linux-driver/install/patch-lockscreen.py
 # 2) install the guard files:
 sudo install -Dm755 "$REPO"/linux-driver/install/restore-kde-lockscreen.sh /usr/local/sbin/
+sudo install -Dm755 "$REPO"/linux-driver/install/uninstall-kde-lockscreen.sh /usr/local/sbin/
 sudo install -Dm644 "$REPO"/linux-driver/install/99-kde-lockscreen.hook /etc/pacman.d/hooks/
 sudo install -Dm644 "$REPO"/linux-driver/install/kde-lockscreen-restore.service /etc/systemd/system/
 sudo systemctl enable kde-lockscreen-restore.service
@@ -734,12 +745,12 @@ Notes / safety:
 
 - A broken QML just makes `kscreenlocker` fall back to the built-in password
   locker (you can still unlock with your password) — it will not lock you out.
-- The patch is tied to the `onSucceeded()` shape; if a future `plasma-desktop`
-  reworks that function, `patch-lockscreen.py` prints `PATTERN NOT FOUND` and
-  you re-run it. `restore-kde-lockscreen.sh` also refuses to clobber if the
-  installed QML path disappears (layout change).
-- Rollback: `sudo cp -a /usr/local/share/kde-lockscreen/LockScreenUi.qml.orig
-  /usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/LockScreenUi.qml`.
+- Each patch is tied to a specific code shape; if a future `plasma-desktop`
+  reworks `onSucceeded()` / `onAccepted()`, `patch-lockscreen.py` prints
+  `PATTERN NOT FOUND` and you re-run it. `restore-kde-lockscreen.sh` also
+  refuses to clobber if an installed QML path disappears (layout change).
+- Rollback per file: `sudo cp -a /usr/local/share/kde-lockscreen/<File>.orig
+  /usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/<File>`.
 
 #### Uninstall
 

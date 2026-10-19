@@ -14,8 +14,8 @@
 
 set -u
 
-TARGET="/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/LockScreenUi.qml"
-ORIG="/usr/local/share/kde-lockscreen/LockScreenUi.qml.orig"
+LOCKSCREEN_DIR="/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen"
+NAMES="LockScreenUi.qml MainBlock.qml"
 CANON_DIR="/usr/local/share/kde-lockscreen"
 HOOK="/etc/pacman.d/hooks/99-kde-lockscreen.hook"
 SERVICE="/etc/systemd/system/kde-lockscreen-restore.service"
@@ -26,13 +26,17 @@ log() {
     echo "kde-lockscreen: $*" >&2
 }
 
-# 1) Restore the upstream QML if we have the backup.
-if [ -f "$ORIG" ]; then
-    install -m644 "$ORIG" "$TARGET"
-    log "restored upstream lock-screen QML from $ORIG"
-elif [ -e "$TARGET" ]; then
-    log "no upstream backup ($ORIG); leaving $TARGET as-is -- reinstall plasma-desktop to restore"
-fi
+# 1) Restore the upstream QML for each patched file if we have the backup.
+for name in $NAMES; do
+    TARGET="$LOCKSCREEN_DIR/$name"
+    ORIG="$CANON_DIR/$name.orig"
+    if [ -f "$ORIG" ]; then
+        install -m644 "$ORIG" "$TARGET"
+        log "restored upstream $name from $ORIG"
+    elif [ -e "$TARGET" ]; then
+        log "no upstream backup ($ORIG); leaving $TARGET as-is -- reinstall plasma-desktop to restore"
+    fi
+done
 
 # 2) Disable and remove the systemd service.
 if [ -e "$SERVICE" ]; then

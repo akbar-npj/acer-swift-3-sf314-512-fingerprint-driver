@@ -20,23 +20,30 @@
 
 set -u
 
-CANON="/usr/local/share/kde-lockscreen/LockScreenUi.qml"
-TARGET="/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/LockScreenUi.qml"
+CANON_DIR="/usr/local/share/kde-lockscreen"
+LOCKSCREEN_DIR="/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen"
+TARGETS="LockScreenUi.qml MainBlock.qml"
+BACKDIR="/usr/local/lib/kde-lockscreen/backups"
 
 log() {
     logger -t kde-lockscreen -- "$*"
     echo "kde-lockscreen: $*" >&2
 }
 
-[ -f "$CANON" ] || { log "canonical patched QML missing at $CANON; not restoring"; exit 0; }
-[ -e "$TARGET" ] || { log "lock-screen QML path missing (plasma layout changed?); not clobbering"; exit 0; }
+[ -d "$CANON_DIR" ] || { log "canonical dir missing at $CANON_DIR; not restoring"; exit 0; }
+mkdir -p "$BACKDIR"
 
-if cmp -s "$CANON" "$TARGET" 2>/dev/null; then
-    log "patched lock screen already in place; no action"
-    exit 0
-fi
-
-cp -a "$TARGET" "${TARGET}.distro.$(date +%s)" 2>/dev/null || true
-install -m644 "$CANON" "$TARGET"
-log "restored patched lock-screen QML -> $TARGET"
+for name in $TARGETS; do
+    TARGET="$LOCKSCREEN_DIR/$name"
+    CANON="$CANON_DIR/$name"
+    [ -e "$TARGET" ] || { log "$name path missing (plasma layout changed?); skipping"; continue; }
+    [ -f "$CANON" ] || { log "canonical $name missing; skipping"; continue; }
+    if cmp -s "$CANON" "$TARGET" 2>/dev/null; then
+        log "$name already patched; no action"
+        continue
+    fi
+    cp -a "$TARGET" "$BACKDIR/$name.distro.$(date +%s)" 2>/dev/null || true
+    install -m644 "$CANON" "$TARGET"
+    log "restored patched $name -> $TARGET"
+done
 exit 0

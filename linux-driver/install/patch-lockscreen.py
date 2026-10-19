@@ -2,65 +2,91 @@
 #
 # patch-lockscreen.py
 #
-# Generate the patched KDE lock-screen QML that makes a *successful*
-# authentication auto-unlock (Qt.quit()) instead of showing the explicit
-# "Unlock" button for passwordless / fingerprint / face auth.
+# Generate the patched KDE lock-screen QML files that make a *successful*
+# authentication auto-unlock (no explicit "Unlock" button) AND make the
+# password field submit on Enter/Return (not just on the ">" button).
 #
-# Upstream behaviour (commit dc6341bb, Plasma 5.25+): kscreenlocker shows an
-# explicit button when auth succeeds without a password prompt having been
-# shown -- intended to stop passwordless accounts unlocking silently, but it
-# also bites fingerprint auth. The fix rewrites onSucceeded() in
-# LockScreenUi.qml to always call Qt.quit().
+# Two patches, both upstream KDE behaviours we override:
 #
-# This script reads the *installed* upstream QML, rewrites the function, and
-# writes the result to the canonical location used by restore-kde-lockscreen.sh
-# (/usr/local/share/kde-lockscreen/LockScreenUi.qml). Run it once after a major
-# plasma-desktop version bump (when the QML path/content changes), then let the
-# pacman hook keep it applied.
+#   1. LockScreenUi.qml -- onSucceeded(): upstream shows an explicit "Unlock"
+#      button when auth succeeds without a password prompt (commit dc6341bb,
+#      Plasma 5.25+, to stop passwordless accounts unlocking silently). That
+#      bites fingerprint/face auth, so we make ANY success call Qt.quit().
+#
+#   2. MainBlock.qml -- the password field's onAccepted() only calls
+#      startLogin() when sessionManager.lockScreenUiVisible is true. That
+#      property is frequently false on the lock screen, so Enter/Return is
+#      silently dropped and you must click the ">" button. We drop the guard so
+#      Enter behaves like the button.
+#
+# The script reads the *installed* upstream QMLs, rewrites both functions,
+# and writes the canonical patched files to /usr/local/share/kde-lockscreen/
+# (the source of truth used by restore-kde-lockscreen.sh). It is idempotent and
+# refuses to clobber if a pattern is no longer found (layout changed -> revisit).
 #
 # Usage:
-#   sudo python3 patch-lockscreen.py [path-to-upstream-LockScreenUi.qml]
+#   sudo python3 patch-lockscreen.py
 #
-# It is idempotent against the upstream file and refuses to clobber if the
-# onSucceeded() pattern is no longer found (i.e. the QML layout changed and the
-# patch needs revisiting).
+# Rollback per file:
+#   sudo cp -a /usr/local/share/kde-lockscreen/<File>.orig <installed file>
 
 import re
 import shutil
 import os
 import sys
 
-DEFAULT_SRC = "/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen/LockScreenUi.qml"
 CANON_DIR = "/usr/local/share/kde-lockscreen"
-CANON = os.path.join(CANON_DIR, "LockScreenUi.qml")
 
-NEW = "        function onSucceeded() {\n            Qt.quit();\n        }"
-PAT = re.compile(r"function onSucceeded\(\) \{.*?\n        \}", re.DOTALL)
+LOCKSCREEN_DIR = (
+    "/usr/share/plasma/shells/org.kde.plasma.desktop/contents/lockscreen"
+)
+
+PATCHES = [
+    (
+        "LockScreenUi.qml",
+        re.compile(r"function onSucceeded\(\) \{.*?\n        \}", re.DOTALL),
+        "        function onSucceeded() {\n            Qt.quit();\n        }",
+    ),
+    (
+        "MainBlock.qml",
+        re.compile(
+            r"onAccepted: \{\s*if \(sessionManager\.lockScreenUiVisible\) \{\s*"
+            r"sessionManager\.startLogin\(\);\s*\}\s*\}",
+            re.DOTALL,
+        ),
+        "onAccepted: {\n                sessionManager.startLogin();\n            }",
+    ),
+]
 
 
 def main():
-    src = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_SRC
-    with open(src, "r", encoding="utf-8") as fh:
-        text = fh.read()
-
-    if not PAT.search(text):
-        sys.exit(
-            "PATTERN NOT FOUND in %s -- plasma layout changed, revisit the patch" % src
-        )
-
-    patched = PAT.sub(NEW, text, count=1)
-
+    any_missing = False
     os.makedirs(CANON_DIR, exist_ok=True)
-    # Back up the pre-patch upstream file exactly once.
-    orig = os.path.join(CANON_DIR, "LockScreenUi.qml.orig")
-    if not os.path.exists(orig):
-        shutil.copy(src, orig)
 
-    with open(CANON, "w", encoding="utf-8") as fh:
-        fh.write(patched)
+    for name, pat, new in PATCHES:
+        src = os.path.join(LOCKSCREEN_DIR, name)
+        with open(src, "r", encoding="utf-8") as fh:
+            text = fh.read()
 
-    print("wrote canonical patched QML -> %s" % CANON)
-    print("rollback:  sudo cp -a %s %s" % (orig, src))
+        if not pat.search(text):
+            print("PATTERN NOT FOUND in %s -- plasma layout changed, revisit" % name)
+            any_missing = True
+            continue
+
+        patched = pat.sub(new, text, count=1)
+
+        orig = os.path.join(CANON_DIR, name + ".orig")
+        if not os.path.exists(orig):
+            shutil.copy(src, orig)
+
+        with open(os.path.join(CANON_DIR, name), "w", encoding="utf-8") as fh:
+            fh.write(patched)
+        print("wrote canonical patched %s" % name)
+
+    if any_missing:
+        sys.exit("one or more patterns not found -- check the upstream QML")
+
+    print("rollback: sudo cp -a %s/<File>.orig %s/<File>" % (CANON_DIR, LOCKSCREEN_DIR))
 
 
 if __name__ == "__main__":
