@@ -381,12 +381,10 @@ The driver [`src/fpc2040.c`](file:///home/shaanair/Projects/FingerPrintSensors/A
 │   ├── win32_shims.[ch]                    # ms_abi Win32 import shims + BCryptGenRandom
 │   ├── fpc_recon.c                         # Driver: maps DLL, drives BEP, dumps image
 │   └── README.md
-├── wine-rehost/
-│   ├── harness.c                           # Wine harness (the correctness oracle)
-│   ├── fpc_reconstruct.sh                  # End-to-end: capture -> reconstruct -> PNG
-│   └── recon2png.py                        # 8-bit raw -> PNG
-├── analysis/reconstructed/                 # Validation artefacts + live captures
-└── FingerPrint_Carewe_20.26.23.27_W11x64/  # Vendor Windows driver package
+└── wine-rehost/
+    ├── harness.c                           # Wine harness (the correctness oracle)
+    ├── fpc_reconstruct.sh                  # End-to-end: capture -> reconstruct -> PNG
+    └── recon2png.py                        # 8-bit raw -> PNG
 ```
 
 ---

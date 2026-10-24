@@ -20,21 +20,25 @@ wine-rehost/*.o
 *.idb
 *.til
 
-# windows-calibration/: extracted artefacts. The DLL/exe here are byte-identical
-# duplicates of the already-tracked vendor package, so only the config/calibration
-# data (pndat, keys, txt) is committed.
-windows-calibration/*.dll
-windows-calibration/*.exe
-
-# Captured fingerprint images (raw frames + renders)
+# Captured fingerprint images and raw biometric frames
 *.pgm
 *.bmp
 *.png
 *.raw
 
-# ...except the analysis evidence committed as documentation
-!analysis/**/*.png
-!analysis/**/*.raw
+# Vendor packages and proprietary calibration dumps (not redistributable)
+*.zip
+*.dll
+*.exe
+*.sys
+*.cat
+*.cer
+*.pndat
+FingerPrint_*
+Fingerprint_*
+windows-calibration/
+analysis/reconstructed/
+.codebuddy/
 
 # Temporary files
 *.swp
